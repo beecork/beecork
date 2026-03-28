@@ -8,7 +8,7 @@ const DEFAULT_TAB_CONFIG: TabConfig = {
   workingDir: os.homedir(),
   approvalMode: 'yolo',
   approvalTimeoutMinutes: 30,
-  debounceMs: 3000,
+  debounceMs: 1500,
 };
 
 const DEFAULT_CONFIG: BeecorkConfig = {

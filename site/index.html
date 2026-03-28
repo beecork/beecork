@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beecork — Make Claude Code Always-On</title>
+<meta name="description" content="Give Claude Code a phone number, a memory, and an alarm clock. Reachable from Telegram/WhatsApp, schedulable via cron, with persistent memory.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0b;
+    --surface: #111113;
+    --surface-2: #1a1a1e;
+    --border: #252529;
+    --text: #e8e8ed;
+    --text-dim: #8b8b96;
+    --accent: #f5a623;
+    --accent-dim: #f5a62333;
+    --green: #34d399;
+    --green-dim: #34d39922;
+    --code-bg: #0d0d0f;
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* --- Layout --- */
+  .container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+  /* --- Nav --- */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 0;
+  }
+  nav .container {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+  .logo span { color: var(--accent); }
+  .nav-links { display: flex; gap: 20px; align-items: center; }
+  .nav-links a {
+    color: var(--text-dim);
+    font-size: 14px;
+    transition: color 0.15s;
+  }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .gh-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    color: var(--text) !important;
+    transition: border-color 0.15s;
+  }
+  .gh-btn:hover { border-color: var(--text-dim); text-decoration: none; }
+  .gh-btn svg { width: 16px; height: 16px; fill: var(--text); }
+
+  /* --- Hero --- */
+  .hero {
+    padding: 80px 0 60px;
+    text-align: center;
+  }
+  .hero-badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--green);
+    background: var(--green-dim);
+    border: 1px solid #34d39944;
+    border-radius: 20px;
+    padding: 4px 14px;
+    margin-bottom: 24px;
+    letter-spacing: 0.5px;
+  }
+  h1 {
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: -1.5px;
+    margin-bottom: 20px;
+  }
+  h1 .accent { color: var(--accent); }
+  .hero-sub {
+    font-size: 18px;
+    color: var(--text-dim);
+    max-width: 520px;
+    margin: 0 auto 36px;
+    line-height: 1.5;
+  }
+
+  /* --- Install block --- */
+  .install {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    max-width: 400px;
+    margin: 0 auto;
+    text-align: left;
+    position: relative;
+  }
+  .install-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+  .install code {
+    display: block;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 2;
+    color: var(--green);
+  }
+  .install code .dim { color: var(--text-dim); }
+  .copy-btn {
+    position: absolute;
+    top: 16px; right: 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    color: var(--text-dim);
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
+  .copy-btn svg { width: 14px; height: 14px; display: block; }
+
+  /* --- Section --- */
+  section { padding: 60px 0; }
+  section + section { border-top: 1px solid var(--border); }
+  .section-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 12px;
+  }
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.8px;
+    margin-bottom: 32px;
+  }
+
+  /* --- Features grid --- */
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .feature {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    transition: border-color 0.2s;
+  }
+  .feature:hover { border-color: var(--text-dim); }
+  .feature-icon {
+    font-size: 20px;
+    margin-bottom: 12px;
+    display: block;
+    width: 40px; height: 40px;
+    line-height: 40px;
+    text-align: center;
+    background: var(--surface-2);
+    border-radius: 8px;
+  }
+  .feature h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .feature p {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* --- How it works --- */
+  .how-list { list-style: none; counter-reset: steps; }
+  .how-list li {
+    counter-increment: steps;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 20px 0;
+  }
+  .how-list li + li { border-top: 1px solid var(--border); }
+  .how-list li::before {
+    content: counter(steps);
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    line-height: 32px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border-radius: 8px;
+  }
+  .how-list h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .how-list p {
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+
+  /* --- Diagram --- */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 32px;
+    margin-top: 32px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--text-dim);
+    text-align: center;
+    overflow-x: auto;
+  }
+  .diagram .highlight { color: var(--accent); }
+  .diagram .green { color: var(--green); }
+
+  /* --- Footer --- */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  footer a { color: var(--text-dim); }
+  footer a:hover { color: var(--text); }
+  .footer-links { display: flex; gap: 24px; justify-content: center; margin-bottom: 12px; }
+
+  /* --- Responsive --- */
+  @media (max-width: 600px) {
+    .features { grid-template-columns: 1fr; }
+    .hero { padding: 48px 0 40px; }
+    .nav-links a:not(.gh-btn) { display: none; }
+    .diagram { font-size: 11px; padding: 20px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="logo"><span>bee</span>cork</div>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="https://github.com/beecork/beecork" target="_blank" rel="noopener" class="gh-btn">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Star
+      </a>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <div class="container">
+
+    <!-- Hero -->
+    <div class="hero">
+      <span class="hero-badge">open source</span>
+      <h1>Give Claude Code a phone number,<br>a memory, and an <span class="accent">alarm clock</span></h1>
+      <p class="hero-sub">Beecork is infrastructure that makes Claude Code always-on. Reachable from Telegram and WhatsApp, schedulable via cron, with persistent memory. Claude Code is the agent — Beecork is just the pipe.</p>
+
+      <div class="install">
+        <div class="install-title">Install</div>
+        <button class="copy-btn" onclick="copyInstall()" title="Copy to clipboard" id="copyBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        </button>
+        <code><span class="dim">$</span> npm install -g beecork</code>
+        <code><span class="dim">$</span> beecork setup</code>
+        <code><span class="dim">$</span> beecork start</code>
+      </div>
+    </div>
+
+    <!-- Features -->
+    <section id="features">
+      <div class="section-label">Features</div>
+      <h2>Everything Claude Code needs to run unsupervised</h2>
+      <div class="features">
+        <div class="feature">
+          <span class="feature-icon">&#9889;</span>
+          <h3>Always-on</h3>
+          <p>Runs as a background service via systemd or launchd. Survives reboots. Starts on boot.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128172;</span>
+          <h3>Telegram / WhatsApp</h3>
+          <p>Message Claude Code from your phone. Full bidirectional conversation, not just notifications.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#9200;</span>
+          <h3>Cron jobs</h3>
+          <p>Schedule Claude Code to wake up on any cron expression. Daily reports, weekly cleanups, whatever.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#129504;</span>
+          <h3>Persistent memory</h3>
+          <p>Facts and decisions survive across sessions. Stored locally in SQLite, never leaves your machine.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128196;</span>
+          <h3>Virtual tabs</h3>
+          <p>Run multiple concurrent task contexts. Switch between projects without losing state.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#9654;</span>
+          <h3>Streaming output</h3>
+          <p>See Claude's work in real-time in Telegram. Watch it think, not just get the final answer.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128737;</span>
+          <h3>Safety built in</h3>
+          <p>Loop detection, approval modes, and circuit breakers. You stay in control even when it runs unattended.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128230;</span>
+          <h3>Zero cloud dependency</h3>
+          <p>All local. SQLite storage, no accounts, no SaaS. Works on Mac and Linux with your Claude Pro/Max sub.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how">
+      <div class="section-label">How it works</div>
+      <h2>Three commands to always-on</h2>
+      <ol class="how-list">
+        <li>
+          <div>
+            <h3>npm install -g beecork</h3>
+            <p>Install the CLI globally. Requires Node.js 18+ and an existing Claude Code CLI with a Pro or Max subscription.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>beecork setup</h3>
+            <p>Interactive wizard. Connect your Telegram bot (or WhatsApp), set your working directories, configure cron schedules, and choose a safety mode.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>beecork start</h3>
+            <p>Launches the daemon. Registers with your OS service manager so it persists across reboots. That's it.</p>
+          </div>
+        </li>
+      </ol>
+
+      <div class="diagram">
+        <span class="highlight">You</span> &rarr; Telegram/WhatsApp &rarr; <span class="green">Beecork</span> &rarr; Claude Code CLI &rarr; your codebase<br>
+        <span class="highlight">Cron</span> &rarr; <span class="green">Beecork</span> &rarr; Claude Code CLI &rarr; your codebase<br>
+        <span style="color: var(--text-dim);">&#x2502;</span><br>
+        <span style="color: var(--text-dim);">SQLite &mdash; memory, state, tabs</span>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/beecork/beecork">GitHub</a>
+      <a href="https://www.npmjs.com/package/beecork">npm</a>
+    </div>
+    <p>Beecork is open source under the MIT license.</p>
+  </div>
+</footer>
+
+<script>
+function copyInstall() {
+  const text = 'npm install -g beecork\nbeecork setup\nbeecork start';
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    setTimeout(() => {
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+    }, 1500);
+  });
+}
+</script>
+
+</body>
+</html>

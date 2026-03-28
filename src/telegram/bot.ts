@@ -14,16 +14,33 @@ export class BeecorkTelegramBot {
   private tabManager: TabManager;
   private config: BeecorkConfig;
   private activeChatIds: Set<number> = new Set();
-  // Debounce: collect messages within a window before sending
-  private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
-  private debounceBuffers: Map<string, { messages: string[]; chatId: number; messageId: number }> = new Map();
 
   constructor(config: BeecorkConfig, tabManager: TabManager) {
     this.config = config;
     this.tabManager = tabManager;
-    this.bot = new TelegramBot(config.telegram.token, { polling: true });
-    this.setupHandlers();
-    logger.info('Telegram bot started (polling mode)');
+    // Clear any stale polling from previous instances before starting
+    this.bot = new TelegramBot(config.telegram.token, {
+      polling: {
+        params: {
+          timeout: 30,
+          allowed_updates: ['message', 'callback_query'],
+        },
+        autoStart: false,
+      },
+    });
+    // Drop pending updates from old sessions, then start polling
+    this.bot.sendMessage = this.bot.sendMessage.bind(this.bot);
+    fetch(`https://api.telegram.org/bot${config.telegram.token}/deleteWebhook?drop_pending_updates=true`)
+      .then(() => {
+        this.bot.startPolling();
+        this.setupHandlers();
+        logger.info('Telegram bot started (polling mode, cleared pending updates)');
+      })
+      .catch((err) => {
+        logger.error('Failed to clear pending updates, starting anyway:', err);
+        this.bot.startPolling();
+        this.setupHandlers();
+      });
   }
 
   private setupHandlers(): void {
@@ -42,32 +59,15 @@ export class BeecorkTelegramBot {
           return;
         }
 
-        // Regular messages: debounce
-        const { tabName } = this.parseMessage(text);
-        const debounceMs = getTabConfig(tabName).debounceMs ?? 3000;
-        const key = `${chatId}:${tabName}`;
+        // Send typing indicator immediately so user knows bot received it
+        this.bot.sendChatAction(chatId, 'typing').catch((err) => {
+          logger.error(`Typing indicator failed for chat ${chatId}:`, err);
+        });
+        logger.info(`[telegram] Message received from ${msg.from?.id}, sending typing`);
 
-        // Buffer the message
-        if (!this.debounceBuffers.has(key)) {
-          this.debounceBuffers.set(key, { messages: [], chatId, messageId: msg.message_id });
-        }
-        this.debounceBuffers.get(key)!.messages.push(text);
-
-        // Reset timer
-        const existingTimer = this.debounceTimers.get(key);
-        if (existingTimer) clearTimeout(existingTimer);
-
-        this.debounceTimers.set(key, setTimeout(() => {
-          this.debounceTimers.delete(key);
-          const buffer = this.debounceBuffers.get(key);
-          this.debounceBuffers.delete(key);
-          if (buffer) {
-            const combined = buffer.messages.join('\n\n');
-            this.handleMessage(buffer.chatId, combined, buffer.messageId).catch(err => {
-              logger.error('Telegram: error handling debounced message:', err);
-            });
-          }
-        }, debounceMs));
+        // Skip debounce — send immediately for responsiveness
+        // (debounce adds latency and complexity; queue handles rapid messages)
+        await this.handleMessage(chatId, text, msg.message_id);
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
         await this.bot.sendMessage(chatId, `Error: ${err instanceof Error ? err.message : String(err)}`);
@@ -119,79 +119,41 @@ export class BeecorkTelegramBot {
     const { tabName, prompt } = this.parseMessage(text);
     if (!prompt) return;
 
+    logger.info(`[telegram] Handling message for tab "${tabName}" (chat: ${chatId}, msg: ${messageId})`);
+
     // React with ⏳
     await this.setReaction(chatId, messageId, '⏳');
 
-    // Typing indicator
-    await this.bot.sendChatAction(chatId, 'typing');
-    const typingInterval = setInterval(() => {
-      this.bot.sendChatAction(chatId, 'typing').catch(() => {});
-    }, 4000);
+    // Typing indicator — keep refreshing every 4s (Telegram expires it after 5s)
+    const sendTyping = () => this.bot.sendChatAction(chatId, 'typing').catch((err) => {
+      logger.error(`Typing indicator failed:`, err);
+    });
+    await sendTyping();
+    const typingInterval = setInterval(sendTyping, 4000);
 
     // "Still working" timeout
     const stillWorkingTimeout = setTimeout(() => {
       this.bot.sendMessage(chatId, `Still working on your request in tab "${tabName}"...`).catch(() => {});
     }, 120000); // 2 minutes
 
-    // Streaming: track the message we edit in-place
-    let sentMessageId: number | null = null;
-    let accumulatedText = '';
-    let lastEditTime = 0;
-
-    const onTextChunk = async (chunk: string) => {
-      accumulatedText += chunk;
-
-      // Buffer at least 100 chars and throttle edits to 1/second
-      const now = Date.now();
-      if (accumulatedText.length < 100 || now - lastEditTime < 1000) return;
-      lastEditTime = now;
-
-      try {
-        const preview = accumulatedText.slice(0, 4000) + (accumulatedText.length > 4000 ? '...' : '');
-        const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
-        if (!sentMessageId) {
-          const sent = await this.bot.sendMessage(chatId, prefix + preview);
-          sentMessageId = sent.message_id;
-        } else {
-          await this.bot.editMessageText(prefix + preview, { chat_id: chatId, message_id: sentMessageId });
-        }
-      } catch { /* edit failures are non-critical */ }
-    };
-
     try {
-      const result = await this.tabManager.sendMessage(tabName, prompt, { onTextChunk });
+      const result = await this.tabManager.sendMessage(tabName, prompt);
 
       clearInterval(typingInterval);
       clearTimeout(stillWorkingTimeout);
 
       if (result.error) {
         await this.setReaction(chatId, messageId, '❌');
-        await this.bot.sendMessage(chatId, `Error in tab "${tabName}":\n${result.text}`);
+        await this.sendResponse(chatId, `Error: ${result.text}`, tabName);
         return;
       }
 
       // React with ✅
       await this.setReaction(chatId, messageId, '✅');
 
-      // Send final response (or edit the streaming message)
+      // Send single response
       const responseText = result.text || '(empty response)';
-      if (sentMessageId) {
-        // Edit final content into streaming message
-        try {
-          const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
-          const finalText = prefix + responseText;
-          if (finalText.length <= 4096) {
-            await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: sentMessageId });
-          } else {
-            // Too long for edit, send as new messages
-            await this.sendResponse(chatId, responseText, tabName);
-          }
-        } catch {
-          await this.sendResponse(chatId, responseText, tabName);
-        }
-      } else {
-        await this.sendResponse(chatId, responseText, tabName);
-      }
+      await this.sendResponse(chatId, responseText, tabName);
     } catch (err) {
       clearInterval(typingInterval);
       clearTimeout(stillWorkingTimeout);
@@ -276,10 +238,6 @@ export class BeecorkTelegramBot {
 
   stop(): void {
     this.bot.stopPolling();
-    // Clear all debounce timers
-    for (const timer of this.debounceTimers.values()) clearTimeout(timer);
-    this.debounceTimers.clear();
-    this.debounceBuffers.clear();
     logger.info('Telegram bot stopped');
   }
 

@@ -29,6 +29,22 @@ async function main(): Promise<void> {
   migrateFromClawd();
   ensureBeecorkDirs();
   logger.setLogFile('daemon.log');
+
+  // Check for existing daemon — prevent double instances
+  const pidPath = getPidPath();
+  if (fs.existsSync(pidPath)) {
+    const existingPid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
+    if (existingPid && existingPid !== process.pid) {
+      try {
+        process.kill(existingPid, 0); // Check if alive
+        logger.error(`Another daemon is already running (PID ${existingPid}). Exiting.`);
+        process.exit(1);
+      } catch {
+        // Process is dead, stale PID file — continue
+      }
+    }
+  }
+
   logger.info('Beecork daemon starting...');
 
   // 1. Load config
@@ -38,7 +54,7 @@ async function main(): Promise<void> {
   getDb();
 
   // 3. Write PID file
-  fs.writeFileSync(getPidPath(), String(process.pid));
+  fs.writeFileSync(pidPath, String(process.pid));
   logger.info(`PID file written: ${process.pid}`);
 
   // 4. Create TabManager
