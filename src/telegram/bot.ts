@@ -6,18 +6,21 @@ import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { getTabConfig, getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
-import type { TabManager, SendResult } from '../session/manager.js';
+import type { TabManager } from '../session/manager.js';
+import type { PipeBrain } from '../pipe/brain.js';
 import type { BeecorkConfig } from '../types.js';
 
 export class BeecorkTelegramBot {
   private bot: TelegramBot;
   private tabManager: TabManager;
+  private pipeBrain: PipeBrain | null;
   private config: BeecorkConfig;
   private activeChatIds: Set<number> = new Set();
 
-  constructor(config: BeecorkConfig, tabManager: TabManager) {
+  constructor(config: BeecorkConfig, tabManager: TabManager, pipeBrain: PipeBrain | null = null) {
     this.config = config;
     this.tabManager = tabManager;
+    this.pipeBrain = pipeBrain;
     // Clear any stale polling from previous instances before starting
     this.bot = new TelegramBot(config.telegram.token, {
       polling: {
@@ -137,23 +140,40 @@ export class BeecorkTelegramBot {
     }, 120000); // 2 minutes
 
     try {
-      const result = await this.tabManager.sendMessage(tabName, prompt);
+      let responseText: string;
+      let responseError: boolean;
+      let responseTab = tabName;
+
+      if (this.pipeBrain) {
+        // Intelligent routing + goal tracking via PipeBrain
+        const pipeResult = await this.pipeBrain.process(text, { chatId, userId: 0, messageId });
+        responseText = pipeResult.response.text || '(empty response)';
+        responseError = pipeResult.response.error;
+        responseTab = pipeResult.tabName;
+
+        // Send transparency decisions
+        if (pipeResult.decisions.length > 0) {
+          const decisionText = pipeResult.decisions.join('\n');
+          await this.bot.sendMessage(chatId, decisionText);
+        }
+      } else {
+        // Dumb pipe — direct routing
+        const result = await this.tabManager.sendMessage(tabName, prompt);
+        responseText = result.text || '(empty response)';
+        responseError = result.error;
+      }
 
       clearInterval(typingInterval);
       clearTimeout(stillWorkingTimeout);
 
-      if (result.error) {
+      if (responseError) {
         await this.setReaction(chatId, messageId, '❌');
-        await this.sendResponse(chatId, `Error: ${result.text}`, tabName);
+        await this.sendResponse(chatId, `Error: ${responseText}`, responseTab);
         return;
       }
 
-      // React with ✅
       await this.setReaction(chatId, messageId, '✅');
-
-      // Send single response
-      const responseText = result.text || '(empty response)';
-      await this.sendResponse(chatId, responseText, tabName);
+      await this.sendResponse(chatId, responseText, responseTab);
     } catch (err) {
       clearInterval(typingInterval);
       clearTimeout(stillWorkingTimeout);

@@ -35,12 +35,23 @@ export interface WhatsAppConfig {
   allowedNumbers: string[];
 }
 
+export interface PipeConfig {
+  enabled: boolean;
+  anthropicApiKey: string;
+  routingModel: string;
+  complexModel: string;
+  confidenceThreshold: number;
+  projectScanPaths: string[];
+  maxFollowUps: number;
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
   claudeCode: ClaudeCodeConfig;
   tabs: Record<string, TabConfig>;
   memory: MemoryConfig;
+  pipe: PipeConfig;
   deployment: 'local' | 'vps';
 }
 

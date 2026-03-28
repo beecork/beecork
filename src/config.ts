@@ -11,6 +11,16 @@ const DEFAULT_TAB_CONFIG: TabConfig = {
   debounceMs: 1500,
 };
 
+const DEFAULT_PIPE_CONFIG: BeecorkConfig['pipe'] = {
+  enabled: false,
+  anthropicApiKey: '',
+  routingModel: 'claude-haiku-4-5-20251001',
+  complexModel: 'claude-sonnet-4-6-20250514',
+  confidenceThreshold: 0.75,
+  projectScanPaths: ['~/Coding', '~/Projects', '~/code', '~/dev'],
+  maxFollowUps: 5,
+};
+
 const DEFAULT_CONFIG: BeecorkConfig = {
   telegram: {
     token: '',
@@ -28,6 +38,7 @@ const DEFAULT_CONFIG: BeecorkConfig = {
     dbPath: '~/.beecork/memory.db',
     maxLongTermEntries: 1000,
   },
+  pipe: { ...DEFAULT_PIPE_CONFIG },
   deployment: 'local',
 };
 
@@ -103,6 +114,10 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
     memory: {
       ...DEFAULT_CONFIG.memory,
       ...raw.memory,
+    },
+    pipe: {
+      ...DEFAULT_PIPE_CONFIG,
+      ...raw.pipe,
     },
     deployment: raw.deployment ?? DEFAULT_CONFIG.deployment,
   };

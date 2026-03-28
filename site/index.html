@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Beecork — Make Claude Code Always-On</title>
 <meta name="description" content="Give Claude Code a phone number, a memory, and an alarm clock. Reachable from Telegram/WhatsApp, schedulable via cron, with persistent memory.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -16,8 +16,8 @@
     --border: #252529;
     --text: #e8e8ed;
     --text-dim: #8b8b96;
-    --accent: #f5a623;
-    --accent-dim: #f5a62333;
+    --accent: #FA5421;
+    --accent-dim: #FA542133;
     --green: #34d399;
     --green-dim: #34d39922;
     --code-bg: #0d0d0f;
@@ -52,13 +52,10 @@
     display: flex; align-items: center; justify-content: space-between;
   }
   .logo {
-    font-family: var(--mono);
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text);
-    letter-spacing: -0.5px;
+    display: flex;
+    align-items: center;
   }
-  .logo span { color: var(--accent); }
+  .logo img { height: 32px; width: auto; display: block; }
   .nav-links { display: flex; gap: 20px; align-items: center; }
   .nav-links a {
     color: var(--text-dim);
@@ -281,7 +278,7 @@
 
 <nav>
   <div class="container">
-    <div class="logo"><span>bee</span>cork</div>
+    <a href="/" class="logo"><img src="/logo.svg" alt="beecork" height="32"></a>
     <div class="nav-links">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>

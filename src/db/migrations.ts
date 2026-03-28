@@ -49,6 +49,55 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE pending_messages ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local';
     `,
   },
+  {
+    version: 6,
+    description: 'Add pipe intelligence tables (projects, preferences, permissions, routing)',
+    up: `
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT UNIQUE NOT NULL,
+        description TEXT DEFAULT '',
+        languages TEXT DEFAULT '[]',
+        last_used TEXT,
+        tab_name TEXT,
+        discovered_via TEXT DEFAULT 'scan',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
+      CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+      CREATE TABLE IF NOT EXISTS preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS permission_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tool_name TEXT NOT NULL,
+        tool_args_pattern TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        context TEXT,
+        tab_name TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_permissions_tool ON permission_history(tool_name, created_at);
+
+      CREATE TABLE IF NOT EXISTS routing_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_preview TEXT NOT NULL,
+        tab_name TEXT NOT NULL,
+        project_path TEXT,
+        confidence REAL NOT NULL,
+        was_correct INTEGER,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_routing_tab ON routing_history(tab_name, created_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

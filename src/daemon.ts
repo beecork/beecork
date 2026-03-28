@@ -6,12 +6,14 @@ import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
 import { BeecorkTelegramBot } from './telegram/bot.js';
 import { CronScheduler } from './cron/scheduler.js';
+import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
 import { logger } from './util/logger.js';
 
 let tabManager: TabManager;
 let telegramBot: BeecorkTelegramBot | null = null;
 let cronScheduler: CronScheduler;
+let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
 
 /** Migrate data from old ~/.clawd to ~/.beecork if needed */
@@ -60,18 +62,28 @@ async function main(): Promise<void> {
   // 4. Create TabManager
   tabManager = new TabManager(config);
 
-  // 5. Ensure default tab
+  // 5. Initialize pipe brain (if API key configured)
+  if (config.pipe?.enabled && config.pipe?.anthropicApiKey) {
+    pipeBrain = new PipeBrain(config, tabManager);
+    const projectCount = await pipeBrain.discoverProjects();
+    logger.info(`Pipe brain initialized — ${projectCount} projects discovered`);
+  }
+
+  // 6. Ensure default tab
   tabManager.ensureTab('default');
 
-  // 6. Recover crashed tabs
+  // 7. Recover crashed tabs
   await recoverCrashedTabs();
 
   // 7. Start Telegram bot
   if (config.telegram?.token) {
     try {
-      telegramBot = new BeecorkTelegramBot(config, tabManager);
-      // Wire up notifications so TabManager can send Telegram alerts (loop detection, etc.)
+      telegramBot = new BeecorkTelegramBot(config, tabManager, pipeBrain);
+      // Wire up notifications
       tabManager.setNotifyCallback((text) => telegramBot!.sendNotification(text));
+      if (pipeBrain) {
+        pipeBrain.setNotifyCallback((text) => telegramBot!.sendNotification(text));
+      }
     } catch (err) {
       logger.error('Failed to start Telegram bot:', err);
     }
