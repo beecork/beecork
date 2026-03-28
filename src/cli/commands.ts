@@ -1,0 +1,247 @@
+import fs from 'node:fs';
+import { spawn, execSync } from 'node:child_process';
+import { getDb, closeDb } from '../db/index.js';
+import { getConfig } from '../config.js';
+import { CronStore } from '../cron/store.js';
+import { getDaemonPid, timeAgo } from './helpers.js';
+import { startService, stopService } from '../service/install.js';
+import { getPidPath, getLogsDir } from '../util/paths.js';
+import type { Memory } from '../types.js';
+
+// Map snake_case DB rows to display format
+interface TabRow {
+  id: string; name: string; session_id: string; status: string;
+  working_dir: string; created_at: string; last_activity_at: string; pid: number | null;
+}
+
+export async function startDaemon(): Promise<void> {
+  const existingPid = getDaemonPid();
+  if (existingPid) {
+    console.log(`Beecork daemon is already running (PID: ${existingPid})`);
+    return;
+  }
+
+  try {
+    startService();
+    console.log('Beecork daemon started via system service.');
+  } catch {
+    // Fallback: start daemon directly
+    console.log('Starting daemon directly...');
+    const daemonPath = new URL('../daemon.js', import.meta.url).pathname;
+    const child = spawn('node', [daemonPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    console.log(`Beecork daemon started (PID: ${child.pid})`);
+  }
+}
+
+export async function stopDaemon(): Promise<void> {
+  const pid = getDaemonPid();
+  if (!pid) {
+    console.log('Beecork daemon is not running.');
+    return;
+  }
+
+  try {
+    stopService();
+  } catch {
+    // Fallback: kill by PID
+    process.kill(pid, 'SIGTERM');
+    const pidPath = getPidPath();
+    if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
+  }
+
+  console.log('Beecork daemon stopped.');
+}
+
+export async function showStatus(): Promise<void> {
+  const pid = getDaemonPid();
+  const config = getConfig();
+
+  console.log(`\nBeecork v0.1.0`);
+  console.log(`Daemon: ${pid ? `running (PID ${pid})` : 'stopped'}`);
+  console.log(`Deployment: ${config.deployment}`);
+
+  try {
+    const db = getDb();
+    const tabs = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[];
+
+    console.log(`\nTabs (${tabs.length}):`);
+    for (const tab of tabs) {
+      const ago = timeAgo(tab.last_activity_at);
+      const pidInfo = tab.pid ? ` (PID ${tab.pid})` : '';
+      console.log(`  ${tab.name.padEnd(20)} ${tab.status.padEnd(12)} last active: ${ago}${pidInfo}`);
+    }
+
+    const store = new CronStore();
+    const jobs = store.list();
+    const activeJobs = jobs.filter(j => j.enabled);
+    console.log(`\nCron jobs: ${activeJobs.length} active (${jobs.length} total)`);
+
+    if (activeJobs.length > 0) {
+      for (const job of activeJobs.slice(0, 5)) {
+        const lastRun = job.lastRunAt ? `last: ${timeAgo(job.lastRunAt)}` : 'never run';
+        console.log(`  ${job.name.padEnd(20)} ${job.scheduleType}:${job.schedule.padEnd(15)} → tab:${job.tabName} (${lastRun})`);
+      }
+    }
+
+    closeDb();
+  } catch {
+    console.log('\n(database not initialized — run "beecork setup" first)');
+  }
+
+  console.log('');
+}
+
+export async function listTabs(): Promise<void> {
+  const db = getDb();
+  const tabs = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[];
+  closeDb();
+
+  if (tabs.length === 0) {
+    console.log('No tabs.');
+    return;
+  }
+
+  console.log(`\nTabs (${tabs.length}):\n`);
+  for (const tab of tabs) {
+    const ago = timeAgo(tab.last_activity_at);
+    console.log(`  ${tab.name.padEnd(20)} [${tab.status}] dir:${tab.working_dir} — ${ago}`);
+  }
+  console.log('');
+}
+
+export async function tailLogs(tabName?: string): Promise<void> {
+  const logFile = tabName
+    ? `${getLogsDir()}/${tabName}.log`
+    : `${getLogsDir()}/daemon.stdout.log`;
+
+  if (!fs.existsSync(logFile)) {
+    console.log(`No log file found: ${logFile}`);
+    return;
+  }
+
+  const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
+  process.on('SIGINT', () => child.kill());
+}
+
+export async function listCrons(): Promise<void> {
+  const store = new CronStore();
+  const jobs = store.list();
+
+  if (jobs.length === 0) {
+    console.log('No cron jobs.');
+    return;
+  }
+
+  console.log(`\nCron jobs (${jobs.length}):\n`);
+  for (const job of jobs) {
+    const status = job.enabled ? 'enabled' : 'disabled';
+    const lastRun = job.lastRunAt ? timeAgo(job.lastRunAt) : 'never';
+    console.log(`  ${job.name.padEnd(20)} [${status}] ${job.scheduleType}:${job.schedule}`);
+    console.log(`    → tab:${job.tabName} | last: ${lastRun} | ID: ${job.id}`);
+  }
+  console.log('');
+}
+
+export async function deleteCron(id: string): Promise<void> {
+  const store = new CronStore();
+  if (store.delete(id)) {
+    console.log(`Deleted cron job: ${id}`);
+  } else {
+    console.log(`No cron job found with ID: ${id}`);
+  }
+}
+
+export async function listMemories(): Promise<void> {
+  const db = getDb();
+  const memories = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT 50').all() as Memory[];
+  closeDb();
+
+  if (memories.length === 0) {
+    console.log('No memories stored.');
+    return;
+  }
+
+  console.log(`\nMemories (${memories.length}):\n`);
+  for (const mem of memories) {
+    const scope = mem.tabName ? `tab:${mem.tabName}` : 'global';
+    console.log(`  [${mem.id}] (${mem.source}, ${scope}) ${mem.content.slice(0, 100)}${mem.content.length > 100 ? '...' : ''}`);
+    console.log(`       ${timeAgo(mem.createdAt)}`);
+  }
+  console.log('');
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM memories WHERE id = ?').run(parseInt(id, 10));
+  closeDb();
+
+  if (result.changes > 0) {
+    console.log(`Deleted memory: ${id}`);
+  } else {
+    console.log(`No memory found with ID: ${id}`);
+  }
+}
+
+export async function updateBeecork(options: { check?: boolean }): Promise<void> {
+  if (options.check) {
+    try {
+      const latest = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
+      const current = '0.1.0'; // TODO: read from package.json
+      if (latest === current) {
+        console.log(`Already up to date (v${current})`);
+      } else {
+        console.log(`Update available: v${current} → v${latest}`);
+        console.log('Run `beecork update` to install.');
+      }
+    } catch {
+      console.log('Could not check for updates.');
+    }
+    return;
+  }
+
+  // Stop daemon if running
+  const pid = getDaemonPid();
+  if (pid) {
+    console.log('Stopping daemon before update...');
+    await stopDaemon();
+  }
+
+  console.log('Updating beecork...');
+  try {
+    execSync('npm install -g beecork@latest', { stdio: 'inherit' });
+    console.log('Update complete!');
+  } catch {
+    console.error('Update failed. Try running: npm install -g beecork@latest');
+  }
+
+  // Restart if it was running
+  if (pid) {
+    console.log('Restarting daemon...');
+    await startDaemon();
+  }
+}
+
+export async function sendMessage(message: string): Promise<void> {
+  // This is a simple CLI test command. It starts a subprocess directly.
+  const { TabManager } = await import('../session/manager.js');
+  const config = getConfig();
+  const manager = new TabManager(config);
+
+  console.log(`Sending to default tab: "${message}"\n`);
+
+  try {
+    const result = await manager.sendMessage('default', message);
+    console.log(result.text);
+    if (result.costUsd > 0) {
+      console.log(`\n--- Cost: $${result.costUsd.toFixed(4)} | Duration: ${result.durationMs}ms ---`);
+    }
+  } catch (err) {
+    console.error('Error:', err instanceof Error ? err.message : err);
+  }
+
+  closeDb();
+}

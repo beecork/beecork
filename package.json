@@ -1,0 +1,47 @@
+{
+  "name": "beecork",
+  "version": "0.1.0",
+  "description": "Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock",
+  "type": "module",
+  "bin": {
+    "beecork": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/index.ts",
+    "dev:daemon": "tsx src/daemon.ts",
+    "test": "vitest",
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.0",
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "better-sqlite3": "^12.8.0",
+    "commander": "^13.0.0",
+    "node-cron": "^4.0.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "uuid": "^11.0.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "files": [
+    "dist/",
+    "templates/"
+  ],
+  "keywords": ["claude", "claude-code", "telegram", "automation", "cron"],
+  "license": "MIT"
+}

@@ -1,0 +1,379 @@
+import { v4 as uuidv4 } from 'uuid';
+import type Database from 'better-sqlite3';
+import { ClaudeSubprocess, type SubprocessCallbacks } from './subprocess.js';
+import { CircuitBreaker, type CircuitBreakerAction } from './circuit-breaker.js';
+import { ContextMonitor, type ContextAction } from './context-monitor.js';
+import { getDb } from '../db/index.js';
+import { resolveWorkingDir } from '../config.js';
+import { logger } from '../util/logger.js';
+import { extractMemories, getRelevantMemories } from '../memory/extractor.js';
+import type {
+  BeecorkConfig,
+  Tab,
+  TabStatus,
+  StreamEvent,
+  StreamInit,
+  StreamAssistant,
+  StreamResult,
+  StreamContentToolUse,
+} from '../types.js';
+
+// SQLite returns snake_case columns, map to camelCase Tab interface
+interface TabRow {
+  id: string;
+  name: string;
+  session_id: string;
+  status: TabStatus;
+  working_dir: string;
+  created_at: string;
+  last_activity_at: string;
+  pid: number | null;
+}
+
+function rowToTab(row: TabRow): Tab {
+  return {
+    id: row.id,
+    name: row.name,
+    sessionId: row.session_id,
+    status: row.status,
+    workingDir: row.working_dir,
+    createdAt: row.created_at,
+    lastActivityAt: row.last_activity_at,
+    pid: row.pid,
+  };
+}
+
+export interface SendResult {
+  text: string;
+  costUsd: number;
+  durationMs: number;
+  sessionId: string;
+  error: boolean;
+}
+
+const MAX_QUEUE_SIZE = 10;
+
+export type NotifyCallback = (text: string) => Promise<void>;
+
+export class TabManager {
+  private subprocesses: Map<string, ClaudeSubprocess> = new Map();
+  private circuitBreakers: Map<string, CircuitBreaker> = new Map();
+  private messageQueues: Map<string, Array<{ prompt: string; resolve: (r: SendResult) => void; reject: (e: Error) => void }>> = new Map();
+  private onNotify: NotifyCallback | null = null;
+
+  constructor(private config: BeecorkConfig) {}
+
+  /** Set a callback for sending notifications (e.g., via Telegram) */
+  setNotifyCallback(cb: NotifyCallback): void {
+    this.onNotify = cb;
+  }
+
+  /** Ensure a tab exists in the database. Creates it if missing. */
+  ensureTab(tabName: string): Tab {
+    const db = getDb();
+    const existing = this.queryTab(db, tabName);
+    if (existing) return existing;
+
+    const tab: Tab = {
+      id: uuidv4(),
+      name: tabName,
+      sessionId: uuidv4(),
+      status: 'idle',
+      workingDir: resolveWorkingDir(tabName),
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+      pid: null,
+    };
+
+    db.prepare(`
+      INSERT INTO tabs (id, name, session_id, status, working_dir, created_at, last_activity_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(tab.id, tab.name, tab.sessionId, tab.status, tab.workingDir, tab.createdAt, tab.lastActivityAt);
+
+    logger.info(`Created tab: ${tabName}`);
+    return tab;
+  }
+
+  /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void }): Promise<SendResult> {
+    const tab = this.ensureTab(tabName);
+
+    // If a subprocess is already running on this tab, queue the message
+    if (this.subprocesses.get(tabName)?.isRunning) {
+      const queue = this.messageQueues.get(tabName) ?? [];
+      if (queue.length >= MAX_QUEUE_SIZE) {
+        return Promise.reject(new Error(`Queue full for tab "${tabName}" (max ${MAX_QUEUE_SIZE}). Try again later.`));
+      }
+      return new Promise((resolve, reject) => {
+        if (!this.messageQueues.has(tabName)) {
+          this.messageQueues.set(tabName, []);
+        }
+        this.messageQueues.get(tabName)!.push({ prompt, resolve, reject });
+        logger.info(`[${tabName}] Message queued (queue size: ${this.messageQueues.get(tabName)!.length})`);
+      });
+    }
+
+    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk);
+  }
+
+  /** Get all tabs from the database */
+  listTabs(): Tab[] {
+    const db = getDb();
+    return (db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[]).map(rowToTab);
+  }
+
+  /** Get a specific tab */
+  getTab(tabName: string): Tab | undefined {
+    const db = getDb();
+    return this.queryTab(db, tabName);
+  }
+
+  private queryTab(db: Database.Database, tabName: string): Tab | undefined {
+    const row = db.prepare('SELECT * FROM tabs WHERE name = ?').get(tabName) as TabRow | undefined;
+    return row ? rowToTab(row) : undefined;
+  }
+
+  /** Stop a tab's running subprocess */
+  stopTab(tabName: string): void {
+    const sub = this.subprocesses.get(tabName);
+    if (sub?.isRunning) {
+      sub.kill();
+    }
+    this.updateTabStatus(tabName, 'stopped');
+    this.clearQueue(tabName);
+  }
+
+  /** Stop all running subprocesses (clean shutdown) */
+  stopAll(): void {
+    for (const [tabName, sub] of this.subprocesses) {
+      if (sub.isRunning) {
+        sub.kill();
+      }
+      this.updateTabStatus(tabName, 'stopped');
+    }
+    this.subprocesses.clear();
+    this.circuitBreakers.clear();
+    this.messageQueues.clear();
+  }
+
+  /** Process pending messages from MCP server IPC */
+  processPendingMessages(): void {
+    const db = getDb();
+    const pending = db.prepare(
+      'SELECT * FROM pending_messages WHERE processed = 0 ORDER BY created_at ASC'
+    ).all() as Array<{ id: number; tab_name: string; message: string; type?: string }>;
+
+    if (pending.length === 0) return;
+
+    for (const msg of pending) {
+      db.prepare('UPDATE pending_messages SET processed = 1 WHERE id = ?').run(msg.id);
+
+      if (msg.type === 'notification') {
+        // Route notifications to Telegram/WhatsApp via the notify callback
+        this.onNotify?.(msg.message);
+      } else {
+        // Route regular messages to tabs
+        this.sendMessage(msg.tab_name, msg.message).catch(err => {
+          logger.error(`Failed to process pending message for tab ${msg.tab_name}:`, err);
+        });
+      }
+    }
+  }
+
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void): Promise<SendResult> {
+    const db = getDb();
+
+    // Inject relevant memories into the prompt
+    const memories = getRelevantMemories(tab.name);
+    let enrichedPrompt = prompt;
+    if (memories.length > 0) {
+      const memoryContext = memories.map(m => `- ${m}`).join('\n');
+      enrichedPrompt = `[Context from memory:\n${memoryContext}\n]\n\n${prompt}`;
+    }
+
+    // Store user message
+    db.prepare('INSERT INTO messages (tab_id, role, content) VALUES (?, ?, ?)')
+      .run(tab.id, 'user', prompt);
+
+    this.updateTabStatus(tab.name, 'running');
+
+    const subprocess = new ClaudeSubprocess(
+      tab.name,
+      tab.workingDir,
+      this.config,
+      tab.sessionId,
+    );
+    this.subprocesses.set(tab.name, subprocess);
+
+    const breaker = new CircuitBreaker(tab.name);
+    this.circuitBreakers.set(tab.name, breaker);
+    const contextMonitor = new ContextMonitor(tab.name);
+
+    // Resume if: explicitly requested or DB has prior successful responses for this tab
+    const hasDbHistory = db.prepare(
+      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ?'
+    ).get(tab.id, 'assistant') as { count: number };
+    const shouldResume = resume || hasDbHistory.count > 0;
+
+    return new Promise<SendResult>((resolve, reject) => {
+      let resultText = '';
+      let resultEvent: StreamResult | null = null;
+      let loopWarningPending = false;
+
+      const callbacks: SubprocessCallbacks = {
+        onEvent: (event: StreamEvent) => {
+          // Capture session_id from StreamInit and update tab record
+          if (event.type === 'system' && 'subtype' in event && event.subtype === 'init') {
+            const initEvent = event as StreamInit;
+            if (initEvent.session_id) {
+              db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?')
+                .run(initEvent.session_id, tab.id);
+            }
+          }
+
+          if (event.type === 'assistant') {
+            const assistant = event as StreamAssistant;
+            // Track context usage
+            if (assistant.message.usage) {
+              const contextAction: ContextAction = contextMonitor.recordUsage(assistant.message.usage);
+              if (contextAction === 'warn') {
+                // Will inject warning on next message
+                logger.info(`[${tab.name}] Context window warning — will summarize on next turn`);
+              } else if (contextAction === 'checkpoint') {
+                // Need to checkpoint — handled after subprocess exits
+                logger.warn(`[${tab.name}] Context window checkpoint triggered`);
+              }
+            }
+
+            for (const block of assistant.message.content) {
+              if (block.type === 'text') {
+                resultText += block.text;
+                onTextChunk?.(block.text);
+              } else if (block.type === 'tool_use') {
+                const toolUse = block as StreamContentToolUse;
+                const action: CircuitBreakerAction = breaker.recordToolCall(toolUse);
+                if (action === 'break') {
+                  logger.warn(`[${tab.name}] Circuit breaker tripped, killing subprocess`);
+                  subprocess.kill();
+                } else if (action === 'notify') {
+                  this.onNotify?.(`Loop detected in tab "${tab.name}": ${toolUse.name} repeated 10+ times. Send /stop ${tab.name} to kill it.`);
+                } else if (action === 'warn') {
+                  loopWarningPending = true;
+                }
+              }
+            }
+          } else if (event.type === 'result') {
+            resultEvent = event as StreamResult;
+          }
+        },
+        onExit: (code) => {
+          this.subprocesses.delete(tab.name);
+          this.circuitBreakers.delete(tab.name);
+
+          const result: SendResult = {
+            text: resultEvent?.result ?? resultText,
+            costUsd: resultEvent?.total_cost_usd ?? 0,
+            durationMs: resultEvent?.duration_ms ?? 0,
+            sessionId: subprocess.sessionId,
+            error: resultEvent?.is_error ?? (code !== 0),
+          };
+
+          // Handle resume failure (session expired/not found) — retry with fresh session + context
+          if (result.error && shouldResume && result.text.includes('session')) {
+            logger.info(`[${tab.name}] Session resume failed, retrying with context injection`);
+            const recentMsgs = db.prepare(
+              'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
+            ).all(tab.id) as Array<{ role: string; content: string }>;
+            const context = recentMsgs.reverse().map(m => `${m.role}: ${m.content.slice(0, 200)}`).join('\n');
+            const contextPrompt = `[Previous conversation context:\n${context}\n]\n\n${enrichedPrompt}`;
+
+            // Reset session ID for fresh start
+            const newSessionId = uuidv4();
+            db.prepare('UPDATE tabs SET session_id = ?, status = ? WHERE id = ?').run(newSessionId, 'idle', tab.id);
+
+            this.executeMessage({ ...tab, sessionId: newSessionId }, contextPrompt, false, onTextChunk)
+              .then(resolve).catch(reject);
+            return;
+          }
+
+          // Store assistant response
+          db.prepare(
+            'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)'
+          ).run(
+            tab.id,
+            'assistant',
+            result.text,
+            result.costUsd,
+            resultEvent?.usage?.input_tokens ?? null,
+            resultEvent?.usage?.output_tokens ?? null,
+          );
+
+          // Update tab
+          db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
+            .run('idle', new Date().toISOString(), tab.name);
+
+          resolve(result);
+
+          // Auto-extract memories from completed sessions (fire and forget)
+          if (!result.error && result.text) {
+            extractMemories(this.config, tab.name, result.text, result.durationMs).catch(err => {
+              logger.error(`[${tab.name}] Memory extraction error:`, err);
+            });
+          }
+
+          // Process next queued message (prepend loop warning if needed)
+          if (loopWarningPending && this.messageQueues.get(tab.name)?.length) {
+            const next = this.messageQueues.get(tab.name)![0];
+            next.prompt = `[WARNING: You appear to be repeating the same action. Reassess your approach.]\n\n${next.prompt}`;
+            loopWarningPending = false;
+          }
+          this.processNextInQueue(tab.name);
+        },
+        onError: (err) => {
+          this.subprocesses.delete(tab.name);
+          this.circuitBreakers.delete(tab.name);
+          this.updateTabStatus(tab.name, 'error');
+          reject(err);
+          this.processNextInQueue(tab.name);
+        },
+      };
+
+      subprocess.send(prompt, callbacks, shouldResume).catch(reject);
+
+      // Update tab with PID
+      if (subprocess.pid) {
+        db.prepare('UPDATE tabs SET pid = ? WHERE name = ?').run(subprocess.pid, tab.name);
+      }
+    });
+  }
+
+  private processNextInQueue(tabName: string): void {
+    const queue = this.messageQueues.get(tabName);
+    if (!queue || queue.length === 0) return;
+
+    const next = queue.shift()!;
+    const tab = this.getTab(tabName);
+    if (!tab) {
+      next.reject(new Error(`Tab "${tabName}" not found`));
+      return;
+    }
+
+    this.executeMessage(tab, next.prompt, false).then(next.resolve).catch(next.reject);
+  }
+
+  private updateTabStatus(tabName: string, status: TabStatus): void {
+    const db = getDb();
+    db.prepare('UPDATE tabs SET status = ?, last_activity_at = ? WHERE name = ?')
+      .run(status, new Date().toISOString(), tabName);
+  }
+
+  private clearQueue(tabName: string): void {
+    const queue = this.messageQueues.get(tabName);
+    if (queue) {
+      for (const item of queue) {
+        item.reject(new Error(`Tab "${tabName}" was stopped`));
+      }
+      this.messageQueues.delete(tabName);
+    }
+  }
+}

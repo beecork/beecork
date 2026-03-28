@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.env
+*.env
+config.json
+memory.db
+crontab.json
+crontab.json.bak
+whatsapp-session/
+*.log
+PRD.md
+PRD-updates.md
