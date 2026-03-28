@@ -31,14 +31,28 @@ export class CronScheduler {
 
     const jobs = this.store.list();
     let scheduled = 0;
+    let missedFires = 0;
 
     for (const job of jobs) {
       if (!job.enabled) continue;
+
+      // Detect missed fires: one-time "at" jobs whose time has passed but never ran
+      if (job.scheduleType === 'at' && !job.lastRunAt) {
+        const targetTime = new Date(job.schedule).getTime();
+        if (targetTime <= Date.now()) {
+          logger.warn(`Cron: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`);
+          missedFires++;
+          this.fireJob(job);
+          this.store.update(job.id, { enabled: false }); // Disable after one-time execution
+          continue;
+        }
+      }
+
       this.scheduleJob(job);
       scheduled++;
     }
 
-    logger.info(`Cron: loaded ${scheduled} active jobs (${jobs.length} total)`);
+    logger.info(`Cron: loaded ${scheduled} active jobs (${jobs.length} total)${missedFires > 0 ? `, fired ${missedFires} missed` : ''}`);
   }
 
   /** Check for the reload signal file and reload if present */
@@ -100,8 +114,22 @@ export class CronScheduler {
   }
 
   private async fireJob(job: CronJob): Promise<void> {
-    logger.info(`Cron firing: "${job.name}" → tab:${job.tabName}`);
+    logger.info(`Cron firing: "${job.name}" (${job.payloadType || 'agentTurn'}) → tab:${job.tabName}`);
     const logFile = path.join(getLogsDir(), `cron-${job.name}.log`);
+
+    // Handle systemEvent — internal Beecork actions, not Claude Code
+    if (job.payloadType === 'systemEvent') {
+      try {
+        await this.handleSystemEvent(job);
+        this.store.update(job.id, { lastRunAt: new Date().toISOString() });
+        fs.appendFileSync(logFile, `[${new Date().toISOString()}] SYSTEM: ${job.message}\n`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error(`System event "${job.name}" failed:`, err);
+        fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
+      }
+      return;
+    }
 
     try {
       this.tabManager.ensureTab(job.tabName);
@@ -130,6 +158,22 @@ export class CronScheduler {
       if (this.telegramBot) {
         await this.telegramBot.sendNotification(`❌ [${job.name}] Failed — ${errMsg}`);
       }
+    }
+  }
+
+  private async handleSystemEvent(job: CronJob): Promise<void> {
+    switch (job.message) {
+      case 'health_check':
+        logger.info('System event: health check — daemon alive');
+        if (this.telegramBot) {
+          await this.telegramBot.sendNotification('🟢 Beecork health check: all systems operational');
+        }
+        break;
+      case 'memory_compaction':
+        logger.info('System event: memory compaction (not yet implemented)');
+        break;
+      default:
+        logger.warn(`Unknown system event: ${job.message}`);
     }
   }
 }

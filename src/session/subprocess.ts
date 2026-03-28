@@ -5,6 +5,27 @@ import { logger } from '../util/logger.js';
 import { getMcpConfigPath } from '../util/paths.js';
 import type { BeecorkConfig, StreamEvent } from '../types.js';
 
+const BEECORK_SYSTEM_PROMPT = `You are running inside Beecork, an always-on infrastructure for Claude Code.
+
+You have these special MCP tools available:
+- beecork_remember: Store important facts for future sessions (preferences, server addresses, decisions, outcomes)
+- beecork_recall: Search stored memories — ALWAYS call this at the start of complex tasks
+- beecork_cron_create: Schedule recurring tasks (types: "at" for one-time, "every" for interval like "30m", "cron" for expressions like "0 9 * * 1")
+- beecork_cron_list: List scheduled tasks
+- beecork_cron_delete: Remove a scheduled task
+- beecork_tab_create: Create a new virtual tab for parallel work
+- beecork_tab_list: List all tabs
+- beecork_send_message: Send a message to another tab
+- beecork_notify: Send the user a notification mid-task without stopping
+- beecork_status: Check system status
+
+Guidelines:
+- You are running unattended. Be thorough and complete tasks fully.
+- Always call beecork_recall at the start of any task to check relevant memories.
+- Always call beecork_remember when you learn something important.
+- When asked for recurring tasks, use beecork_cron_create.
+- Use beecork_notify for progress updates during long tasks.`;
+
 export interface SubprocessCallbacks {
   onEvent: (event: StreamEvent) => void;
   onExit: (code: number | null) => void;
@@ -120,6 +141,11 @@ export class ClaudeSubprocess {
     const mcpConfig = getMcpConfigPath();
     if (fs.existsSync(mcpConfig)) {
       args.push('--mcp-config', mcpConfig);
+    }
+
+    // Inject Beecork system context so Claude knows about available tools
+    if (!resume) {
+      args.push('--system-prompt', BEECORK_SYSTEM_PROMPT);
     }
 
     if (resume) {

@@ -8,6 +8,7 @@ import type { CronJob } from '../types.js';
 interface CronJobRow {
   id: string; name: string; schedule_type: string; schedule: string;
   tab_name: string; message: string; enabled: number; user_id: string;
+  payload_type?: string;
   created_at: string; last_run_at: string | null; next_run_at: string | null;
 }
 
@@ -16,6 +17,7 @@ function rowToJob(row: CronJobRow): CronJob {
     id: row.id, name: row.name,
     scheduleType: row.schedule_type as CronJob['scheduleType'],
     schedule: row.schedule, tabName: row.tab_name, message: row.message,
+    payloadType: (row.payload_type as CronJob['payloadType']) || 'agentTurn',
     enabled: row.enabled === 1, createdAt: row.created_at,
     lastRunAt: row.last_run_at, nextRunAt: row.next_run_at,
   };

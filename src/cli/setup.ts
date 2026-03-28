@@ -100,6 +100,10 @@ export async function setupWizard(): Promise<void> {
     generateMcpConfig();
     console.log(`✓ MCP config generated at ${getMcpConfigPath()}`);
 
+    // Inject Beecork instructions into global CLAUDE.md
+    injectClaudeMd();
+    console.log('✓ Beecork tools injected into ~/.claude/CLAUDE.md');
+
     // Install service
     if (shouldInstallService) {
       try {
@@ -159,4 +163,47 @@ function generateMcpConfig(): void {
   };
 
   fs.writeFileSync(getMcpConfigPath(), JSON.stringify(mcpConfig, null, 2) + '\n');
+}
+
+const BEECORK_MARKER_START = '<!-- BEECORK START -->';
+const BEECORK_MARKER_END = '<!-- BEECORK END -->';
+
+const BEECORK_CLAUDE_MD = `${BEECORK_MARKER_START}
+## Beecork — Always-On Tools
+
+You have Beecork MCP tools available when running inside Beecork:
+
+- **beecork_remember** — Store facts in long-term memory (preferences, addresses, decisions)
+- **beecork_recall** — Search memories. Call this at the start of complex tasks.
+- **beecork_cron_create** — Schedule tasks: "at" (one-time), "every" (interval), "cron" (expression)
+- **beecork_cron_list / beecork_cron_delete** — Manage scheduled tasks
+- **beecork_tab_create / beecork_tab_list** — Manage virtual tabs
+- **beecork_send_message** — Send message to another tab
+- **beecork_notify** — Notify the user mid-task without stopping
+- **beecork_status** — Check system status
+
+When running unattended: always call beecork_recall first, always beecork_remember important outcomes, use beecork_notify for progress on long tasks.
+${BEECORK_MARKER_END}`;
+
+function injectClaudeMd(): void {
+  const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  const claudeDir = path.dirname(claudeMdPath);
+  fs.mkdirSync(claudeDir, { recursive: true });
+
+  let content = '';
+  if (fs.existsSync(claudeMdPath)) {
+    content = fs.readFileSync(claudeMdPath, 'utf-8');
+
+    // Remove old injection if present
+    const startIdx = content.indexOf(BEECORK_MARKER_START);
+    const endIdx = content.indexOf(BEECORK_MARKER_END);
+    if (startIdx !== -1 && endIdx !== -1) {
+      content = content.slice(0, startIdx) + content.slice(endIdx + BEECORK_MARKER_END.length);
+      content = content.trim();
+    }
+  }
+
+  // Append Beecork section
+  content = content + '\n\n' + BEECORK_CLAUDE_MD + '\n';
+  fs.writeFileSync(claudeMdPath, content);
 }

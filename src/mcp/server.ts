@@ -16,7 +16,6 @@ import os from 'node:os';
 
 const BEECORK_HOME = process.env.BEECORK_HOME || path.join(os.homedir(), '.beecork');
 const DB_PATH = path.join(BEECORK_HOME, 'memory.db');
-const CRONTAB_PATH = path.join(BEECORK_HOME, 'crontab.json');
 const CRON_RELOAD_SIGNAL = path.join(BEECORK_HOME, '.cron-reload');
 
 function getDb(): Database.Database {
@@ -26,16 +25,7 @@ function getDb(): Database.Database {
   return db;
 }
 
-function loadCrontab(): { jobs: Array<Record<string, unknown>> } {
-  if (!fs.existsSync(CRONTAB_PATH)) {
-    return { jobs: [] };
-  }
-  return JSON.parse(fs.readFileSync(CRONTAB_PATH, 'utf-8'));
-}
-
-function saveCrontab(data: { jobs: Array<Record<string, unknown>> }): void {
-  fs.writeFileSync(CRONTAB_PATH, JSON.stringify(data, null, 2) + '\n');
-  // Signal the daemon to reload cron schedules
+function signalCronReload(): void {
   fs.writeFileSync(CRON_RELOAD_SIGNAL, String(Date.now()));
 }
 
@@ -53,6 +43,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object' as const,
         properties: {
           content: { type: 'string', description: 'The fact or information to remember' },
+          category: { type: 'string', description: 'Optional category for organizing memories (e.g., "preference", "server", "decision")' },
         },
         required: ['content'],
       },
@@ -146,6 +137,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object' as const,
         properties: {
           message: { type: 'string', description: 'The notification message to send' },
+          urgent: { type: 'boolean', description: 'If true, sends with higher priority (default: false)' },
         },
         required: ['message'],
       },
@@ -166,11 +158,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   switch (name) {
     case 'beecork_remember': {
-      const content = (args as { content: string }).content;
+      const { content, category } = args as { content: string; category?: string };
       const db = getDb();
       try {
-        db.prepare('INSERT INTO memories (content, source) VALUES (?, ?)').run(content, 'tool');
-        return { content: [{ type: 'text' as const, text: `Remembered: "${content}"` }] };
+        const fullContent = category ? `[${category}] ${content}` : content;
+        db.prepare('INSERT INTO memories (content, source) VALUES (?, ?)').run(fullContent, 'tool');
+        return { content: [{ type: 'text' as const, text: `Remembered: "${fullContent}"` }] };
       } finally {
         db.close();
       }
@@ -180,45 +173,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name: jobName, scheduleType, schedule, message, tabName } = args as {
         name: string; scheduleType: string; schedule: string; message: string; tabName?: string;
       };
-      const crontab = loadCrontab();
-      const job = {
-        id: uuidv4(),
-        name: jobName,
-        scheduleType,
-        schedule,
-        tabName: tabName || 'default',
-        message,
-        enabled: true,
-        createdAt: new Date().toISOString(),
-        lastRunAt: null,
-        nextRunAt: null,
-      };
-      crontab.jobs.push(job);
-      saveCrontab(crontab);
-      return { content: [{ type: 'text' as const, text: `Cron job created: "${jobName}" (${scheduleType}: ${schedule}) → tab:${job.tabName}\nID: ${job.id}` }] };
+      const db = getDb();
+      try {
+        const id = uuidv4();
+        const tab = tabName || 'default';
+        db.prepare(
+          `INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, 'local', ?)`
+        ).run(id, jobName, scheduleType, schedule, tab, message, new Date().toISOString());
+        signalCronReload();
+        return { content: [{ type: 'text' as const, text: `Cron job created: "${jobName}" (${scheduleType}: ${schedule}) → tab:${tab}\nID: ${id}` }] };
+      } finally {
+        db.close();
+      }
     }
 
     case 'beecork_cron_list': {
-      const crontab = loadCrontab();
-      if (crontab.jobs.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No cron jobs scheduled.' }] };
+      const db = getDb();
+      try {
+        const jobs = db.prepare('SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
+        if (jobs.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No cron jobs scheduled.' }] };
+        }
+        const lines = jobs.map(j =>
+          `- ${j.name} [${j.enabled ? 'enabled' : 'disabled'}] (${j.schedule_type}: ${j.schedule}) → tab:${j.tab_name} (ID: ${j.id})`
+        );
+        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      } finally {
+        db.close();
       }
-      const lines = crontab.jobs.map((j: Record<string, unknown>) =>
-        `- ${j.name} [${j.enabled ? 'enabled' : 'disabled'}] (${j.scheduleType}: ${j.schedule}) → tab:${j.tabName} (ID: ${j.id})`
-      );
-      return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
     }
 
     case 'beecork_cron_delete': {
       const { id } = args as { id: string };
-      const crontab = loadCrontab();
-      const before = crontab.jobs.length;
-      crontab.jobs = crontab.jobs.filter((j: Record<string, unknown>) => j.id !== id);
-      if (crontab.jobs.length === before) {
-        return { content: [{ type: 'text' as const, text: `No cron job found with ID: ${id}` }] };
+      const db = getDb();
+      try {
+        const result = db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(id);
+        if (result.changes === 0) {
+          return { content: [{ type: 'text' as const, text: `No cron job found with ID: ${id}` }] };
+        }
+        signalCronReload();
+        return { content: [{ type: 'text' as const, text: `Deleted cron job: ${id}` }] };
+      } finally {
+        db.close();
       }
-      saveCrontab(crontab);
-      return { content: [{ type: 'text' as const, text: `Deleted cron job: ${id}` }] };
     }
 
     case 'beecork_tab_create': {
@@ -291,10 +289,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'beecork_notify': {
-      const { message } = args as { message: string };
+      const { message, urgent } = args as { message: string; urgent?: boolean };
       const db = getDb();
       try {
-        db.prepare("INSERT INTO pending_messages (tab_name, message, type) VALUES ('_notify', ?, 'notification')").run(message);
+        const prefix = urgent ? '🚨 ' : '';
+        db.prepare("INSERT INTO pending_messages (tab_name, message, type) VALUES ('_notify', ?, 'notification')").run(prefix + message);
         return { content: [{ type: 'text' as const, text: `Notification sent to user.` }] };
       } finally {
         db.close();

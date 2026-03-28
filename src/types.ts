@@ -129,6 +129,8 @@ export type StreamEvent = StreamInit | StreamAssistant | StreamResult;
 
 export type CronScheduleType = 'at' | 'every' | 'cron';
 
+export type CronPayloadType = 'agentTurn' | 'systemEvent';
+
 export interface CronJob {
   id: string;
   name: string;
@@ -136,6 +138,7 @@ export interface CronJob {
   schedule: string;
   tabName: string;
   message: string;
+  payloadType: CronPayloadType;
   enabled: boolean;
   createdAt: string;
   lastRunAt: string | null;
@@ -157,6 +160,14 @@ export interface Memory {
 export interface CircuitBreakerConfig {
   maxRepeats: number;
   windowSize: number;
+}
+
+// ─── Channel Plugin Interface ───
+
+export interface Channel {
+  sendNotification(text: string): Promise<void>;
+  sendResponse(chatId: number | string, text: string, tabName?: string): Promise<void>;
+  stop(): void;
 }
 
 // ─── Approval (skeleton for Phase 2) ───
