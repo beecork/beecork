@@ -16,8 +16,8 @@
     --border: #252529;
     --text: #e8e8ed;
     --text-dim: #8b8b96;
-    --accent: #FA5421;
-    --accent-dim: #FA542133;
+    --accent: #10B981;
+    --accent-dim: #10B98133;
     --green: #34d399;
     --green-dim: #34d39922;
     --code-bg: #0d0d0f;
@@ -55,7 +55,7 @@
     display: flex;
     align-items: center;
   }
-  .logo img { height: 32px; width: auto; display: block; }
+  .logo img { width: auto; display: block; }
   .nav-links { display: flex; gap: 20px; align-items: center; }
   .nav-links a {
     color: var(--text-dim);
@@ -278,7 +278,7 @@
 
 <nav>
   <div class="container">
-    <a href="/" class="logo"><img src="/logo.svg" alt="beecork" height="32"></a>
+    <a href="/" class="logo"><img src="/horizontal-dark.svg" alt="beecork" height="40"></a>
     <div class="nav-links">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
@@ -295,12 +295,13 @@
 
     <!-- Hero -->
     <div class="hero">
+      <img src="/logo.svg" alt="beecork" style="height: 200px; margin-bottom: 32px; display: block; margin-left: auto; margin-right: auto;" />
       <span class="hero-badge">open source</span>
       <h1>Give Claude Code a phone number,<br>a memory, and an <span class="accent">alarm clock</span></h1>
-      <p class="hero-sub">Beecork is infrastructure that makes Claude Code always-on. Reachable from Telegram and WhatsApp, schedulable via cron, with persistent memory. Claude Code is the agent — Beecork is just the pipe.</p>
+      <p class="hero-sub">Beecork makes Claude Code always-on. Reachable from Telegram and WhatsApp, schedulable via cron, with persistent memory and intelligent routing. Claude Code is the agent — Beecork is the smart pipe.</p>
 
       <div class="install">
-        <div class="install-title">Install</div>
+        <div class="install-title">Quick install</div>
         <button class="copy-btn" onclick="copyInstall()" title="Copy to clipboard" id="copyBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
         </button>
@@ -308,6 +309,10 @@
         <code><span class="dim">$</span> beecork setup</code>
         <code><span class="dim">$</span> beecork start</code>
       </div>
+
+      <p style="margin-top: 16px; font-size: 13px; color: var(--text-dim);">
+        Or one-liner: <code style="font-family: var(--mono); color: var(--green); font-size: 12px; background: var(--code-bg); padding: 2px 8px; border-radius: 4px;">curl -fsSL https://beecork.com/install.sh | bash</code>
+      </p>
     </div>
 
     <!-- Features -->
@@ -354,6 +359,26 @@
           <span class="feature-icon">&#128230;</span>
           <h3>Zero cloud dependency</h3>
           <p>All local. SQLite storage, no accounts, no SaaS. Works on Mac and Linux with your Claude Pro/Max sub.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Requirements -->
+    <section id="requirements">
+      <div class="section-label">Requirements</div>
+      <h2>What you need</h2>
+      <div class="features" style="grid-template-columns: 1fr 1fr 1fr;">
+        <div class="feature">
+          <h3>Node.js 18+</h3>
+          <p><a href="https://nodejs.org">nodejs.org</a></p>
+        </div>
+        <div class="feature">
+          <h3>Claude Code CLI</h3>
+          <p>With Pro or Max subscription. <a href="https://claude.ai/code">Get it here</a></p>
+        </div>
+        <div class="feature">
+          <h3>Telegram bot</h3>
+          <p>Create one via <a href="https://t.me/BotFather">@BotFather</a> (free, takes 30 seconds)</p>
         </div>
       </div>
     </section>
