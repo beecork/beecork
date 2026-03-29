@@ -321,45 +321,107 @@
       <h2>Everything Claude Code needs to run unsupervised</h2>
       <div class="features">
         <div class="feature">
-          <span class="feature-icon">&#9889;</span>
-          <h3>Always-on</h3>
-          <p>Runs as a background service via systemd or launchd. Survives reboots. Starts on boot.</p>
+          <span class="feature-icon">&#129504;</span>
+          <h3>Intelligent routing</h3>
+          <p>Send a plain message — Beecork figures out which project it belongs to using its own memory and an AI routing layer. No commands needed.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#127919;</span>
+          <h3>Goal tracking</h3>
+          <p>Beecork evaluates if Claude actually finished the task. If not, it sends follow-ups automatically until the job is done. Up to 5 retries.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128172;</span>
-          <h3>Telegram / WhatsApp</h3>
-          <p>Message Claude Code from your phone. Full bidirectional conversation, not just notifications.</p>
+          <h3>Telegram &amp; WhatsApp</h3>
+          <p>Message Claude Code from your phone. Live streaming output, emoji reactions, typing indicators. Full bidirectional conversation.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#9200;</span>
           <h3>Cron jobs</h3>
-          <p>Schedule Claude Code to wake up on any cron expression. Daily reports, weekly cleanups, whatever.</p>
+          <p>Three schedule types: one-time, interval, or cron expression. Claude can create its own schedules. Missed fires detected and retried.</p>
         </div>
         <div class="feature">
-          <span class="feature-icon">&#129504;</span>
+          <span class="feature-icon">&#128218;</span>
           <h3>Persistent memory</h3>
-          <p>Facts and decisions survive across sessions. Stored locally in SQLite, never leaves your machine.</p>
+          <p>The pipe owns its own memory — projects, preferences, decisions. Auto-extracts knowledge from every session. Injects context into future conversations.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128196;</span>
           <h3>Virtual tabs</h3>
-          <p>Run multiple concurrent task contexts. Switch between projects without losing state.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#9654;</span>
-          <h3>Streaming output</h3>
-          <p>See Claude's work in real-time in Telegram. Watch it think, not just get the final answer.</p>
+          <p>Each project gets its own session with separate history and working directory. Sessions persist across restarts via <code>--resume</code>.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128737;</span>
-          <h3>Safety built in</h3>
-          <p>Loop detection, approval modes, and circuit breakers. You stay in control even when it runs unattended.</p>
+          <h3>Safety &amp; recovery</h3>
+          <p>3-tier loop detection (warn &rarr; notify &rarr; kill). Context window compaction at 90%. Auto-resume crashed sessions. Circuit breakers.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#9881;</span>
+          <h3>10 MCP tools</h3>
+          <p>Claude Code gets tools to remember facts, recall memories, schedule crons, create tabs, notify you mid-task, and check system status.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128269;</span>
+          <h3>Project discovery</h3>
+          <p>Scans your filesystem for git repos during setup. Learns about new projects from conversations. Builds a map of your codebase.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128230;</span>
           <h3>Zero cloud dependency</h3>
-          <p>All local. SQLite storage, no accounts, no SaaS. Works on Mac and Linux with your Claude Pro/Max sub.</p>
+          <p>SQLite database, local storage, no accounts, no SaaS. Works on Mac and Linux. Uses your Claude Pro/Max subscription — zero API cost for tasks.</p>
         </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how">
+      <div class="section-label">How it works</div>
+      <h2>Three commands to always-on</h2>
+      <ol class="how-list">
+        <li>
+          <div>
+            <h3>npm install -g beecork</h3>
+            <p>Install the CLI globally. Requires Node.js 18+ and Claude Code CLI with a Pro or Max subscription.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>beecork setup</h3>
+            <p>Interactive wizard: connect Telegram bot, set Claude path, optionally add Anthropic API key for intelligent routing, scan filesystem for projects, install as background service.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>beecork start</h3>
+            <p>Launches the daemon via launchd (Mac) or systemd (Linux). Persists across reboots. Auto-recovers crashed sessions.</p>
+          </div>
+        </li>
+      </ol>
+
+      <div class="diagram">
+        <span class="highlight">You</span> &rarr; Telegram/WhatsApp &rarr; <span class="green">Pipe Brain</span> (routes &amp; tracks goals) &rarr; Claude Code &rarr; your codebase<br>
+        <span class="highlight">Cron</span> &rarr; <span class="green">Pipe Brain</span> &rarr; Claude Code &rarr; your codebase<br>
+        <br>
+        <span style="color: var(--text-dim);">Pipe Brain uses: memory (SQLite) &bull; project registry &bull; routing history &bull; Anthropic API (Haiku/Sonnet)</span>
+      </div>
+    </section>
+
+    <!-- CLI -->
+    <section id="cli">
+      <div class="section-label">CLI</div>
+      <h2>Full command reference</h2>
+      <div class="diagram" style="text-align: left;">
+        <span class="green">beecork setup</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;First-time configuration wizard<br>
+        <span class="green">beecork start</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Start the daemon<br>
+        <span class="green">beecork stop</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Stop the daemon<br>
+        <span class="green">beecork status</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Show tabs, cron jobs, daemon info<br>
+        <span class="green">beecork tabs</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;List all virtual tabs<br>
+        <span class="green">beecork logs [tab]</span>&nbsp;&nbsp;&nbsp;Tail daemon or tab logs<br>
+        <span class="green">beecork cron list</span>&nbsp;&nbsp;&nbsp;&nbsp;List scheduled jobs<br>
+        <span class="green">beecork cron delete</span>&nbsp;&nbsp;Remove a scheduled job<br>
+        <span class="green">beecork memory list</span>&nbsp;&nbsp;Show stored memories<br>
+        <span class="green">beecork send &lt;msg&gt;</span>&nbsp;&nbsp;&nbsp;Test: send to default tab<br>
+        <span class="green">beecork update</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Update to latest version<br>
       </div>
     </section>
 
@@ -374,46 +436,14 @@
         </div>
         <div class="feature">
           <h3>Claude Code CLI</h3>
-          <p>With Pro or Max subscription. <a href="https://claude.ai/code">Get it here</a></p>
+          <p>Pro or Max subscription. <a href="https://claude.ai/code">claude.ai/code</a></p>
         </div>
         <div class="feature">
           <h3>Telegram bot</h3>
-          <p>Create one via <a href="https://t.me/BotFather">@BotFather</a> (free, takes 30 seconds)</p>
+          <p>Free via <a href="https://t.me/BotFather">@BotFather</a> (30 seconds)</p>
         </div>
       </div>
-    </section>
-
-    <!-- How it works -->
-    <section id="how">
-      <div class="section-label">How it works</div>
-      <h2>Three commands to always-on</h2>
-      <ol class="how-list">
-        <li>
-          <div>
-            <h3>npm install -g beecork</h3>
-            <p>Install the CLI globally. Requires Node.js 18+ and an existing Claude Code CLI with a Pro or Max subscription.</p>
-          </div>
-        </li>
-        <li>
-          <div>
-            <h3>beecork setup</h3>
-            <p>Interactive wizard. Connect your Telegram bot (or WhatsApp), set your working directories, configure cron schedules, and choose a safety mode.</p>
-          </div>
-        </li>
-        <li>
-          <div>
-            <h3>beecork start</h3>
-            <p>Launches the daemon. Registers with your OS service manager so it persists across reboots. That's it.</p>
-          </div>
-        </li>
-      </ol>
-
-      <div class="diagram">
-        <span class="highlight">You</span> &rarr; Telegram/WhatsApp &rarr; <span class="green">Beecork</span> &rarr; Claude Code CLI &rarr; your codebase<br>
-        <span class="highlight">Cron</span> &rarr; <span class="green">Beecork</span> &rarr; Claude Code CLI &rarr; your codebase<br>
-        <span style="color: var(--text-dim);">&#x2502;</span><br>
-        <span style="color: var(--text-dim);">SQLite &mdash; memory, state, tabs</span>
-      </div>
+      <p style="margin-top: 16px; font-size: 13px; color: var(--text-dim);">Optional: Anthropic API key enables intelligent routing and goal tracking via Haiku/Sonnet.</p>
     </section>
 
   </div>
