@@ -77,7 +77,19 @@ async function main(): Promise<void> {
     logger.warn('No Telegram token configured. Bot not started.');
   }
 
-  // 8. Start cron scheduler
+  // 8. Start WhatsApp client (if configured)
+  if (config.whatsapp?.enabled) {
+    try {
+      const { BeecorkWhatsAppClient } = await import('./whatsapp/client.js');
+      const whatsappClient = new BeecorkWhatsAppClient(config, tabManager);
+      await whatsappClient.start();
+      logger.info('WhatsApp client started');
+    } catch (err) {
+      logger.error('Failed to start WhatsApp client:', err);
+    }
+  }
+
+  // 9. Start cron scheduler
   cronScheduler = new CronScheduler(tabManager, telegramBot);
   cronScheduler.loadAndSchedule();
 

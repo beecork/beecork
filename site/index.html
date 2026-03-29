@@ -96,7 +96,7 @@
   h1 {
     font-size: clamp(32px, 5vw, 48px);
     font-weight: 800;
-    line-height: 1.15;
+    line-height: 1.0;
     letter-spacing: -1.5px;
     margin-bottom: 20px;
   }
@@ -108,6 +108,20 @@
     margin: 0 auto 36px;
     line-height: 1.5;
   }
+
+  /* --- Chips --- */
+  .chip {
+    display: inline-block;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 14px;
+    margin: 3px 2px;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
 
   /* --- Install block --- */
   .install {
@@ -269,36 +283,32 @@
   @media (max-width: 600px) {
     .features { grid-template-columns: 1fr; }
     .hero { padding: 48px 0 40px; }
-    .nav-links a:not(.gh-btn) { display: none; }
+    .hero h1 { font-size: 52px !important; }
+    .hero .sub-headline { font-size: 18px !important; }
+    .hero .task-list { font-size: 16px !important; }
     .diagram { font-size: 11px; padding: 20px 16px; }
   }
 </style>
 </head>
 <body>
 
-<nav>
-  <div class="container">
-    <a href="/" class="logo"><img src="/horizontal-dark.svg" alt="beecork" height="40"></a>
-    <div class="nav-links">
-      <a href="#features">Features</a>
-      <a href="#how">How it works</a>
-      <a href="https://github.com/beecork/beecork" target="_blank" rel="noopener" class="gh-btn">
-        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        Star
-      </a>
-    </div>
-  </div>
-</nav>
-
 <main>
   <div class="container">
 
     <!-- Hero -->
     <div class="hero">
-      <img src="/logo.svg" alt="beecork" style="height: 200px; margin-bottom: 32px; display: block; margin-left: auto; margin-right: auto;" />
-      <span class="hero-badge">open source</span>
-      <h1>Give Claude Code a phone number,<br>a memory, and an <span class="accent">alarm clock</span></h1>
-      <p class="hero-sub">Beecork makes Claude Code always-on. Reachable from Telegram and WhatsApp, schedulable via cron, with persistent memory and intelligent routing. Claude Code is the agent — Beecork is the smart pipe.</p>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 28px;">
+        <span class="hero-badge" style="margin-bottom: 0;">open source</span>
+        <a href="https://github.com/beecork/beecork" target="_blank" rel="noopener" class="gh-btn">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Star
+        </a>
+      </div>
+      <img src="/logo.svg" alt="beecork" style="height: 200px; margin-bottom: 48px; display: block; margin-left: auto; margin-right: auto;" />
+      <p style="font-size: 20px; color: var(--text-dim); letter-spacing: 2px; margin-bottom: 8px; font-weight: 700; text-transform: uppercase;">An always-on AI assistant powered by Claude Code</p>
+      <h1 style="font-size: clamp(56px, 10vw, 88px);">If a computer<br>can do it,<br>Beecork <span class="accent">does it<br>for you</span></h1>
+      <p class="sub-headline" style="font-size: 30px; color: var(--text); max-width: 720px; margin: 0 auto 32px; line-height: 1.4;">Other assistants need a plugin for every task.<br>Beecork has a full computer. It figures out the rest.</p>
+      <p class="task-list" style="font-size: 22px; color: var(--text-dim); max-width: 680px; margin: 0 auto 40px; line-height: 1.8;">Email, messages, calendar, reminders, notes, files, web research, summaries, translations, documents, trip planning, flight booking, appointments, price comparison, food orders, package tracking, image generation, code, apps, deployments, servers, databases, backups, monitoring, reports — all from Telegram or WhatsApp.</p>
 
       <div class="install">
         <div class="install-title">Quick install</div>
@@ -315,135 +325,99 @@
       </p>
     </div>
 
-    <!-- Features -->
+    <!-- Why Beecork -->
     <section id="features">
-      <div class="section-label">Features</div>
-      <h2>Everything Claude Code needs to run unsupervised</h2>
+      <div class="section-label">Why Beecork</div>
+      <h2>Not plugins. A full computer.</h2>
+      <p style="color: var(--text-dim); margin-bottom: 32px; font-size: 16px; max-width: 560px;">Other AI assistants can only do what their plugins allow. Beecork runs Claude Code — which has full access to your computer. If you can do it from a terminal, Beecork can do it for you.</p>
+      <div class="features">
+        <div class="feature">
+          <span class="feature-icon">&#128233;</span>
+          <h3>Manage your inbox</h3>
+          <p>Read, draft, and send emails. Summarize what's important. Set up auto-responses. Handle messages across platforms.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128197;</span>
+          <h3>Run on autopilot</h3>
+          <p>Set schedules once — daily reports, weekly cleanups, hourly checks. Beecork runs them and reports back.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128270;</span>
+          <h3>Research anything</h3>
+          <p>Fetch web pages, read documents, compare prices, analyze data. Long tasks run while you sleep.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128187;</span>
+          <h3>Build and deploy</h3>
+          <p>Write code, fix bugs, run tests, push to production. Full-stack development from your phone.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128274;</span>
+          <h3>Organize your life</h3>
+          <p>Manage files, book appointments, track orders, plan trips. The everyday tasks you never have time for.</p>
+        </div>
+        <div class="feature">
+          <span class="feature-icon">&#128421;</span>
+          <h3>Watch your systems</h3>
+          <p>Monitor servers, check uptime, read logs, restart crashed services. Get alerts before problems become outages.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it's different -->
+    <section>
+      <div class="section-label">Under the hood</div>
+      <h2>Smart, not just connected</h2>
+      <p style="color: var(--text-dim); margin-bottom: 32px; font-size: 16px; max-width: 560px;">Beecork doesn't just forward your messages. It understands what you want, routes to the right context, and makes sure the job gets done.</p>
       <div class="features">
         <div class="feature">
           <span class="feature-icon">&#129504;</span>
-          <h3>Intelligent routing</h3>
-          <p>Send a plain message — Beecork figures out which project it belongs to using its own memory and an AI routing layer. No commands needed.</p>
+          <h3>Understands your intent</h3>
+          <p>Send a plain message — Beecork figures out what you need and which project or context it belongs to. No commands required.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#127919;</span>
-          <h3>Goal tracking</h3>
-          <p>Beecork evaluates if Claude actually finished the task. If not, it sends follow-ups automatically until the job is done. Up to 5 retries.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#128172;</span>
-          <h3>Telegram &amp; WhatsApp</h3>
-          <p>Message Claude Code from your phone. Live streaming output, emoji reactions, typing indicators. Full bidirectional conversation.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#9200;</span>
-          <h3>Cron jobs</h3>
-          <p>Three schedule types: one-time, interval, or cron expression. Claude can create its own schedules. Missed fires detected and retried.</p>
+          <h3>Finishes the job</h3>
+          <p>Tracks whether the task was actually completed. If not, automatically follows up until it's done.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128218;</span>
-          <h3>Persistent memory</h3>
-          <p>The pipe owns its own memory — projects, preferences, decisions. Auto-extracts knowledge from every session. Injects context into future conversations.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#128196;</span>
-          <h3>Virtual tabs</h3>
-          <p>Each project gets its own session with separate history and working directory. Sessions persist across restarts via <code>--resume</code>.</p>
+          <h3>Remembers everything</h3>
+          <p>Your preferences, your projects, past decisions. Gets smarter with every conversation. Never asks the same question twice.</p>
         </div>
         <div class="feature">
           <span class="feature-icon">&#128737;</span>
-          <h3>Safety &amp; recovery</h3>
-          <p>3-tier loop detection (warn &rarr; notify &rarr; kill). Context window compaction at 90%. Auto-resume crashed sessions. Circuit breakers.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#9881;</span>
-          <h3>10 MCP tools</h3>
-          <p>Claude Code gets tools to remember facts, recall memories, schedule crons, create tabs, notify you mid-task, and check system status.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#128269;</span>
-          <h3>Project discovery</h3>
-          <p>Scans your filesystem for git repos during setup. Learns about new projects from conversations. Builds a map of your codebase.</p>
-        </div>
-        <div class="feature">
-          <span class="feature-icon">&#128230;</span>
-          <h3>Zero cloud dependency</h3>
-          <p>SQLite database, local storage, no accounts, no SaaS. Works on Mac and Linux. Uses your Claude Pro/Max subscription — zero API cost for tasks.</p>
+          <h3>Stays safe</h3>
+          <p>Loop detection, automatic recovery, circuit breakers. You stay in control even when it runs unattended at 3am.</p>
         </div>
       </div>
     </section>
 
-    <!-- How it works -->
+    <!-- Get started -->
     <section id="how">
-      <div class="section-label">How it works</div>
-      <h2>Three commands to always-on</h2>
+      <div class="section-label">Get started</div>
+      <h2>Up and running in 60 seconds</h2>
       <ol class="how-list">
         <li>
           <div>
-            <h3>npm install -g beecork</h3>
-            <p>Install the CLI globally. Requires Node.js 18+ and Claude Code CLI with a Pro or Max subscription.</p>
+            <h3>Install</h3>
+            <p><code style="font-family: var(--mono); color: var(--green);">npm install -g beecork</code> — requires Node.js 18+ and Claude Code CLI</p>
           </div>
         </li>
         <li>
           <div>
-            <h3>beecork setup</h3>
-            <p>Interactive wizard: connect Telegram bot, set Claude path, optionally add Anthropic API key for intelligent routing, scan filesystem for projects, install as background service.</p>
+            <h3>Set up</h3>
+            <p><code style="font-family: var(--mono); color: var(--green);">beecork setup</code> — connect Telegram or WhatsApp, pick your projects</p>
           </div>
         </li>
         <li>
           <div>
-            <h3>beecork start</h3>
-            <p>Launches the daemon via launchd (Mac) or systemd (Linux). Persists across reboots. Auto-recovers crashed sessions.</p>
+            <h3>Start</h3>
+            <p><code style="font-family: var(--mono); color: var(--green);">beecork start</code> — runs as a background service, survives reboots</p>
           </div>
         </li>
       </ol>
-
-      <div class="diagram">
-        <span class="highlight">You</span> &rarr; Telegram/WhatsApp &rarr; <span class="green">Pipe Brain</span> (routes &amp; tracks goals) &rarr; Claude Code &rarr; your codebase<br>
-        <span class="highlight">Cron</span> &rarr; <span class="green">Pipe Brain</span> &rarr; Claude Code &rarr; your codebase<br>
-        <br>
-        <span style="color: var(--text-dim);">Pipe Brain uses: memory (SQLite) &bull; project registry &bull; routing history &bull; Anthropic API (Haiku/Sonnet)</span>
-      </div>
-    </section>
-
-    <!-- CLI -->
-    <section id="cli">
-      <div class="section-label">CLI</div>
-      <h2>Full command reference</h2>
-      <div class="diagram" style="text-align: left;">
-        <span class="green">beecork setup</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;First-time configuration wizard<br>
-        <span class="green">beecork start</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Start the daemon<br>
-        <span class="green">beecork stop</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Stop the daemon<br>
-        <span class="green">beecork status</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Show tabs, cron jobs, daemon info<br>
-        <span class="green">beecork tabs</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;List all virtual tabs<br>
-        <span class="green">beecork logs [tab]</span>&nbsp;&nbsp;&nbsp;Tail daemon or tab logs<br>
-        <span class="green">beecork cron list</span>&nbsp;&nbsp;&nbsp;&nbsp;List scheduled jobs<br>
-        <span class="green">beecork cron delete</span>&nbsp;&nbsp;Remove a scheduled job<br>
-        <span class="green">beecork memory list</span>&nbsp;&nbsp;Show stored memories<br>
-        <span class="green">beecork send &lt;msg&gt;</span>&nbsp;&nbsp;&nbsp;Test: send to default tab<br>
-        <span class="green">beecork update</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Update to latest version<br>
-      </div>
-    </section>
-
-    <!-- Requirements -->
-    <section id="requirements">
-      <div class="section-label">Requirements</div>
-      <h2>What you need</h2>
-      <div class="features" style="grid-template-columns: 1fr 1fr 1fr;">
-        <div class="feature">
-          <h3>Node.js 18+</h3>
-          <p><a href="https://nodejs.org">nodejs.org</a></p>
-        </div>
-        <div class="feature">
-          <h3>Claude Code CLI</h3>
-          <p>Pro or Max subscription. <a href="https://claude.ai/code">claude.ai/code</a></p>
-        </div>
-        <div class="feature">
-          <h3>Telegram bot</h3>
-          <p>Free via <a href="https://t.me/BotFather">@BotFather</a> (30 seconds)</p>
-        </div>
-      </div>
-      <p style="margin-top: 16px; font-size: 13px; color: var(--text-dim);">Optional: Anthropic API key enables intelligent routing and goal tracking via Haiku/Sonnet.</p>
+      <p style="margin-top: 24px; font-size: 14px; color: var(--text-dim);">Works on Mac and Linux. Uses your Claude Pro/Max subscription — zero additional API cost for tasks. All data stays on your machine.</p>
     </section>
 
   </div>
