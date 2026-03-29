@@ -1,6 +1,4 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
@@ -16,19 +14,7 @@ let cronScheduler: CronScheduler;
 let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
 
-/** Migrate data from old ~/.clawd to ~/.beecork if needed */
-function migrateFromClawd(): void {
-  const oldHome = path.join(os.homedir(), '.clawd');
-  const newHome = getBeecorkHome();
-  if (fs.existsSync(oldHome) && !fs.existsSync(newHome)) {
-    // Copy old data to new location
-    fs.cpSync(oldHome, newHome, { recursive: true });
-    logger.info(`Migrated data directory from ${oldHome} to ${newHome}`);
-  }
-}
-
 async function main(): Promise<void> {
-  migrateFromClawd();
   ensureBeecorkDirs();
   logger.setLogFile('daemon.log');
 
