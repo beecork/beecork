@@ -2,6 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chunkText, formatTabStatus } from './formatter.js';
+import { parseTabMessage } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { getTabConfig, getAdminUserId, validateTabName } from '../config.js';
@@ -73,7 +74,7 @@ export class BeecorkTelegramBot {
         await this.handleMessage(chatId, text, msg.message_id);
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
-        await this.bot.sendMessage(chatId, `Error: ${err instanceof Error ? err.message : String(err)}`);
+        await this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.');
       }
     });
   }
@@ -223,13 +224,7 @@ export class BeecorkTelegramBot {
   }
 
   private parseMessage(text: string): { tabName: string; prompt: string } {
-    if (text.startsWith('/tab ')) {
-      const rest = text.slice(5);
-      const spaceIdx = rest.indexOf(' ');
-      if (spaceIdx === -1) return { tabName: rest, prompt: '' };
-      return { tabName: rest.slice(0, spaceIdx), prompt: rest.slice(spaceIdx + 1).trim() };
-    }
-    return { tabName: 'default', prompt: text };
+    return parseTabMessage(text);
   }
 
   async sendResponse(chatId: number, text: string, tabName?: string): Promise<void> {

@@ -52,16 +52,6 @@ export interface KnowledgeEntry {
   source: 'scan' | 'conversation' | 'user' | 'pipe';
 }
 
-export interface PipeConfig {
-  enabled: boolean;
-  anthropicApiKey: string;
-  routingModel: string;
-  complexModel: string;
-  confidenceThreshold: number;
-  projectScanPaths: string[];
-  maxFollowUps: number;
-}
-
 export interface ChatContext {
   chatId: number;
   userId: number;

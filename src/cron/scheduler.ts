@@ -4,8 +4,7 @@ import path from 'node:path';
 import { CronStore } from './store.js';
 import { getCronReloadSignalPath, getLogsDir } from '../util/paths.js';
 import { logger } from '../util/logger.js';
-import type { TabManager } from '../session/manager.js';
-import type { BeecorkTelegramBot } from '../telegram/bot.js';
+import type { TabManager, NotifyCallback } from '../session/manager.js';
 import type { CronJob } from '../types.js';
 
 interface Stoppable {
@@ -18,7 +17,7 @@ export class CronScheduler {
 
   constructor(
     private tabManager: TabManager,
-    private telegramBot: BeecorkTelegramBot | null,
+    private onNotify: NotifyCallback | null,
   ) {}
 
   /** Load all cron jobs from store and schedule them */
@@ -142,22 +141,26 @@ export class CronScheduler {
       // Log result
       fs.appendFileSync(logFile, `[${new Date().toISOString()}] SUCCESS: ${firstLine}\n`);
 
-      // Notify via Telegram
-      if (this.telegramBot) {
-        if (result.error) {
-          await this.telegramBot.sendNotification(`❌ [${job.name}] Failed — ${firstLine}`);
-        } else {
-          await this.telegramBot.sendNotification(`✅ [${job.name}] Done — ${firstLine}`);
+      // Notify (separate try/catch — notification failure shouldn't be reported as job failure)
+      try {
+        if (this.onNotify) {
+          if (result.error) {
+            await this.onNotify(`❌ [${job.name}] Failed — ${firstLine}`);
+          } else {
+            await this.onNotify(`✅ [${job.name}] Done — ${firstLine}`);
+          }
         }
+      } catch (notifyErr) {
+        logger.warn(`Cron job "${job.name}" notification failed:`, notifyErr);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error(`Cron job "${job.name}" failed:`, err);
       fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
 
-      if (this.telegramBot) {
-        await this.telegramBot.sendNotification(`❌ [${job.name}] Failed — ${errMsg}`);
-      }
+      try {
+        await this.onNotify?.(`❌ [${job.name}] Failed — ${errMsg}`);
+      } catch { /* notification best-effort */ }
     }
   }
 
@@ -165,8 +168,8 @@ export class CronScheduler {
     switch (job.message) {
       case 'health_check':
         logger.info('System event: health check — daemon alive');
-        if (this.telegramBot) {
-          await this.telegramBot.sendNotification('🟢 Beecork health check: all systems operational');
+        if (this.onNotify) {
+          await this.onNotify('🟢 Beecork health check: all systems operational');
         }
         break;
       case 'memory_compaction':

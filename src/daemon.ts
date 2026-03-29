@@ -10,9 +10,19 @@ import { logger } from './util/logger.js';
 
 let tabManager: TabManager;
 let telegramBot: BeecorkTelegramBot | null = null;
+let whatsappClient: { sendNotification(text: string): Promise<void>; stop(): void; start(): Promise<void> } | null = null;
 let cronScheduler: CronScheduler;
 let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
+let shutdownFn: (() => Promise<void>) | null = null;
+
+/** Broadcast notifications to all active channels */
+async function broadcastNotify(text: string): Promise<void> {
+  await Promise.all([
+    telegramBot?.sendNotification(text).catch(err => logger.warn('Telegram notify failed:', err)),
+    whatsappClient?.sendNotification(text).catch(err => logger.warn('WhatsApp notify failed:', err)),
+  ]);
+}
 
 async function main(): Promise<void> {
   ensureBeecorkDirs();
@@ -41,8 +51,16 @@ async function main(): Promise<void> {
   // 2. Initialize database
   getDb();
 
-  // 3. Write PID file
-  fs.writeFileSync(pidPath, String(process.pid));
+  // 3. Write PID file with exclusive lock to prevent race condition
+  try {
+    const fd = fs.openSync(pidPath, 'wx'); // Fails if file already exists (atomic create)
+    fs.writeSync(fd, String(process.pid));
+    fs.closeSync(fd);
+  } catch {
+    // File was just created by another instance between our check and write — fallback to overwrite
+    // (the PID check above should have caught live processes)
+    fs.writeFileSync(pidPath, String(process.pid));
+  }
   logger.info(`PID file written: ${process.pid}`);
 
   // 4. Create TabManager
@@ -65,11 +83,6 @@ async function main(): Promise<void> {
   if (config.telegram?.token) {
     try {
       telegramBot = new BeecorkTelegramBot(config, tabManager, pipeBrain);
-      // Wire up notifications
-      tabManager.setNotifyCallback((text) => telegramBot!.sendNotification(text));
-      if (pipeBrain) {
-        pipeBrain.setNotifyCallback((text) => telegramBot!.sendNotification(text));
-      }
     } catch (err) {
       logger.error('Failed to start Telegram bot:', err);
     }
@@ -81,7 +94,7 @@ async function main(): Promise<void> {
   if (config.whatsapp?.enabled) {
     try {
       const { BeecorkWhatsAppClient } = await import('./whatsapp/client.js');
-      const whatsappClient = new BeecorkWhatsAppClient(config, tabManager);
+      whatsappClient = new BeecorkWhatsAppClient(config, tabManager);
       await whatsappClient.start();
       logger.info('WhatsApp client started');
     } catch (err) {
@@ -89,8 +102,14 @@ async function main(): Promise<void> {
     }
   }
 
+  // Wire up broadcast notifications to all active channels
+  tabManager.setNotifyCallback(broadcastNotify);
+  if (pipeBrain) {
+    pipeBrain.setNotifyCallback(broadcastNotify);
+  }
+
   // 9. Start cron scheduler
-  cronScheduler = new CronScheduler(tabManager, telegramBot);
+  cronScheduler = new CronScheduler(tabManager, broadcastNotify);
   cronScheduler.loadAndSchedule();
 
   // 9. Start IPC polling
@@ -108,9 +127,7 @@ async function main(): Promise<void> {
     logger.info('Beecork daemon shutting down...');
 
     // Send shutdown notification before stopping
-    if (telegramBot) {
-      try { await telegramBot.sendNotification('🔴 Beecork stopping'); } catch { /* ok */ }
-    }
+    try { await broadcastNotify('🔴 Beecork stopping'); } catch { /* ok */ }
 
     clearInterval(pollInterval);
     tabManager.stopAll();
@@ -126,18 +143,32 @@ async function main(): Promise<void> {
     process.exit(0);
   };
 
+  shutdownFn = shutdown;
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
+  // Resilience: catch unhandled errors to prevent silent daemon death
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection:', reason);
+    // Log and continue — don't crash the daemon for a stray promise
+  });
+  process.on('uncaughtException', async (err) => {
+    logger.error('Uncaught exception — shutting down gracefully:', err);
+    if (shutdownFn) await shutdownFn();
+    process.exit(1);
+  });
+
   logger.info(`Beecork daemon ready (home: ${getBeecorkHome()})`);
 
-  // Send detailed startup notification
-  if (telegramBot) {
+  // Send detailed startup notification (non-critical — don't crash if it fails)
+  try {
     const tabs = tabManager.listTabs();
     const cronJobs = new (await import('./cron/store.js')).CronStore().list().filter(j => j.enabled);
-    await telegramBot.sendNotification(
+    await broadcastNotify(
       `🟢 Beecork started — ${cronJobs.length} cron job${cronJobs.length !== 1 ? 's' : ''}, ${tabs.length} tab${tabs.length !== 1 ? 's' : ''}`
     );
+  } catch (err) {
+    logger.warn('Failed to send startup notification:', err);
   }
 }
 
@@ -183,12 +214,10 @@ async function recoverCrashedTabs(): Promise<void> {
       logger.error(`Failed to recover tab ${row.name}:`, err);
     });
 
-    // Notify via Telegram
-    if (telegramBot) {
-      await telegramBot.sendNotification(
-        `Beecork restarted. Recovered tab "${row.name}" — session resumed.`
-      );
-    }
+    // Notify via all channels
+    await broadcastNotify(
+      `Beecork restarted. Recovered tab "${row.name}" — session resumed.`
+    ).catch(() => {});
   }
 }
 

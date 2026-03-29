@@ -4,7 +4,7 @@ import { ClaudeSubprocess, type SubprocessCallbacks } from './subprocess.js';
 import { CircuitBreaker, type CircuitBreakerAction } from './circuit-breaker.js';
 import { ContextMonitor, type ContextAction } from './context-monitor.js';
 import { getDb } from '../db/index.js';
-import { resolveWorkingDir } from '../config.js';
+import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
 import { extractMemories, getRelevantMemories } from '../memory/extractor.js';
 import type {
@@ -52,6 +52,7 @@ export interface SendResult {
 }
 
 const MAX_QUEUE_SIZE = 10;
+let pendingPollCount = 0;
 
 export type NotifyCallback = (text: string) => Promise<void>;
 
@@ -73,6 +74,12 @@ export class TabManager {
     const db = getDb();
     const existing = this.queryTab(db, tabName);
     if (existing) return existing;
+
+    // Validate tab name before creating (centralized for all channels + MCP)
+    if (tabName !== 'default') {
+      const validationError = validateTabName(tabName);
+      if (validationError) throw new Error(validationError);
+    }
 
     const tab: Tab = {
       id: uuidv4(),
@@ -159,6 +166,13 @@ export class TabManager {
   /** Process pending messages from MCP server IPC */
   processPendingMessages(): void {
     const db = getDb();
+
+    // Periodic cleanup: delete old processed messages every ~100 polls (~8 minutes at 5s interval)
+    pendingPollCount++;
+    if (pendingPollCount % 100 === 0) {
+      db.prepare("DELETE FROM pending_messages WHERE processed = 1 AND created_at < datetime('now', '-1 day')").run();
+    }
+
     const pending = db.prepare(
       'SELECT * FROM pending_messages WHERE processed = 0 ORDER BY created_at ASC'
     ).all() as Array<{ id: number; tab_name: string; message: string; type?: string }>;

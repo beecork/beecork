@@ -47,6 +47,15 @@ export async function extractMemories(
       db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(fact, tabName, 'auto');
     }
 
+    // Enforce maxLongTermEntries limit
+    const maxEntries = config.memory.maxLongTermEntries ?? 1000;
+    const count = (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
+    if (count > maxEntries) {
+      const excess = count - maxEntries;
+      db.prepare('DELETE FROM memories WHERE rowid IN (SELECT rowid FROM memories ORDER BY created_at ASC LIMIT ?)').run(excess);
+      logger.info(`[${tabName}] Evicted ${excess} oldest memories (limit: ${maxEntries})`);
+    }
+
     logger.info(`[${tabName}] Auto-extracted ${facts.length} memories`);
   } catch (err) {
     logger.error(`[${tabName}] Memory extraction failed:`, err);
@@ -69,6 +78,10 @@ export function getRelevantMemories(tabName: string): string[] {
 
 async function runExtractionSession(config: BeecorkConfig, prompt: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
+    let resolved = false;
+    const safeResolve = (val: string[]) => { if (!resolved) { resolved = true; resolve(val); } };
+    const safeReject = (err: Error) => { if (!resolved) { resolved = true; reject(err); } };
+
     const args = [
       '-p',
       '--output-format', 'stream-json',
@@ -99,28 +112,28 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
     });
 
     proc.on('exit', () => {
+      clearTimeout(timer);
       try {
-        // Try to parse the JSON array from the output
         const jsonMatch = output.match(/\[[\s\S]*?\]/);
         if (jsonMatch) {
           const facts = JSON.parse(jsonMatch[0]) as string[];
           if (Array.isArray(facts) && facts.every(f => typeof f === 'string')) {
-            resolve(facts.slice(0, 5)); // Max 5 facts
+            safeResolve(facts.slice(0, 5));
             return;
           }
         }
-        resolve([]);
+        safeResolve([]);
       } catch {
-        resolve([]);
+        safeResolve([]);
       }
     });
 
-    proc.on('error', reject);
+    proc.on('error', safeReject);
 
     // Timeout after 30s
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      resolve([]);
+      safeResolve([]);
     }, 30000);
   });
 }

@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/index.js';
-import type { Project, PermissionEntry, RoutingEntry, KnowledgeEntry } from './types.js';
+import type { Project, PermissionEntry, KnowledgeEntry } from './types.js';
 
 export class PipeMemoryStore {
   // ─── Projects ───

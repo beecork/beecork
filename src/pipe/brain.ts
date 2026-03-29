@@ -1,6 +1,7 @@
 import { PipeAnthropicClient } from './anthropic-client.js';
 import { PipeMemoryStore } from './memory-store.js';
 import { scanForProjects } from './project-scanner.js';
+import { parseTabMessage } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import type { TabManager, SendResult } from '../session/manager.js';
 import type { BeecorkConfig } from '../types.js';
@@ -73,12 +74,10 @@ export class PipeBrain {
   private async route(message: string, decisions: string[]): Promise<RouteDecision> {
     // Check for manual /tab override first
     if (message.startsWith('/tab ')) {
-      const rest = message.slice(5);
-      const spaceIdx = rest.indexOf(' ');
-      if (spaceIdx > 0) {
-        const tabName = rest.slice(0, spaceIdx);
-        decisions.push(`📌 Manual routing to "${tabName}"`);
-        return { tabName, projectPath: null, confidence: 1.0, reason: 'Manual override', needsConfirmation: false };
+      const parsed = parseTabMessage(message);
+      if (parsed.tabName !== 'default') {
+        decisions.push(`📌 Manual routing to "${parsed.tabName}"`);
+        return { tabName: parsed.tabName, projectPath: null, confidence: 1.0, reason: 'Manual override', needsConfirmation: false };
       }
     }
 

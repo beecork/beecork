@@ -100,17 +100,6 @@ export class ClaudeSubprocess {
     });
   }
 
-  /** Wait for the subprocess to finish. Returns the exit code. */
-  waitForExit(): Promise<number | null> {
-    return new Promise((resolve) => {
-      if (!this.proc) {
-        resolve(null);
-        return;
-      }
-      this.proc.on('exit', (code) => resolve(code));
-    });
-  }
-
   kill(): void {
     if (!this.proc) return;
     logger.info(`[${this.tabName}] Killing subprocess (PID: ${this.proc.pid})`);

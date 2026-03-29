@@ -6,6 +6,7 @@ import { CronStore } from '../cron/store.js';
 import { getDaemonPid, timeAgo } from './helpers.js';
 import { startService, stopService } from '../service/install.js';
 import { getPidPath, getLogsDir } from '../util/paths.js';
+import { VERSION } from '../version.js';
 import type { Memory } from '../types.js';
 
 // Map snake_case DB rows to display format
@@ -48,9 +49,15 @@ export async function stopDaemon(): Promise<void> {
     stopService();
   } catch {
     // Fallback: kill by PID
-    process.kill(pid, 'SIGTERM');
-    const pidPath = getPidPath();
-    if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
+    try {
+      process.kill(pid, 'SIGTERM');
+      const pidPath = getPidPath();
+      if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
+    } catch (killErr) {
+      const msg = killErr instanceof Error ? killErr.message : String(killErr);
+      console.error(`Failed to stop daemon (PID ${pid}): ${msg}`);
+      return;
+    }
   }
 
   console.log('Beecork daemon stopped.');
@@ -60,7 +67,7 @@ export async function showStatus(): Promise<void> {
   const pid = getDaemonPid();
   const config = getConfig();
 
-  console.log(`\nBeecork v0.1.0`);
+  console.log(`\nBeecork v${VERSION}`);
   console.log(`Daemon: ${pid ? `running (PID ${pid})` : 'stopped'}`);
   console.log(`Deployment: ${config.deployment}`);
 
@@ -190,7 +197,7 @@ export async function updateBeecork(options: { check?: boolean }): Promise<void>
   if (options.check) {
     try {
       const latest = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
-      const current = '0.1.0'; // TODO: read from package.json
+      const current = VERSION;
       if (latest === current) {
         console.log(`Already up to date (v${current})`);
       } else {

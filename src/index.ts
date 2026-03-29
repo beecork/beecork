@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { VERSION } from './version.js';
 import { setupWizard } from './cli/setup.js';
 import {
   startDaemon,
@@ -19,7 +20,7 @@ const program = new Command();
 
 program
   .name('beecork')
-  .version('0.1.0')
+  .version(VERSION)
   .description('Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock');
 
 program

@@ -104,7 +104,7 @@ Return [] if nothing new is worth remembering. Max 5 entries.`,
         max_tokens: 500,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
-      });
+      }, { timeout: 30000 });
 
       const textBlock = response.content.find(b => b.type === 'text');
       return textBlock?.text ?? '';

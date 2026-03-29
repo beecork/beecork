@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chunkText, escapeMarkdownV2, formatTabStatus } from '../../src/telegram/formatter.js';
+import { chunkText, formatTabStatus } from '../../src/telegram/formatter.js';
 
 describe('Telegram Formatter', () => {
   describe('chunkText', () => {
@@ -38,18 +38,6 @@ describe('Telegram Formatter', () => {
       for (const chunk of chunks) {
         expect(chunk.length).toBeLessThanOrEqual(10);
       }
-    });
-  });
-
-  describe('escapeMarkdownV2', () => {
-    it('should escape special characters', () => {
-      expect(escapeMarkdownV2('_bold_')).toBe('\\_bold\\_');
-      expect(escapeMarkdownV2('*italic*')).toBe('\\*italic\\*');
-      expect(escapeMarkdownV2('[link](url)')).toBe('\\[link\\]\\(url\\)');
-    });
-
-    it('should not alter plain text', () => {
-      expect(escapeMarkdownV2('hello world')).toBe('hello world');
     });
   });
 

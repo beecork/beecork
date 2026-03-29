@@ -173,19 +173,6 @@ export interface CircuitBreakerConfig {
   windowSize: number;
 }
 
-// ─── Channel Plugin Interface ───
-
-export interface Channel {
-  sendNotification(text: string): Promise<void>;
-  sendResponse(chatId: number | string, text: string, tabName?: string): Promise<void>;
-  stop(): void;
-}
-
-// ─── Approval (skeleton for Phase 2) ───
-
-export interface ApprovalRequest {
-  tabName: string;
-  toolName: string;
-  toolArgs: Record<string, unknown>;
-  description: string;
-}
+// Note: Channel interface and ApprovalRequest are defined in their respective modules:
+// - ApprovalRequest: src/session/approval.ts (includes ToolRisk field)
+// - Channel abstraction: handled via NotifyCallback in src/session/manager.ts

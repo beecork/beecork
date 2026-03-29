@@ -52,20 +52,24 @@ export function getConfig(): BeecorkConfig {
     return { ...DEFAULT_CONFIG };
   }
 
-  const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  cachedConfig = mergeWithDefaults(raw);
-  return cachedConfig;
+  try {
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    cachedConfig = mergeWithDefaults(raw);
+    return cachedConfig;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Log to stderr since logger may not be initialized yet
+    console.error(`Warning: Failed to parse config file ${configPath}: ${msg} — using defaults`);
+    return { ...DEFAULT_CONFIG };
+  }
 }
 
 export function saveConfig(config: BeecorkConfig): void {
   const configPath = getConfigPath();
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  fs.chmodSync(configPath, 0o600); // Owner-only read/write — contains API keys
   cachedConfig = config;
-}
-
-export function clearConfigCache(): void {
-  cachedConfig = null;
 }
 
 export function getTabConfig(tabName: string): TabConfig {
