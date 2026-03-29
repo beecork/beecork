@@ -219,6 +219,7 @@ export class TabManager {
       let resultText = '';
       let resultEvent: StreamResult | null = null;
       let loopWarningPending = false;
+      let checkpointTriggered = false;
 
       const callbacks: SubprocessCallbacks = {
         onEvent: (event: StreamEvent) => {
@@ -240,7 +241,7 @@ export class TabManager {
                 // Will inject warning on next message
                 logger.info(`[${tab.name}] Context window warning — will summarize on next turn`);
               } else if (contextAction === 'checkpoint') {
-                // Need to checkpoint — handled after subprocess exits
+                checkpointTriggered = true;
                 logger.warn(`[${tab.name}] Context window checkpoint triggered`);
               }
             }
@@ -311,6 +312,33 @@ export class TabManager {
           // Update tab
           db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
             .run('idle', new Date().toISOString(), tab.name);
+
+          // Context window compaction: if checkpoint was triggered, restart with summary
+          if (checkpointTriggered && !result.error && result.text) {
+            logger.info(`[${tab.name}] Compacting context — requesting summary then restarting session`);
+            this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`);
+
+            // Ask Claude for a structured summary
+            const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
+            this.sendMessage(tab.name, summaryPrompt).then(summaryResult => {
+              // Store summary as checkpoint memory
+              db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)')
+                .run(`[checkpoint] ${summaryResult.text}`, tab.name, 'auto');
+
+              // Reset session: new session ID so next message starts fresh with summary context
+              const newSessionId = uuidv4();
+              db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(newSessionId, tab.id);
+              logger.info(`[${tab.name}] Context compacted — new session ${newSessionId.slice(0, 8)}...`);
+
+              // Continue with original goal using the summary as context
+              const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
+              this.sendMessage(tab.name, continuationPrompt, { onTextChunk }).then(resolve).catch(reject);
+            }).catch(err => {
+              logger.error(`[${tab.name}] Compaction failed:`, err);
+              resolve(result); // Fall back to returning the original result
+            });
+            return; // Don't resolve yet — compaction flow will resolve
+          }
 
           resolve(result);
 

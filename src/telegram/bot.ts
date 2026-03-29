@@ -157,10 +157,50 @@ export class BeecorkTelegramBot {
           await this.bot.sendMessage(chatId, decisionText);
         }
       } else {
-        // Dumb pipe — direct routing
-        const result = await this.tabManager.sendMessage(tabName, prompt);
+        // Dumb pipe — direct routing with streaming
+        let streamMsgId: number | null = null;
+        let streamBuffer = '';
+        let lastEditTime = 0;
+
+        const onTextChunk = async (chunk: string) => {
+          streamBuffer += chunk;
+          const now = Date.now();
+          if (streamBuffer.length < 100 || now - lastEditTime < 1000) return;
+          lastEditTime = now;
+          try {
+            const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
+            const preview = prefix + streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
+            if (!streamMsgId) {
+              const sent = await this.bot.sendMessage(chatId, preview);
+              streamMsgId = sent.message_id;
+            } else {
+              await this.bot.editMessageText(preview, { chat_id: chatId, message_id: streamMsgId });
+            }
+          } catch { /* edit failures are non-critical */ }
+        };
+
+        const result = await this.tabManager.sendMessage(tabName, prompt, { onTextChunk });
         responseText = result.text || '(empty response)';
         responseError = result.error;
+
+        // If we streamed, do a final edit instead of sending a new message
+        if (streamMsgId && !responseError) {
+          clearInterval(typingInterval);
+          clearTimeout(stillWorkingTimeout);
+          await this.setReaction(chatId, messageId, '✅');
+          try {
+            const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
+            const finalText = prefix + responseText;
+            if (finalText.length <= 4096) {
+              await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
+            } else {
+              await this.sendResponse(chatId, responseText, tabName);
+            }
+          } catch {
+            await this.sendResponse(chatId, responseText, tabName);
+          }
+          return; // DONE — don't fall through to sendResponse below
+        }
       }
 
       clearInterval(typingInterval);

@@ -55,7 +55,19 @@ export async function setupWizard(): Promise<void> {
     // 4. Default working directory
     const defaultDir = await ask(rl, 'Default working directory', os.homedir());
 
-    // 5. Install as service?
+    // 5. Anthropic API key (optional - enables intelligent pipe)
+    console.log('\n  Intelligent routing (optional): Beecork can route messages to the right');
+    console.log('  project automatically and track goal completion. Requires an Anthropic API key.');
+    const apiKey = await ask(rl, 'Anthropic API key (press Enter to skip)');
+
+    // 6. Project scan paths
+    let scanPaths = ['~/Coding', '~/Projects', '~/code', '~/dev'];
+    if (apiKey) {
+      const scanInput = await ask(rl, 'Project scan paths (comma-separated)', scanPaths.join(', '));
+      scanPaths = scanInput.split(',').map(s => s.trim()).filter(Boolean);
+    }
+
+    // 7. Install as service?
     const installServiceAnswer = await ask(rl, 'Install as background service? (y/n)', 'y');
     const shouldInstallService = installServiceAnswer.toLowerCase() === 'y';
 
@@ -75,13 +87,22 @@ export async function setupWizard(): Promise<void> {
           workingDir: defaultDir,
           approvalMode: 'yolo',
           approvalTimeoutMinutes: 30,
-          debounceMs: 3000,
+          debounceMs: 1500,
         },
       },
       memory: {
         enabled: true,
         dbPath: '~/.beecork/memory.db',
         maxLongTermEntries: 1000,
+      },
+      pipe: {
+        enabled: !!apiKey,
+        anthropicApiKey: apiKey,
+        routingModel: 'claude-haiku-4-5-20251001',
+        complexModel: 'claude-sonnet-4-6-20250514',
+        confidenceThreshold: 0.75,
+        projectScanPaths: scanPaths,
+        maxFollowUps: 5,
       },
       deployment: 'local',
     };
@@ -103,6 +124,17 @@ export async function setupWizard(): Promise<void> {
     // Inject Beecork instructions into global CLAUDE.md
     injectClaudeMd();
     console.log('✓ Beecork tools injected into ~/.claude/CLAUDE.md');
+
+    // Scan for projects if pipe is enabled
+    if (config.pipe.enabled) {
+      const { scanForProjects } = await import('../pipe/project-scanner.js');
+      const { PipeMemoryStore } = await import('../pipe/memory-store.js');
+      const projects = scanForProjects(config.pipe.projectScanPaths);
+      const store = new PipeMemoryStore();
+      for (const p of projects) { store.upsertProject(p); }
+      console.log(`✓ Discovered ${projects.length} projects`);
+      closeDb();
+    }
 
     // Install service
     if (shouldInstallService) {
