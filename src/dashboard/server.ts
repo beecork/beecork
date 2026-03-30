@@ -7,14 +7,17 @@ import { getDashboardHtml } from './html.js';
 import { VERSION } from '../version.js';
 import { getDaemonPid } from '../cli/helpers.js';
 
-function getDb(): Database.Database {
-  const db = new Database(getDbPath(), { readonly: true });
-  db.pragma('journal_mode = WAL');
-  return db;
+let cachedDashDb: Database.Database | null = null;
+function getDashDb(): Database.Database {
+  if (!cachedDashDb) {
+    cachedDashDb = new Database(getDbPath(), { readonly: true });
+    cachedDashDb.pragma('journal_mode = WAL');
+  }
+  return cachedDashDb;
 }
 
 function json(res: http.ServerResponse, data: unknown, status = 200): void {
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 
@@ -36,9 +39,8 @@ export function startDashboardServer(port = 0): void {
     }
 
     // API routes
-    let db: Database.Database | null = null;
     try {
-      db = getDb();
+      const db = getDashDb();
 
       if (path === '/api/status') {
         const pid = getDaemonPid();
@@ -124,8 +126,6 @@ export function startDashboardServer(port = 0): void {
       json(res, { error: 'Not found' }, 404);
     } catch (err) {
       json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
-    } finally {
-      db?.close();
     }
   });
 

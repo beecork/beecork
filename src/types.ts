@@ -20,10 +20,10 @@ export interface MemoryConfig {
 
 export interface TabConfig {
   workingDir: string;
+  /** Reserved for future use. Currently has no effect — all sessions run in 'yolo' mode. */
   approvalMode: ApprovalMode;
+  /** Reserved for future use. Currently has no effect. */
   approvalTimeoutMinutes: number;
-  debounceMs: number; // Default 3000ms
-  systemPrompt?: string;
 }
 
 export type ApprovalMode = 'yolo' | 'ask' | 'auto-safe';
@@ -173,6 +173,4 @@ export interface CircuitBreakerConfig {
   windowSize: number;
 }
 
-// Note: Channel interface and ApprovalRequest are defined in their respective modules:
-// - ApprovalRequest: src/session/approval.ts (includes ToolRisk field)
-// - Channel abstraction: handled via NotifyCallback in src/session/manager.ts
+// Note: Channel interface is handled via NotifyCallback in src/session/manager.ts

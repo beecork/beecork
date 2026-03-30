@@ -87,7 +87,6 @@ export async function setupWizard(): Promise<void> {
           workingDir: defaultDir,
           approvalMode: 'yolo',
           approvalTimeoutMinutes: 30,
-          debounceMs: 1500,
         },
       },
       memory: {

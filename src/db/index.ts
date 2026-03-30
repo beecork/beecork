@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_unprocessed ON pending_messages(processed
 `;
 
 let db: Database.Database | null = null;
+let walInterval: NodeJS.Timeout | null = null;
 
 export function getDb(): Database.Database {
   if (db) return db;
@@ -60,10 +61,21 @@ export function getDb(): Database.Database {
   db.exec(SCHEMA);
   runMigrations(db);
 
+  // Periodic WAL checkpointing + table cleanup
+  walInterval = setInterval(() => {
+    try {
+      db?.pragma('wal_checkpoint(PASSIVE)');
+      // Prune old routing/permission history (keep last 1000 entries)
+      db?.exec('DELETE FROM routing_history WHERE id NOT IN (SELECT id FROM routing_history ORDER BY created_at DESC LIMIT 1000)');
+      db?.exec('DELETE FROM permission_history WHERE id NOT IN (SELECT id FROM permission_history ORDER BY created_at DESC LIMIT 1000)');
+    } catch {}
+  }, 30 * 60 * 1000); // every 30 minutes
+
   return db;
 }
 
 export function closeDb(): void {
+  if (walInterval) { clearInterval(walInterval); walInterval = null; }
   if (db) {
     db.close();
     db = null;

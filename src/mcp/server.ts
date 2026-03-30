@@ -251,7 +251,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text' as const, text: `Tab "${tabName}" already exists.` }] };
         }
         const id = uuidv4();
-        const dir = workingDir || os.homedir();
+        let dir = workingDir || os.homedir();
+        dir = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir;
+        dir = path.resolve(dir);
+        if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+          return { content: [{ type: 'text' as const, text: `Working directory does not exist or is not a directory: ${dir}` }], isError: true };
+        }
         db.prepare(
           'INSERT INTO tabs (id, name, session_id, status, working_dir) VALUES (?, ?, ?, ?, ?)'
         ).run(id, tabName, uuidv4(), 'idle', dir);

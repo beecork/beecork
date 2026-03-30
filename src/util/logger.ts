@@ -15,6 +15,7 @@ class Logger {
   private minLevel: LogLevel = 'info';
   private logFile: string | null = null;
   private stream: fs.WriteStream | null = null;
+  private writeCount = 0;
 
   setLevel(level: LogLevel): void {
     this.minLevel = level;
@@ -38,6 +39,7 @@ class Logger {
 
     if (this.stream) {
       this.stream.write(line + '\n');
+      this.checkRotation();
     }
 
     if (level === 'error') {
@@ -53,6 +55,23 @@ class Logger {
   info(msg: string, ...args: unknown[]): void { this.write('info', msg, ...args); }
   warn(msg: string, ...args: unknown[]): void { this.write('warn', msg, ...args); }
   error(msg: string, ...args: unknown[]): void { this.write('error', msg, ...args); }
+
+  private checkRotation(): void {
+    if (!this.logFile || !this.stream) return;
+    this.writeCount++;
+    if (this.writeCount < 100) return;
+    this.writeCount = 0;
+    try {
+      const stats = fs.statSync(this.logFile);
+      if (stats.size > 10 * 1024 * 1024) {
+        this.stream.end();
+        const rotated = this.logFile + '.1';
+        try { fs.unlinkSync(rotated); } catch {}
+        fs.renameSync(this.logFile, rotated);
+        this.stream = fs.createWriteStream(this.logFile, { flags: 'a' });
+      }
+    } catch {}
+  }
 
   close(): void {
     if (this.stream) {

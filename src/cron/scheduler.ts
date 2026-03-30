@@ -86,12 +86,23 @@ export class CronScheduler {
 
       case 'every': {
         const cronExpr = intervalToCron(job.schedule);
-        if (!cronExpr || !cron.validate(cronExpr)) {
-          logger.error(`Cron: invalid interval for "${job.name}": ${job.schedule}`);
-          return;
+        if (cronExpr) {
+          if (!cron.validate(cronExpr)) {
+            logger.error(`Cron: invalid cron expression for "${job.name}": ${cronExpr}`);
+            return;
+          }
+          const task = cron.schedule(cronExpr, () => this.fireJob(job));
+          this.scheduledJobs.set(job.id, task);
+        } else {
+          // Use setInterval for non-cron-expressible intervals
+          const totalMs = intervalToMs(job.schedule);
+          if (totalMs) {
+            const timer = setInterval(() => this.fireJob(job), totalMs);
+            this.scheduledJobs.set(job.id, { stop: () => clearInterval(timer) });
+          } else {
+            logger.error(`Cron: invalid interval for "${job.name}": ${job.schedule}`);
+          }
         }
-        const task = cron.schedule(cronExpr, () => this.fireJob(job));
-        this.scheduledJobs.set(job.id, task);
         break;
       }
 
@@ -181,6 +192,20 @@ export class CronScheduler {
   }
 }
 
+/** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to milliseconds */
+export function intervalToMs(interval: string): number | null {
+  const match = interval.match(/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/);
+  if (!match || match.slice(1).every(g => g === undefined)) return null;
+
+  const weeks = parseInt(match[1] || '0', 10);
+  const days = parseInt(match[2] || '0', 10);
+  const hours = parseInt(match[3] || '0', 10);
+  const mins = parseInt(match[4] || '0', 10);
+
+  const totalMs = ((weeks * 7 * 24 * 60) + (days * 24 * 60) + (hours * 60) + mins) * 60 * 1000;
+  return totalMs > 0 ? totalMs : null;
+}
+
 /** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to cron expression */
 export function intervalToCron(interval: string): string | null {
   // Try combined format: 1h30m, 2h, 30m, 1d, 2w
@@ -205,9 +230,6 @@ export function intervalToCron(interval: string): string | null {
   // Weekly intervals
   if (mins === 0 && hours === 0 && days === 0 && weeks > 0) return `0 0 * * 0`;
 
-  // Combined intervals (e.g., 1h30m = every 90 minutes)
-  if (totalMins <= 1440) return `*/${totalMins} * * * *`; // up to 24h as minutes
-
-  // Fallback for very large intervals: daily
-  return `0 0 */${Math.ceil(totalMins / 1440)} * *`;
+  // Combined or large intervals — return null, handled by setInterval in scheduleJob
+  return null;
 }

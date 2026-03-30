@@ -34,7 +34,7 @@ export class BeecorkTelegramBot {
     });
     // Drop pending updates from old sessions, then start polling
     this.bot.sendMessage = this.bot.sendMessage.bind(this.bot);
-    fetch(`https://api.telegram.org/bot${config.telegram.token}/deleteWebhook?drop_pending_updates=true`)
+    fetch(`https://api.telegram.org/bot${config.telegram.token}/deleteWebhook?drop_pending_updates=true`, { signal: AbortSignal.timeout(10000) })
       .then(() => {
         this.bot.startPolling();
         this.setupHandlers();
@@ -322,6 +322,7 @@ export class BeecorkTelegramBot {
           message_id: messageId,
           reaction: [{ type: 'emoji', emoji }],
         }),
+        signal: AbortSignal.timeout(5000),
       });
     } catch {
       // Reactions not supported or failed — non-critical

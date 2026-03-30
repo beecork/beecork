@@ -35,16 +35,6 @@ export interface PermissionEntry {
   createdAt: string;
 }
 
-export interface RoutingEntry {
-  id: number;
-  messagePreview: string;
-  tabName: string;
-  projectPath: string | null;
-  confidence: number;
-  wasCorrect: boolean | null;
-  createdAt: string;
-}
-
 export interface KnowledgeEntry {
   content: string;
   category: 'project' | 'preference' | 'decision' | 'fact';

@@ -86,7 +86,7 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
       '-p',
       '--output-format', 'stream-json',
       '--verbose',
-      '--dangerously-skip-permissions',
+      ...config.claudeCode.defaultFlags,
       '--no-session-persistence',
       prompt,
     ];

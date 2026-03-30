@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { chunkTextWA } from './formatter.js';
@@ -32,6 +33,7 @@ export class BeecorkWhatsAppClient {
       // Dynamic import since baileys might not be installed
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import('@whiskeysockets/baileys');
       const sessionPath = this.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
+      fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
 
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 

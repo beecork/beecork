@@ -8,7 +8,6 @@ const DEFAULT_TAB_CONFIG: TabConfig = {
   workingDir: os.homedir(),
   approvalMode: 'yolo',
   approvalTimeoutMinutes: 30,
-  debounceMs: 1500,
 };
 
 const DEFAULT_PIPE_CONFIG: BeecorkConfig['pipe'] = {
@@ -21,11 +20,21 @@ const DEFAULT_PIPE_CONFIG: BeecorkConfig['pipe'] = {
   maxFollowUps: 5,
 };
 
+/**
+ * INTENTIONAL: Beecork is designed for unattended AI agent operation.
+ * 'yolo' mode allows all tool calls without user approval.
+ * Users can override to 'auto-safe' or 'manual' in ~/.beecork/config.json.
+ */
 const DEFAULT_CONFIG: BeecorkConfig = {
   telegram: {
     token: '',
     allowedUserIds: [],
   },
+  /**
+   * INTENTIONAL: --dangerously-skip-permissions is required for unattended operation.
+   * Without it, Claude Code would block on every tool call waiting for user input.
+   * Users can override defaultFlags in ~/.beecork/config.json.
+   */
   claudeCode: {
     bin: 'claude',
     defaultFlags: ['--dangerously-skip-permissions'],

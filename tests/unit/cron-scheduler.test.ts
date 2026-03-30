@@ -22,9 +22,9 @@ describe('intervalToCron', () => {
     expect(intervalToCron('1w')).toBe('0 0 * * 0');
   });
 
-  it('should convert combined intervals', () => {
-    const result = intervalToCron('1h30m');
-    expect(result).toBe('*/90 * * * *');
+  it('should return null for combined intervals (handled by setInterval)', () => {
+    expect(intervalToCron('1h30m')).toBeNull();
+    expect(intervalToCron('2h15m')).toBeNull();
   });
 
   it('should return null for invalid input', () => {

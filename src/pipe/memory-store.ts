@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/index.js';
-import type { Project, PermissionEntry, KnowledgeEntry } from './types.js';
+import type { Project, KnowledgeEntry } from './types.js';
 
 export class PipeMemoryStore {
   // ─── Projects ───
@@ -32,44 +32,9 @@ export class PipeMemoryStore {
       JSON.stringify(project.languages), project.lastUsed, project.tabName, project.discoveredVia);
   }
 
-  findProjectByName(name: string): Project | undefined {
-    const projects = this.getProjects();
-    return projects.find(p => p.name.toLowerCase() === name.toLowerCase());
-  }
-
   updateProjectLastUsed(path: string): void {
     const db = getDb();
     db.prepare('UPDATE projects SET last_used = datetime("now") WHERE path = ?').run(path);
-  }
-
-  // ─── Preferences ───
-
-  getPreference(key: string): string | null {
-    const db = getDb();
-    const row = db.prepare('SELECT value FROM preferences WHERE key = ?').get(key) as { value: string } | undefined;
-    return row?.value ?? null;
-  }
-
-  setPreference(key: string, value: string): void {
-    const db = getDb();
-    db.prepare('INSERT INTO preferences (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime("now")')
-      .run(key, value);
-  }
-
-  // ─── Permission History ───
-
-  getPermissionHistory(toolName: string, limit: number = 10): PermissionEntry[] {
-    const db = getDb();
-    return db.prepare(
-      'SELECT * FROM permission_history WHERE tool_name = ? ORDER BY created_at DESC LIMIT ?'
-    ).all(toolName, limit) as PermissionEntry[];
-  }
-
-  recordPermission(toolName: string, argsPattern: string, decision: 'allow' | 'deny', confidence: number, context: string | null, tabName: string | null): void {
-    const db = getDb();
-    db.prepare(
-      'INSERT INTO permission_history (tool_name, tool_args_pattern, decision, confidence, context, tab_name) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(toolName, argsPattern, decision, confidence, context, tabName);
   }
 
   // ─── Routing History ───
