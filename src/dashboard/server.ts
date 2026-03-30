@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { exec } from 'node:child_process';
 import { platform } from 'node:os';
 import Database from 'better-sqlite3';
@@ -27,15 +28,36 @@ function openBrowser(url: string): void {
 }
 
 export function startDashboardServer(port = 0): void {
+  // Generate auth token at server start
+  const authToken = crypto.randomBytes(24).toString('base64url');
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://localhost`);
     const path = url.pathname;
 
     // Serve HTML
     if (path === '/' || path === '/index.html') {
+      const token = url.searchParams.get('token');
+      if (!token) {
+        // Redirect to add token
+        res.writeHead(302, { Location: `/?token=${authToken}` });
+        res.end();
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(getDashboardHtml());
+      res.end(getDashboardHtml(authToken));
       return;
+    }
+
+    // Auth check for API routes
+    if (path.startsWith('/api/')) {
+      const authHeader = req.headers.authorization;
+      const queryToken = url.searchParams.get('token');
+      const providedToken = authHeader?.replace('Bearer ', '') || queryToken;
+      if (providedToken !== authToken) {
+        json(res, { error: 'Unauthorized' }, 401);
+        return;
+      }
     }
 
     // API routes
@@ -132,7 +154,7 @@ export function startDashboardServer(port = 0): void {
   server.listen(port, '127.0.0.1', () => {
     const addr = server.address();
     if (addr && typeof addr === 'object') {
-      const url = `http://localhost:${addr.port}`;
+      const url = `http://localhost:${addr.port}?token=${authToken}`;
       console.log(`\nBeecork Dashboard: ${url}\n`);
       console.log('Press Ctrl+C to stop.\n');
       openBrowser(url);

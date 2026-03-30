@@ -197,6 +197,26 @@ export class TabManager {
   private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean): Promise<SendResult> {
     const db = getDb();
 
+    // Budget check before spawning
+    if (this.config.claudeCode.maxBudgetUsd) {
+      const tabSpend = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE tab_id = ?').get(tab.id) as { total: number }).total;
+      if (tabSpend >= this.config.claudeCode.maxBudgetUsd) {
+        const msg = `Budget limit reached for tab "${tab.name}": $${tabSpend.toFixed(2)} / $${this.config.claudeCode.maxBudgetUsd.toFixed(2)}`;
+        this.onNotify?.(msg).catch(() => {});
+        return { text: msg, costUsd: 0, durationMs: 0, sessionId: tab.sessionId, error: true };
+      }
+      // Warn at 80%
+      if (tabSpend >= this.config.claudeCode.maxBudgetUsd * 0.8) {
+        this.onNotify?.(`⚠️ Budget warning: tab "${tab.name}" at $${tabSpend.toFixed(2)} / $${this.config.claudeCode.maxBudgetUsd.toFixed(2)} (80%)`).catch(() => {});
+      }
+    }
+
+    // Log approval mode (full interactive approval coming in a future release)
+    const tabConfig = this.config.tabs[tab.name] || this.config.tabs['default'];
+    if (tabConfig?.approvalMode && tabConfig.approvalMode !== 'yolo') {
+      logger.warn(`Tab "${tab.name}" has approvalMode="${tabConfig.approvalMode}" — interactive approval not yet implemented, running in yolo mode`);
+    }
+
     // Inject relevant memories into the prompt
     const memories = getRelevantMemories(tab.name);
     let enrichedPrompt = prompt;

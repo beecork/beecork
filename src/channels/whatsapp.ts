@@ -3,6 +3,7 @@ import { logger } from '../util/logger.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { chunkText, parseTabMessage } from '../util/text.js';
+import { inboundLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
@@ -77,6 +78,12 @@ export class WhatsAppChannel implements Channel {
 
         const sender = msg.key.remoteJid;
         if (!sender || !this.isAllowed(sender)) return;
+
+        // Rate limit check
+        if (!inboundLimiter.check(this.id)) {
+          await sock.sendMessage(sender, { text: "I'm receiving too many messages right now. Please wait a moment." }).catch(() => {});
+          return;
+        }
 
         const text = msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||

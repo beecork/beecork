@@ -1,4 +1,4 @@
-export function getDashboardHtml(): string {
+export function getDashboardHtml(token: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -125,13 +125,15 @@ export function getDashboardHtml(): string {
   </main>
 
 <script>
+  const API_TOKEN = '${token}';
+
   // State
   let selectedTab = null;
   let memorySearchTimer = null;
 
   // API helper
   async function api(path) {
-    const res = await fetch(path);
+    const res = await fetch(path, { headers: { 'Authorization': 'Bearer ' + API_TOKEN } });
     return res.json();
   }
 

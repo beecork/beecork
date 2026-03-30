@@ -98,6 +98,12 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_routing_tab ON routing_history(tab_name, created_at);
     `,
   },
+  {
+    version: 7,
+    description: 'Add delivery tracking columns to messages',
+    up: `ALTER TABLE messages ADD COLUMN delivery_status TEXT DEFAULT 'sent';
+         ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0;`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

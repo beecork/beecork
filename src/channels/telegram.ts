@@ -7,6 +7,7 @@ import { retryWithBackoff } from '../util/retry.js';
 import { getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
+import { inboundLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 /** Format tab status for Telegram display */
@@ -109,6 +110,12 @@ export class TelegramChannel implements Channel {
       if (!this.isAllowed(msg.from?.id)) return;
 
       const chatId = msg.chat.id;
+
+      // Rate limit check
+      if (!inboundLimiter.check(this.id)) {
+        await this.bot.sendMessage(chatId, "I'm receiving too many messages right now. Please wait a moment.");
+        return;
+      }
       if (msg.chat.type === 'private') {
         this.activeChatIds.add(chatId);
       }

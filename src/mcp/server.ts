@@ -185,6 +185,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'List active channels and their capabilities',
       inputSchema: { type: 'object' as const, properties: {} },
     },
+    {
+      name: 'beecork_cost',
+      description: 'Show cost tracking: spend per tab, today, and rolling 30 days',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          tabName: { type: 'string', description: 'Optional: show cost for a specific tab only' },
+        },
+      },
+    },
+    {
+      name: 'beecork_failed_deliveries',
+      description: 'Show messages that failed to deliver after retries',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
   ],
 }));
 
@@ -378,6 +393,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],
         };
+      }
+
+      case 'beecork_cost': {
+        const { tabName } = (args || {}) as { tabName?: string };
+
+        // Per-tab costs
+        let tabCosts;
+        if (tabName) {
+          const tab = db.prepare('SELECT id, name FROM tabs WHERE name = ?').get(tabName) as { id: string; name: string } | undefined;
+          if (!tab) return { content: [{ type: 'text' as const, text: `Tab "${tabName}" not found` }], isError: true };
+          const cost = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total, COUNT(*) as messages FROM messages WHERE tab_id = ?').get(tab.id) as { total: number; messages: number };
+          tabCosts = [{ name: tab.name, cost: cost.total, messages: cost.messages }];
+        } else {
+          tabCosts = db.prepare(`
+            SELECT t.name, COALESCE(SUM(m.cost_usd), 0) as cost, COUNT(m.id) as messages
+            FROM tabs t LEFT JOIN messages m ON m.tab_id = t.id
+            GROUP BY t.id ORDER BY cost DESC
+          `).all() as Array<{ name: string; cost: number; messages: number }>;
+        }
+
+        // Today's spend
+        const today = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')").get() as { total: number };
+
+        // 30-day spend
+        const month = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-30 days')").get() as { total: number };
+
+        const lines = [
+          `Today: $${today.total.toFixed(4)}`,
+          `30 days: $${month.total.toFixed(4)}`,
+          '',
+          'Per tab:',
+          ...tabCosts.map((t: any) => `  ${t.name}: $${t.cost.toFixed(4)} (${t.messages} messages)`),
+        ];
+
+        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      }
+
+      case 'beecork_failed_deliveries': {
+        const failed = db.prepare(
+          "SELECT m.content, m.created_at, m.retry_count, t.name as tab_name FROM messages m JOIN tabs t ON t.id = m.tab_id WHERE m.delivery_status = 'failed' ORDER BY m.created_at DESC LIMIT 20"
+        ).all();
+        if ((failed as any[]).length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No failed deliveries.' }] };
+        }
+        const failedLines = (failed as any[]).map((f: any) => `[${f.created_at}] tab:${f.tab_name} retries:${f.retry_count}\n  ${f.content.slice(0, 200)}`);
+        return { content: [{ type: 'text' as const, text: failedLines.join('\n\n') }] };
       }
 
       default:
