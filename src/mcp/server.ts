@@ -37,13 +37,14 @@ process.on('exit', () => { cachedDb?.close(); });
 const MAX_CONTENT_LENGTH = 10240; // 10KB
 const MAX_NAME_LENGTH = 256;
 const VALID_SCHEDULE_TYPES = ['at', 'every', 'cron'];
-const TAB_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$/;
+// Tab name validation is centralized in validateTabName() from config.ts
 
 function signalCronReload(): void {
   fs.writeFileSync(CRON_RELOAD_SIGNAL, String(Date.now()));
 }
 
 import { VERSION } from '../version.js';
+import { validateTabName } from '../config.js';
 
 const server = new Server(
   { name: 'beecork', version: VERSION },
@@ -201,8 +202,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const id = uuidv4();
         const tab = tabName || 'default';
-        if (tab !== 'default' && !TAB_NAME_REGEX.test(tab)) {
-          return { content: [{ type: 'text' as const, text: `Invalid tab name. Must be alphanumeric + hyphens, max 32 chars.` }], isError: true };
+        if (tab !== 'default') {
+          const tabError = validateTabName(tab);
+          if (tabError) {
+            return { content: [{ type: 'text' as const, text: tabError }], isError: true };
+          }
         }
         db.prepare(
           `INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at)
@@ -235,11 +239,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'beecork_tab_create': {
         const { name: tabName, workingDir } = args as { name: string; workingDir?: string };
-        if (!tabName || !TAB_NAME_REGEX.test(tabName)) {
-          return { content: [{ type: 'text' as const, text: 'Invalid tab name. Must be alphanumeric + hyphens, max 32 chars.' }], isError: true };
+        if (!tabName) {
+          return { content: [{ type: 'text' as const, text: 'Tab name is required.' }], isError: true };
         }
-        if (tabName === 'default' || tabName.startsWith('cron:')) {
-          return { content: [{ type: 'text' as const, text: `Tab name "${tabName}" is reserved.` }], isError: true };
+        const tabCreateError = validateTabName(tabName);
+        if (tabCreateError) {
+          return { content: [{ type: 'text' as const, text: tabCreateError }], isError: true };
         }
         const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(tabName);
         if (existing) {
@@ -268,6 +273,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { tabName, message } = args as { tabName: string; message: string };
         if (!tabName || !message) {
           return { content: [{ type: 'text' as const, text: 'Both tabName and message are required.' }], isError: true };
+        }
+        if (tabName !== 'default') {
+          const sendTabError = validateTabName(tabName);
+          if (sendTabError) {
+            return { content: [{ type: 'text' as const, text: sendTabError }], isError: true };
+          }
         }
         if (message.length > MAX_CONTENT_LENGTH) {
           return { content: [{ type: 'text' as const, text: `Message must be under ${MAX_CONTENT_LENGTH} characters.` }], isError: true };

@@ -102,7 +102,7 @@ export class TabManager {
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void }): Promise<SendResult> {
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; skipExtraction?: boolean }): Promise<SendResult> {
     const tab = this.ensureTab(tabName);
 
     // If a subprocess is already running on this tab, queue the message
@@ -120,7 +120,7 @@ export class TabManager {
       });
     }
 
-    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk);
+    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction);
   }
 
   /** Get all tabs from the database */
@@ -184,7 +184,7 @@ export class TabManager {
 
       if (msg.type === 'notification') {
         // Route notifications to Telegram/WhatsApp via the notify callback
-        this.onNotify?.(msg.message);
+        this.onNotify?.(msg.message).catch(err => logger.warn('Notify failed:', err));
       } else {
         // Route regular messages to tabs
         this.sendMessage(msg.tab_name, msg.message).catch(err => {
@@ -194,7 +194,7 @@ export class TabManager {
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void): Promise<SendResult> {
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean): Promise<SendResult> {
     const db = getDb();
 
     // Inject relevant memories into the prompt
@@ -271,7 +271,7 @@ export class TabManager {
                   logger.warn(`[${tab.name}] Circuit breaker tripped, killing subprocess`);
                   subprocess.kill();
                 } else if (action === 'notify') {
-                  this.onNotify?.(`Loop detected in tab "${tab.name}": ${toolUse.name} repeated 10+ times. Send /stop ${tab.name} to kill it.`);
+                  this.onNotify?.(`Loop detected in tab "${tab.name}": ${toolUse.name} repeated 10+ times. Send /stop ${tab.name} to kill it.`).catch(err => logger.warn('Notify failed:', err));
                 } else if (action === 'warn') {
                   loopWarningPending = true;
                 }
@@ -330,7 +330,7 @@ export class TabManager {
           // Context window compaction: if checkpoint was triggered, restart with summary
           if (checkpointTriggered && !result.error && result.text) {
             logger.info(`[${tab.name}] Compacting context — requesting summary then restarting session`);
-            this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`);
+            this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`).catch(err => logger.warn('Notify failed:', err));
 
             // Ask Claude for a structured summary
             const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
@@ -357,7 +357,8 @@ export class TabManager {
           resolve(result);
 
           // Auto-extract memories from completed sessions (fire and forget)
-          if (!result.error && result.text) {
+          // Skip if pipe brain already handles extraction via PipeBrain.learn()
+          if (!result.error && result.text && !skipExtraction) {
             extractMemories(this.config, tab.name, result.text, result.durationMs).catch(err => {
               logger.error(`[${tab.name}] Memory extraction error:`, err);
             });
@@ -380,7 +381,7 @@ export class TabManager {
         },
       };
 
-      subprocess.send(prompt, callbacks, shouldResume).catch(reject);
+      subprocess.send(enrichedPrompt, callbacks, shouldResume).catch(reject);
 
       // Update tab with PID
       if (subprocess.pid) {

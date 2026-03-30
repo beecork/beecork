@@ -17,7 +17,7 @@ export class PipeBrain {
   constructor(config: BeecorkConfig, tabManager: TabManager) {
     this.config = config;
     this.tabManager = tabManager;
-    this.client = new PipeAnthropicClient(config.pipe.anthropicApiKey);
+    this.client = new PipeAnthropicClient(config.pipe.anthropicApiKey, config.pipe.routingModel, config.pipe.complexModel);
     this.memory = new PipeMemoryStore();
   }
 
@@ -41,7 +41,7 @@ export class PipeBrain {
     // Step 3: Send to Claude Code
     let result: SendResult;
     try {
-      result = await this.tabManager.sendMessage(route.tabName, message);
+      result = await this.tabManager.sendMessage(route.tabName, message, { skipExtraction: true });
     } catch (err) {
       return {
         tabName: route.tabName,

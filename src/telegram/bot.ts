@@ -52,7 +52,9 @@ export class BeecorkTelegramBot {
       if (!this.isAllowed(msg.from?.id)) return;
 
       const chatId = msg.chat.id;
-      this.activeChatIds.add(chatId);
+      if (msg.chat.type === 'private') {
+        this.activeChatIds.add(chatId);
+      }
       const text = msg.text?.trim();
       if (!text) return;
 
@@ -102,13 +104,15 @@ export class BeecorkTelegramBot {
       // Validate tab name
       const rest = text.slice(5);
       const spaceIdx = rest.indexOf(' ');
-      if (spaceIdx > 0) {
-        const tabName = rest.slice(0, spaceIdx);
-        const validationError = validateTabName(tabName);
-        if (validationError) {
-          await this.bot.sendMessage(chatId, `Invalid tab name: ${validationError}`);
-          return;
-        }
+      if (spaceIdx === -1) {
+        await this.bot.sendMessage(chatId, `Usage: /tab <name> <message>`);
+        return;
+      }
+      const tabName = rest.slice(0, spaceIdx);
+      const validationError = validateTabName(tabName);
+      if (validationError) {
+        await this.bot.sendMessage(chatId, `Invalid tab name: ${validationError}`);
+        return;
       }
       // Fall through to handleMessage
       await this.handleMessage(chatId, text, messageId);

@@ -92,4 +92,13 @@ program
   .option('--check', 'Check for updates without installing')
   .action(updateBeecork);
 
+program
+  .command('dashboard')
+  .description('Open the Beecork dashboard in your browser')
+  .option('-p, --port <port>', 'Port to listen on (default: random)')
+  .action(async (options) => {
+    const { startDashboardServer } = await import('./dashboard/server.js');
+    startDashboardServer(options.port ? parseInt(options.port) : 0);
+  });
+
 program.parse();

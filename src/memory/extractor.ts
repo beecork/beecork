@@ -97,9 +97,12 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
     });
 
     let output = '';
+    let stdoutBuffer = '';
 
     proc.stdout!.on('data', (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n');
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || ''; // Keep incomplete last line in buffer
       for (const line of lines) {
         if (!line.trim()) continue;
         try {

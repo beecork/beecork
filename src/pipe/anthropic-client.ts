@@ -2,14 +2,15 @@ import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../util/logger.js';
 import type { RouteDecision, GoalEvaluation, KnowledgeEntry, Project } from './types.js';
 
-const HAIKU = 'claude-haiku-4-5-20251001';
-const SONNET = 'claude-sonnet-4-6-20250514';
-
 export class PipeAnthropicClient {
   private client: Anthropic;
+  private routingModel: string;
+  private complexModel: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, routingModel: string, complexModel: string) {
     this.client = new Anthropic({ apiKey });
+    this.routingModel = routingModel;
+    this.complexModel = complexModel;
   }
 
   /** Route a message to the right project/tab (Haiku — fast, cheap) */
@@ -97,7 +98,7 @@ Return [] if nothing new is worth remembering. Max 5 entries.`,
   }
 
   private async complete(systemPrompt: string, userMessage: string, model: 'haiku' | 'sonnet'): Promise<string> {
-    const modelId = model === 'haiku' ? HAIKU : SONNET;
+    const modelId = model === 'haiku' ? this.routingModel : this.complexModel;
     try {
       const response = await this.client.messages.create({
         model: modelId,

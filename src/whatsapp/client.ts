@@ -1,4 +1,5 @@
 import { logger } from '../util/logger.js';
+import { retryWithBackoff } from '../util/retry.js';
 import { chunkTextWA } from './formatter.js';
 import { parseTabMessage } from '../util/text.js';
 import type { TabManager } from '../session/manager.js';
@@ -116,7 +117,15 @@ export class BeecorkWhatsAppClient {
     const chunks = chunkTextWA(prefix + text);
     const sock = this.sock as any;
     for (const chunk of chunks) {
-      await sock.sendMessage(jid, { text: chunk });
+      try {
+        await retryWithBackoff(
+          () => sock.sendMessage(jid, { text: chunk }),
+          [1000, 5000, 15000],
+          'whatsapp-send',
+        );
+      } catch (err) {
+        logger.error(`WhatsApp delivery failed for ${jid}:`, err);
+      }
     }
   }
 

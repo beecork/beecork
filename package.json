@@ -18,7 +18,6 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.0",
     "@anthropic-ai/sdk": "^0.80.0",
     "@modelcontextprotocol/sdk": "^1.28.0",
     "@whiskeysockets/baileys": "^6.7.0",

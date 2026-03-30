@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawn, execSync } from 'node:child_process';
 import { getDb, closeDb } from '../db/index.js';
 import { getConfig } from '../config.js';
@@ -8,6 +9,16 @@ import { startService, stopService } from '../service/install.js';
 import { getPidPath, getLogsDir } from '../util/paths.js';
 import { VERSION } from '../version.js';
 import type { Memory } from '../types.js';
+import type Database from 'better-sqlite3';
+
+function requireDb(): Database.Database {
+  try {
+    return getDb();
+  } catch {
+    console.error('Database not initialized — run "beecork setup" first.');
+    process.exit(1);
+  }
+}
 
 // Map snake_case DB rows to display format
 interface TabRow {
@@ -103,7 +114,7 @@ export async function showStatus(): Promise<void> {
 }
 
 export async function listTabs(): Promise<void> {
-  const db = getDb();
+  const db = requireDb();
   const tabs = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[];
   closeDb();
 
@@ -122,7 +133,7 @@ export async function listTabs(): Promise<void> {
 
 export async function tailLogs(tabName?: string): Promise<void> {
   const logFile = tabName
-    ? `${getLogsDir()}/${tabName}.log`
+    ? `${getLogsDir()}/${path.basename(tabName)}.log`
     : `${getLogsDir()}/daemon.stdout.log`;
 
   if (!fs.existsSync(logFile)) {
@@ -135,6 +146,7 @@ export async function tailLogs(tabName?: string): Promise<void> {
 }
 
 export async function listCrons(): Promise<void> {
+  requireDb(); // Ensure DB exists before CronStore tries to access it
   const store = new CronStore();
   const jobs = store.list();
 
@@ -154,6 +166,7 @@ export async function listCrons(): Promise<void> {
 }
 
 export async function deleteCron(id: string): Promise<void> {
+  requireDb(); // Ensure DB exists before CronStore tries to access it
   const store = new CronStore();
   if (store.delete(id)) {
     console.log(`Deleted cron job: ${id}`);
@@ -163,7 +176,7 @@ export async function deleteCron(id: string): Promise<void> {
 }
 
 export async function listMemories(): Promise<void> {
-  const db = getDb();
+  const db = requireDb();
   const memories = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT 50').all() as Memory[];
   closeDb();
 
@@ -182,7 +195,7 @@ export async function listMemories(): Promise<void> {
 }
 
 export async function deleteMemory(id: string): Promise<void> {
-  const db = getDb();
+  const db = requireDb();
   const result = db.prepare('DELETE FROM memories WHERE id = ?').run(parseInt(id, 10));
   closeDb();
 

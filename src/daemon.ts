@@ -6,7 +6,9 @@ import { BeecorkTelegramBot } from './telegram/bot.js';
 import { CronScheduler } from './cron/scheduler.js';
 import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
+import { execSync } from 'node:child_process';
 import { logger } from './util/logger.js';
+import { VERSION } from './version.js';
 
 let tabManager: TabManager;
 let telegramBot: BeecorkTelegramBot | null = null;
@@ -132,6 +134,7 @@ async function main(): Promise<void> {
     clearInterval(pollInterval);
     tabManager.stopAll();
     if (telegramBot) telegramBot.stop();
+    if (whatsappClient) whatsappClient.stop();
     cronScheduler.stopAll();
     closeDb();
 
@@ -170,6 +173,15 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.warn('Failed to send startup notification:', err);
   }
+
+  // Check for updates (fire and forget — non-critical)
+  try {
+    const latest = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
+    if (latest && latest !== VERSION) {
+      await broadcastNotify(`📦 Update available: v${VERSION} → v${latest}\nRun: beecork update`);
+      logger.info(`Update available: v${VERSION} → v${latest}`);
+    }
+  } catch { /* offline or npm registry unreachable — skip silently */ }
 }
 
 async function recoverCrashedTabs(): Promise<void> {
