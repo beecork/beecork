@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
-import { BeecorkTelegramBot } from './telegram/bot.js';
+import { ChannelRegistry, TelegramChannel, WhatsAppChannel } from './channels/index.js';
 import { CronScheduler } from './cron/scheduler.js';
 import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
@@ -11,8 +11,7 @@ import { logger } from './util/logger.js';
 import { VERSION } from './version.js';
 
 let tabManager: TabManager;
-let telegramBot: BeecorkTelegramBot | null = null;
-let whatsappClient: { sendNotification(text: string): Promise<void>; stop(): void; start(): Promise<void> } | null = null;
+let channelRegistry: ChannelRegistry;
 let cronScheduler: CronScheduler;
 let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
@@ -20,10 +19,7 @@ let shutdownFn: (() => Promise<void>) | null = null;
 
 /** Broadcast notifications to all active channels */
 async function broadcastNotify(text: string): Promise<void> {
-  await Promise.all([
-    telegramBot?.sendNotification(text).catch(err => logger.warn('Telegram notify failed:', err)),
-    whatsappClient?.sendNotification(text).catch(err => logger.warn('WhatsApp notify failed:', err)),
-  ]);
+  await channelRegistry.broadcastNotify(text);
 }
 
 async function main(): Promise<void> {
@@ -81,28 +77,21 @@ async function main(): Promise<void> {
   // 7. Recover crashed tabs
   await recoverCrashedTabs();
 
-  // 7. Start Telegram bot
+  // Start channels via registry
+  channelRegistry = new ChannelRegistry();
+  const channelCtx = { config, tabManager, pipeBrain };
+
   if (config.telegram?.token) {
-    try {
-      telegramBot = new BeecorkTelegramBot(config, tabManager, pipeBrain);
-    } catch (err) {
-      logger.error('Failed to start Telegram bot:', err);
-    }
+    channelRegistry.register(new TelegramChannel(channelCtx));
   } else {
     logger.warn('No Telegram token configured. Bot not started.');
   }
 
-  // 8. Start WhatsApp client (if configured)
   if (config.whatsapp?.enabled) {
-    try {
-      const { BeecorkWhatsAppClient } = await import('./whatsapp/client.js');
-      whatsappClient = new BeecorkWhatsAppClient(config, tabManager);
-      await whatsappClient.start();
-      logger.info('WhatsApp client started');
-    } catch (err) {
-      logger.error('Failed to start WhatsApp client:', err);
-    }
+    channelRegistry.register(new WhatsAppChannel(channelCtx));
   }
+
+  await channelRegistry.start();
 
   // Wire up broadcast notifications to all active channels
   tabManager.setNotifyCallback(broadcastNotify);
@@ -133,8 +122,7 @@ async function main(): Promise<void> {
 
     clearInterval(pollInterval);
     tabManager.stopAll();
-    if (telegramBot) telegramBot.stop();
-    if (whatsappClient) whatsappClient.stop();
+    channelRegistry.stop();
     cronScheduler.stopAll();
     closeDb();
 

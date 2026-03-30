@@ -173,4 +173,4 @@ export interface CircuitBreakerConfig {
   windowSize: number;
 }
 
-// Note: Channel interface is handled via NotifyCallback in src/session/manager.ts
+// Channel interface: see src/channels/types.ts

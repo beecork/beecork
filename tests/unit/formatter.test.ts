@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { chunkText, formatTabStatus } from '../../src/telegram/formatter.js';
+import { chunkText } from '../../src/util/text.js';
+import { formatTabStatus } from '../../src/channels/telegram.js';
 
 describe('Telegram Formatter', () => {
   describe('chunkText', () => {

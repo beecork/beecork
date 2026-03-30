@@ -1,38 +1,35 @@
 import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { chunkTextWA } from './formatter.js';
-import { parseTabMessage } from '../util/text.js';
-import type { TabManager } from '../session/manager.js';
-import type { BeecorkConfig } from '../types.js';
+import { chunkText, parseTabMessage } from '../util/text.js';
+import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
 
-/**
- * WhatsApp client via Baileys.
- * Uses @whiskeysockets/baileys for reverse-engineered WhatsApp Web connection.
- * Session is persisted in ~/.beecork/whatsapp-session/
- *
- * NOTE: This violates WhatsApp ToS. For personal use only.
- */
-export class BeecorkWhatsAppClient {
+const WHATSAPP_MAX_LENGTH = 8192;
+
+export class WhatsAppChannel implements Channel {
+  readonly id = 'whatsapp';
+  readonly name = 'WhatsApp';
+  readonly maxMessageLength = WHATSAPP_MAX_LENGTH;
+  readonly supportsStreaming = false;
+  readonly supportsMedia = false;
+
   private sock: unknown = null;
-  private tabManager: TabManager;
-  private config: BeecorkConfig;
+  private ctx: ChannelContext;
   private allowedNumbers: Set<string>;
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
-  private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000]; // ms
+  private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000];
+  private messageHandler: InboundMessageHandler | null = null;
 
-  constructor(config: BeecorkConfig, tabManager: TabManager) {
-    this.config = config;
-    this.tabManager = tabManager;
-    this.allowedNumbers = new Set(config.whatsapp?.allowedNumbers ?? []);
+  constructor(ctx: ChannelContext) {
+    this.ctx = ctx;
+    this.allowedNumbers = new Set(ctx.config.whatsapp?.allowedNumbers ?? []);
   }
 
   async start(): Promise<void> {
     try {
-      // Dynamic import since baileys might not be installed
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import('@whiskeysockets/baileys');
-      const sessionPath = this.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
+      const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
 
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -68,7 +65,7 @@ export class BeecorkWhatsAppClient {
             logger.error('WhatsApp logged out. Please re-scan QR code.');
           }
         } else if (connection === 'open') {
-          this.reconnectAttempts = 0; // Reset on successful connection
+          this.reconnectAttempts = 0;
           logger.info('WhatsApp connected');
         }
       });
@@ -85,13 +82,12 @@ export class BeecorkWhatsAppClient {
         if (!text) return;
 
         try {
-          const { tabName, prompt } = this.parseMessage(text);
+          const { tabName, prompt } = parseTabMessage(text);
           if (!prompt) return;
 
-          // Show typing indicator while processing
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 
-          const result = await this.tabManager.sendMessage(tabName, prompt);
+          const result = await this.ctx.tabManager.sendMessage(tabName, prompt);
           const responseText = result.error
             ? `Error: ${result.text}`
             : result.text || '(empty response)';
@@ -100,7 +96,6 @@ export class BeecorkWhatsAppClient {
           await this.sendResponse(sender, responseText, tabName);
         } catch (err) {
           logger.error('WhatsApp message handler error:', err);
-          // Send error feedback to user (unlike silent failure before)
           await sock.sendMessage(sender, { text: 'Something went wrong processing your message. Check daemon logs for details.' }).catch(() => {});
         }
       });
@@ -110,13 +105,56 @@ export class BeecorkWhatsAppClient {
     }
   }
 
-  private parseMessage(text: string): { tabName: string; prompt: string } {
-    return parseTabMessage(text);
+  stop(): void {
+    const sock = this.sock as any;
+    if (sock) {
+      sock.end(undefined);
+      this.sock = null;
+    }
+    logger.info('WhatsApp client stopped');
   }
 
-  async sendResponse(jid: string, text: string, tabName?: string): Promise<void> {
+  async sendMessage(peerId: string, text: string, _options?: SendOptions): Promise<void> {
+    const sock = this.sock as any;
+    if (!sock) return;
+    const chunks = chunkText(text, WHATSAPP_MAX_LENGTH);
+    for (const chunk of chunks) {
+      await retryWithBackoff(
+        () => sock.sendMessage(peerId, { text: chunk }),
+        [1000, 5000, 15000],
+        'whatsapp-send',
+      );
+    }
+  }
+
+  async sendNotification(message: string, _urgent?: boolean): Promise<void> {
+    const sock = this.sock as any;
+    if (!sock) return;
+    for (const number of this.allowedNumbers) {
+      try {
+        await sock.sendMessage(`${number}@s.whatsapp.net`, { text: message });
+      } catch (err) {
+        logger.error(`Failed to send WhatsApp notification to ${number}:`, err);
+      }
+    }
+  }
+
+  async setTyping(peerId: string, active: boolean): Promise<void> {
+    const sock = this.sock as any;
+    if (!sock) return;
+    const status = active ? 'composing' : 'paused';
+    await sock.sendPresenceUpdate(status, peerId).catch(() => {});
+  }
+
+  onMessage(handler: InboundMessageHandler): void {
+    this.messageHandler = handler;
+  }
+
+  // ─── Private ───
+
+  private async sendResponse(jid: string, text: string, tabName?: string): Promise<void> {
     const prefix = tabName && tabName !== 'default' ? `[${tabName}] ` : '';
-    const chunks = chunkTextWA(prefix + text);
+    const chunks = chunkText(prefix + text, WHATSAPP_MAX_LENGTH);
     const sock = this.sock as any;
     for (const chunk of chunks) {
       try {
@@ -131,29 +169,8 @@ export class BeecorkWhatsAppClient {
     }
   }
 
-  async sendNotification(text: string): Promise<void> {
-    const sock = this.sock as any;
-    if (!sock) return;
-    for (const number of this.allowedNumbers) {
-      try {
-        await sock.sendMessage(`${number}@s.whatsapp.net`, { text });
-      } catch (err) {
-        logger.error(`Failed to send WhatsApp notification to ${number}:`, err);
-      }
-    }
-  }
-
-  stop(): void {
-    const sock = this.sock as any;
-    if (sock) {
-      sock.end(undefined);
-      this.sock = null;
-    }
-    logger.info('WhatsApp client stopped');
-  }
-
   private isAllowed(jid: string): boolean {
-    if (this.allowedNumbers.size === 0) return false; // Deny by default — require explicit allowlist
+    if (this.allowedNumbers.size === 0) return false;
     const number = jid.replace('@s.whatsapp.net', '');
     return this.allowedNumbers.has(number);
   }

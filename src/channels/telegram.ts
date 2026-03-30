@@ -1,29 +1,37 @@
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chunkText, formatTabStatus } from './formatter.js';
-import { parseTabMessage } from '../util/text.js';
+import { chunkText, timeAgo, parseTabMessage } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { getTabConfig, getAdminUserId, validateTabName } from '../config.js';
+import { getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
-import type { TabManager } from '../session/manager.js';
-import type { PipeBrain } from '../pipe/brain.js';
-import type { BeecorkConfig } from '../types.js';
+import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
 
-export class BeecorkTelegramBot {
+/** Format tab status for Telegram display */
+export function formatTabStatus(tabs: Array<{ name: string; status: string; lastActivityAt: string }>): string {
+  if (tabs.length === 0) return 'No tabs.';
+  return tabs.map(t => {
+    const ago = timeAgo(t.lastActivityAt);
+    return `• ${t.name} [${t.status}] — ${ago}`;
+  }).join('\n');
+}
+
+export class TelegramChannel implements Channel {
+  readonly id = 'telegram';
+  readonly name = 'Telegram';
+  readonly maxMessageLength = 4096;
+  readonly supportsStreaming = true;
+  readonly supportsMedia = false;
+
   private bot: TelegramBot;
-  private tabManager: TabManager;
-  private pipeBrain: PipeBrain | null;
-  private config: BeecorkConfig;
+  private ctx: ChannelContext;
   private activeChatIds: Set<number> = new Set();
+  private messageHandler: InboundMessageHandler | null = null;
 
-  constructor(config: BeecorkConfig, tabManager: TabManager, pipeBrain: PipeBrain | null = null) {
-    this.config = config;
-    this.tabManager = tabManager;
-    this.pipeBrain = pipeBrain;
-    // Clear any stale polling from previous instances before starting
-    this.bot = new TelegramBot(config.telegram.token, {
+  constructor(ctx: ChannelContext) {
+    this.ctx = ctx;
+    this.bot = new TelegramBot(ctx.config.telegram.token, {
       polling: {
         params: {
           timeout: 30,
@@ -32,20 +40,68 @@ export class BeecorkTelegramBot {
         autoStart: false,
       },
     });
-    // Drop pending updates from old sessions, then start polling
     this.bot.sendMessage = this.bot.sendMessage.bind(this.bot);
-    fetch(`https://api.telegram.org/bot${config.telegram.token}/deleteWebhook?drop_pending_updates=true`, { signal: AbortSignal.timeout(10000) })
-      .then(() => {
-        this.bot.startPolling();
-        this.setupHandlers();
-        logger.info('Telegram bot started (polling mode, cleared pending updates)');
-      })
-      .catch((err) => {
-        logger.error('Failed to clear pending updates, starting anyway:', err);
-        this.bot.startPolling();
-        this.setupHandlers();
-      });
   }
+
+  async start(): Promise<void> {
+    // Clear pending updates from old sessions, then start polling
+    try {
+      await fetch(
+        `https://api.telegram.org/bot${this.ctx.config.telegram.token}/deleteWebhook?drop_pending_updates=true`,
+        { signal: AbortSignal.timeout(10000) },
+      );
+    } catch (err) {
+      logger.error('Failed to clear pending updates, starting anyway:', err);
+    }
+    this.bot.startPolling();
+    this.setupHandlers();
+    logger.info('Telegram bot started (polling mode, cleared pending updates)');
+  }
+
+  stop(): void {
+    this.bot.stopPolling();
+    logger.info('Telegram bot stopped');
+  }
+
+  async sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void> {
+    const chatId = Number(peerId);
+    const chunks = chunkText(text);
+    for (const chunk of chunks) {
+      await this.sendWithRetry(chatId, chunk);
+    }
+  }
+
+  async sendNotification(message: string, _urgent?: boolean): Promise<void> {
+    for (const chatId of this.activeChatIds) {
+      try {
+        await this.bot.sendMessage(chatId, message);
+      } catch (err) {
+        logger.error(`Failed to send notification to chat ${chatId}:`, err);
+      }
+    }
+
+    for (const userId of this.ctx.config.telegram.allowedUserIds) {
+      if (this.activeChatIds.has(userId)) continue;
+      try {
+        await this.bot.sendMessage(userId, message);
+        this.activeChatIds.add(userId);
+      } catch { /* User hasn't started conversation yet */ }
+    }
+  }
+
+  async setTyping(peerId: string, active: boolean): Promise<void> {
+    if (active) {
+      await this.bot.sendChatAction(Number(peerId), 'typing').catch((err) => {
+        logger.error(`Typing indicator failed for chat ${peerId}:`, err);
+      });
+    }
+  }
+
+  onMessage(handler: InboundMessageHandler): void {
+    this.messageHandler = handler;
+  }
+
+  // ─── Private ───
 
   private setupHandlers(): void {
     this.bot.on('message', async (msg) => {
@@ -65,14 +121,12 @@ export class BeecorkTelegramBot {
           return;
         }
 
-        // Send typing indicator immediately so user knows bot received it
+        // Send typing indicator immediately
         this.bot.sendChatAction(chatId, 'typing').catch((err) => {
           logger.error(`Typing indicator failed for chat ${chatId}:`, err);
         });
         logger.info(`[telegram] Message received from ${msg.from?.id}, sending typing`);
 
-        // Skip debounce — send immediately for responsiveness
-        // (debounce adds latency and complexity; queue handles rapid messages)
         await this.handleMessage(chatId, text, msg.message_id);
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
@@ -83,7 +137,7 @@ export class BeecorkTelegramBot {
 
   private async handleCommand(chatId: number, text: string, userId: number | undefined, messageId: number): Promise<void> {
     if (text === '/tabs' || text.startsWith('/tabs@')) {
-      const tabs = this.tabManager.listTabs();
+      const tabs = this.ctx.tabManager.listTabs();
       const formatted = formatTabStatus(tabs);
       await this.bot.sendMessage(chatId, formatted);
       return;
@@ -95,13 +149,12 @@ export class BeecorkTelegramBot {
         return;
       }
       const tabName = text.slice(6).trim();
-      this.tabManager.stopTab(tabName);
+      this.ctx.tabManager.stopTab(tabName);
       await this.bot.sendMessage(chatId, `Stopped tab: ${tabName}`);
       return;
     }
 
     if (text.startsWith('/tab ')) {
-      // Validate tab name
       const rest = text.slice(5);
       const spaceIdx = rest.indexOf(' ');
       if (spaceIdx === -1) {
@@ -114,7 +167,6 @@ export class BeecorkTelegramBot {
         await this.bot.sendMessage(chatId, `Invalid tab name: ${validationError}`);
         return;
       }
-      // Fall through to handleMessage
       await this.handleMessage(chatId, text, messageId);
       return;
     }
@@ -124,7 +176,7 @@ export class BeecorkTelegramBot {
   }
 
   private async handleMessage(chatId: number, text: string, messageId: number): Promise<void> {
-    const { tabName, prompt } = this.parseMessage(text);
+    const { tabName, prompt } = parseTabMessage(text);
     if (!prompt) return;
 
     logger.info(`[telegram] Handling message for tab "${tabName}" (chat: ${chatId}, msg: ${messageId})`);
@@ -132,7 +184,7 @@ export class BeecorkTelegramBot {
     // React with ⏳
     await this.setReaction(chatId, messageId, '⏳');
 
-    // Typing indicator — keep refreshing every 4s (Telegram expires it after 5s)
+    // Typing indicator — keep refreshing every 4s
     const sendTyping = () => this.bot.sendChatAction(chatId, 'typing').catch((err) => {
       logger.error(`Typing indicator failed:`, err);
     });
@@ -142,27 +194,24 @@ export class BeecorkTelegramBot {
     // "Still working" timeout
     const stillWorkingTimeout = setTimeout(() => {
       this.bot.sendMessage(chatId, `Still working on your request in tab "${tabName}"...`).catch(() => {});
-    }, 120000); // 2 minutes
+    }, 120000);
 
     try {
       let responseText: string;
       let responseError: boolean;
       let responseTab = tabName;
 
-      if (this.pipeBrain) {
-        // Intelligent routing + goal tracking via PipeBrain
-        const pipeResult = await this.pipeBrain.process(text, { chatId, userId: 0, messageId });
+      if (this.ctx.pipeBrain) {
+        const pipeResult = await this.ctx.pipeBrain.process(text, { chatId, userId: 0, messageId });
         responseText = pipeResult.response.text || '(empty response)';
         responseError = pipeResult.response.error;
         responseTab = pipeResult.tabName;
 
-        // Send transparency decisions
         if (pipeResult.decisions.length > 0) {
           const decisionText = pipeResult.decisions.join('\n');
           await this.bot.sendMessage(chatId, decisionText);
         }
       } else {
-        // Dumb pipe — direct routing with streaming
         let streamMsgId: number | null = null;
         let streamBuffer = '';
         let lastEditTime = 0;
@@ -184,11 +233,10 @@ export class BeecorkTelegramBot {
           } catch { /* edit failures are non-critical */ }
         };
 
-        const result = await this.tabManager.sendMessage(tabName, prompt, { onTextChunk });
+        const result = await this.ctx.tabManager.sendMessage(tabName, prompt, { onTextChunk });
         responseText = result.text || '(empty response)';
         responseError = result.error;
 
-        // If we streamed, do a final edit instead of sending a new message
         if (streamMsgId && !responseError) {
           clearInterval(typingInterval);
           clearTimeout(stillWorkingTimeout);
@@ -204,7 +252,7 @@ export class BeecorkTelegramBot {
           } catch {
             await this.sendResponse(chatId, responseText, tabName);
           }
-          return; // DONE — don't fall through to sendResponse below
+          return;
         }
       }
 
@@ -227,21 +275,15 @@ export class BeecorkTelegramBot {
     }
   }
 
-  private parseMessage(text: string): { tabName: string; prompt: string } {
-    return parseTabMessage(text);
-  }
-
-  async sendResponse(chatId: number, text: string, tabName?: string): Promise<void> {
+  private async sendResponse(chatId: number, text: string, tabName?: string): Promise<void> {
     const prefix = tabName && tabName !== 'default' ? `[${tabName}] ` : '';
     const fullText = prefix + text;
     const chunks = chunkText(fullText);
 
-    // For very long outputs: send first 3 chunks + file
     if (chunks.length > 10) {
       for (let i = 0; i < 3; i++) {
         await this.sendWithRetry(chatId, chunks[i]);
       }
-      // Send rest as file
       const tmpPath = path.join(getLogsDir(), `response-${Date.now()}.txt`);
       fs.writeFileSync(tmpPath, fullText);
       await this.bot.sendDocument(chatId, tmpPath, { caption: `Full response (${chunks.length} chunks)` });
@@ -261,14 +303,13 @@ export class BeecorkTelegramBot {
           try {
             await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
           } catch {
-            await this.bot.sendMessage(chatId, text); // Fallback to plain text
+            await this.bot.sendMessage(chatId, text);
           }
         },
         [1000, 5000, 15000],
         'telegram-send',
       );
     } catch (err) {
-      // Log to delivery failures
       const failLog = path.join(getLogsDir(), 'delivery-failures.log');
       const entry = `[${new Date().toISOString()}] chatId=${chatId} error=${err instanceof Error ? err.message : err} text=${text.slice(0, 200)}\n`;
       fs.appendFileSync(failLog, entry);
@@ -276,33 +317,9 @@ export class BeecorkTelegramBot {
     }
   }
 
-  /** Send a notification to all allowed users */
-  async sendNotification(text: string): Promise<void> {
-    for (const chatId of this.activeChatIds) {
-      try {
-        await this.bot.sendMessage(chatId, text);
-      } catch (err) {
-        logger.error(`Failed to send notification to chat ${chatId}:`, err);
-      }
-    }
-
-    for (const userId of this.config.telegram.allowedUserIds) {
-      if (this.activeChatIds.has(userId)) continue;
-      try {
-        await this.bot.sendMessage(userId, text);
-        this.activeChatIds.add(userId);
-      } catch { /* User hasn't started conversation yet */ }
-    }
-  }
-
-  stop(): void {
-    this.bot.stopPolling();
-    logger.info('Telegram bot stopped');
-  }
-
   private isAllowed(userId: number | undefined): boolean {
     if (!userId) return false;
-    return this.config.telegram.allowedUserIds.includes(userId);
+    return this.ctx.config.telegram.allowedUserIds.includes(userId);
   }
 
   private isAdmin(userId: number | undefined): boolean {
@@ -310,10 +327,9 @@ export class BeecorkTelegramBot {
     return userId === getAdminUserId();
   }
 
-  /** Set emoji reaction on a message via raw Telegram API */
   private async setReaction(chatId: number, messageId: number, emoji: string): Promise<void> {
     try {
-      const url = `https://api.telegram.org/bot${this.config.telegram.token}/setMessageReaction`;
+      const url = `https://api.telegram.org/bot${this.ctx.config.telegram.token}/setMessageReaction`;
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

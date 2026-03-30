@@ -44,7 +44,7 @@ function signalCronReload(): void {
 }
 
 import { VERSION } from '../version.js';
-import { validateTabName } from '../config.js';
+import { getConfig, validateTabName } from '../config.js';
 
 const server = new Server(
   { name: 'beecork', version: VERSION },
@@ -166,6 +166,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object' as const,
         properties: {},
       },
+    },
+    {
+      name: 'beecork_channels',
+      description: 'List active channels and their capabilities',
+      inputSchema: { type: 'object' as const, properties: {} },
     },
   ],
 }));
@@ -332,6 +337,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           `Memories: ${memoryCount} stored`,
         ];
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      }
+
+      case 'beecork_channels': {
+        // Read channel info from config to show configured channels
+        const config = getConfig();
+        const channels = [];
+        if (config.telegram?.token) {
+          channels.push({ id: 'telegram', name: 'Telegram', streaming: true, media: false });
+        }
+        if (config.whatsapp?.enabled) {
+          channels.push({ id: 'whatsapp', name: 'WhatsApp', streaming: false, media: false });
+        }
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],
+        };
       }
 
       default:
