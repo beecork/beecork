@@ -104,6 +104,11 @@ const MIGRATIONS: Migration[] = [
     up: `ALTER TABLE messages ADD COLUMN delivery_status TEXT DEFAULT 'sent';
          ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0;`,
   },
+  {
+    version: 8,
+    description: 'Add system_prompt column to tabs',
+    up: "ALTER TABLE tabs ADD COLUMN system_prompt TEXT DEFAULT NULL",
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

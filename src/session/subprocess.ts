@@ -42,6 +42,7 @@ export class ClaudeSubprocess {
     private workingDir: string,
     private config: BeecorkConfig,
     sessionId?: string,
+    private tabSystemPrompt?: string | null,
   ) {
     this.sessionId = sessionId ?? uuidv4();
   }
@@ -134,7 +135,11 @@ export class ClaudeSubprocess {
 
     // Inject Beecork system context so Claude knows about available tools
     if (!resume) {
-      args.push('--system-prompt', BEECORK_SYSTEM_PROMPT);
+      let systemPrompt = BEECORK_SYSTEM_PROMPT;
+      if (this.tabSystemPrompt) {
+        systemPrompt += `\n\n[Tab-specific instructions for "${this.tabName}"]\n${this.tabSystemPrompt}`;
+      }
+      args.push('--system-prompt', systemPrompt);
     }
 
     if (resume) {

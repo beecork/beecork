@@ -111,6 +111,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           name: { type: 'string', description: 'Name for the new tab' },
           workingDir: { type: 'string', description: 'Working directory for the tab (default: ~/)' },
+          template: { type: 'string', description: 'Name of a tab template to apply' },
+          systemPrompt: { type: 'string', description: 'Custom system prompt for this tab' },
         },
         required: ['name'],
       },
@@ -271,7 +273,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'beecork_tab_create': {
-        const { name: tabName, workingDir } = args as { name: string; workingDir?: string };
+        const { name: tabName, workingDir, template: templateName, systemPrompt } = args as { name: string; workingDir?: string; template?: string; systemPrompt?: string };
         if (!tabName) {
           return { content: [{ type: 'text' as const, text: 'Tab name is required.' }], isError: true };
         }
@@ -283,17 +285,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (existing) {
           return { content: [{ type: 'text' as const, text: `Tab "${tabName}" already exists.` }] };
         }
+        // Apply template if specified
+        const config = getConfig();
+        const template = templateName ? config.tabTemplates?.[templateName] : undefined;
+        if (templateName && !template) {
+          return { content: [{ type: 'text' as const, text: `Template "${templateName}" not found. Available: ${Object.keys(config.tabTemplates || {}).join(', ') || 'none'}` }], isError: true };
+        }
         const id = uuidv4();
-        let dir = workingDir || os.homedir();
+        // Explicit args take precedence over template values
+        let dir = workingDir || template?.workingDir || os.homedir();
         dir = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir;
         dir = path.resolve(dir);
         if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
           return { content: [{ type: 'text' as const, text: `Working directory does not exist or is not a directory: ${dir}` }], isError: true };
         }
+        const tabSystemPrompt = systemPrompt || template?.systemPrompt || null;
         db.prepare(
-          'INSERT INTO tabs (id, name, session_id, status, working_dir) VALUES (?, ?, ?, ?, ?)'
-        ).run(id, tabName, uuidv4(), 'idle', dir);
-        return { content: [{ type: 'text' as const, text: `Created tab: "${tabName}" (working dir: ${dir})` }] };
+          'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(id, tabName, uuidv4(), 'idle', dir, tabSystemPrompt);
+        const parts = [`Created tab: "${tabName}" (working dir: ${dir})`];
+        if (tabSystemPrompt) parts.push(`System prompt: "${tabSystemPrompt.slice(0, 100)}${tabSystemPrompt.length > 100 ? '...' : ''}"`);
+        if (templateName) parts.push(`Template: ${templateName}`);
+        return { content: [{ type: 'text' as const, text: parts.join('\n') }] };
       }
 
       case 'beecork_tab_list': {
@@ -389,6 +402,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         if (config.whatsapp?.enabled) {
           channels.push({ id: 'whatsapp', name: 'WhatsApp', streaming: false, media: true });
+        }
+        if ((config as any).webhook?.enabled) {
+          channels.push({ id: 'webhook', name: 'Webhook', streaming: false, media: false });
         }
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],

@@ -28,6 +28,7 @@ interface TabRow {
   created_at: string;
   last_activity_at: string;
   pid: number | null;
+  system_prompt: string | null;
 }
 
 function rowToTab(row: TabRow): Tab {
@@ -40,6 +41,7 @@ function rowToTab(row: TabRow): Tab {
     createdAt: row.created_at,
     lastActivityAt: row.last_activity_at,
     pid: row.pid,
+    systemPrompt: row.system_prompt,
   };
 }
 
@@ -81,21 +83,25 @@ export class TabManager {
       if (validationError) throw new Error(validationError);
     }
 
+    // Check for a matching tab template
+    const template = this.config.tabTemplates?.[tabName];
+
     const tab: Tab = {
       id: uuidv4(),
       name: tabName,
       sessionId: uuidv4(),
       status: 'idle',
-      workingDir: resolveWorkingDir(tabName),
+      workingDir: template?.workingDir || resolveWorkingDir(tabName),
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
       pid: null,
+      systemPrompt: template?.systemPrompt || null,
     };
 
     db.prepare(`
-      INSERT INTO tabs (id, name, session_id, status, working_dir, created_at, last_activity_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(tab.id, tab.name, tab.sessionId, tab.status, tab.workingDir, tab.createdAt, tab.lastActivityAt);
+      INSERT INTO tabs (id, name, session_id, status, working_dir, created_at, last_activity_at, system_prompt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(tab.id, tab.name, tab.sessionId, tab.status, tab.workingDir, tab.createdAt, tab.lastActivityAt, tab.systemPrompt);
 
     logger.info(`Created tab: ${tabName}`);
     return tab;
@@ -231,11 +237,15 @@ export class TabManager {
 
     this.updateTabStatus(tab.name, 'running');
 
+    // Get fresh tab to pick up system_prompt
+    const freshTab = this.queryTab(db, tab.name) || tab;
+
     const subprocess = new ClaudeSubprocess(
       tab.name,
       tab.workingDir,
       this.config,
       tab.sessionId,
+      freshTab.systemPrompt,
     );
     this.subprocesses.set(tab.name, subprocess);
 

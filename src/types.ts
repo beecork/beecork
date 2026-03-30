@@ -28,6 +28,12 @@ export interface TabConfig {
 
 export type ApprovalMode = 'yolo' | 'ask' | 'auto-safe';
 
+export interface TabTemplate {
+  workingDir?: string;
+  systemPrompt?: string;
+  approvalMode?: ApprovalMode;
+}
+
 export interface WhatsAppConfig {
   enabled: boolean;
   mode: 'baileys';
@@ -54,11 +60,20 @@ export interface VoiceConfig {
   replyMode: 'text' | 'voice' | 'both';
 }
 
+export interface WebhookConfig {
+  enabled: boolean;
+  port: number;
+  authToken?: string;
+  hmacSecret?: string;
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
+  webhook?: WebhookConfig;
   claudeCode: ClaudeCodeConfig;
   tabs: Record<string, TabConfig>;
+  tabTemplates?: Record<string, TabTemplate>;
   memory: MemoryConfig;
   pipe: PipeConfig;
   voice?: VoiceConfig;
@@ -78,6 +93,7 @@ export interface Tab {
   createdAt: string;
   lastActivityAt: string;
   pid: number | null;
+  systemPrompt: string | null;
 }
 
 // ─── Stream JSON Types (from claude CLI --output-format=stream-json) ��──

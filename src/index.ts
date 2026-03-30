@@ -93,6 +93,29 @@ program
   .action(updateBeecork);
 
 program
+  .command('templates')
+  .description('List configured tab templates')
+  .action(async () => {
+    const { getConfig } = await import('./config.js');
+    const config = getConfig();
+    const templates = config.tabTemplates || {};
+    const entries = Object.entries(templates);
+    if (entries.length === 0) {
+      console.log('No tab templates configured.');
+      console.log('Add templates in ~/.beecork/config.json under "tabTemplates"');
+      return;
+    }
+    console.log(`\n${entries.length} template(s):\n`);
+    for (const [name, tmpl] of entries) {
+      console.log(`  ${name}:`);
+      if (tmpl.workingDir) console.log(`    workingDir: ${tmpl.workingDir}`);
+      if (tmpl.systemPrompt) console.log(`    systemPrompt: "${tmpl.systemPrompt.slice(0, 80)}${tmpl.systemPrompt.length > 80 ? '...' : ''}"`);
+      if (tmpl.approvalMode) console.log(`    approvalMode: ${tmpl.approvalMode}`);
+    }
+    console.log('');
+  });
+
+program
   .command('dashboard')
   .description('Open the Beecork dashboard in your browser')
   .option('-p, --port <port>', 'Port to listen on (default: random)')

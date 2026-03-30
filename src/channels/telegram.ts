@@ -229,6 +229,19 @@ export class TelegramChannel implements Channel {
 
     if (text.startsWith('/tab ')) {
       const rest = text.slice(5);
+
+      // Check for --set-prompt flag: /tab <name> --set-prompt "..."
+      const setPromptMatch = rest.match(/^(\S+)\s+--set-prompt\s+"([^"]+)"/);
+      if (setPromptMatch) {
+        const tabName = setPromptMatch[1];
+        const systemPrompt = setPromptMatch[2];
+        const { getDb } = await import('../db/index.js');
+        const db = getDb();
+        db.prepare('UPDATE tabs SET system_prompt = ? WHERE name = ?').run(systemPrompt, tabName);
+        await this.bot.sendMessage(chatId, `System prompt updated for tab "${tabName}"`);
+        return;
+      }
+
       const spaceIdx = rest.indexOf(' ');
       if (spaceIdx === -1) {
         await this.bot.sendMessage(chatId, `Usage: /tab <name> <message>`);

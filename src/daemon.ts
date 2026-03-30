@@ -92,6 +92,11 @@ async function main(): Promise<void> {
     channelRegistry.register(new WhatsAppChannel(channelCtx));
   }
 
+  if ((config as any).webhook?.enabled) {
+    const { WebhookChannel } = await import('./channels/webhook.js');
+    channelRegistry.register(new WebhookChannel(channelCtx));
+  }
+
   await channelRegistry.start();
 
   // Wire up broadcast notifications to all active channels
