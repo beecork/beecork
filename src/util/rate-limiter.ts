@@ -46,4 +46,4 @@ export class RateLimiter {
 }
 
 /** Shared singleton rate limiter for inbound messages */
-export const inboundLimiter = new RateLimiter();
+export const inboundLimiter = new RateLimiter(60, 30);

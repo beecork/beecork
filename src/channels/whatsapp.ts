@@ -5,6 +5,8 @@ import { retryWithBackoff } from '../util/retry.js';
 import { chunkText, parseTabMessage } from '../util/text.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import { createSTTProvider, type STTProvider } from '../voice/stt.js';
+import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
 
@@ -22,6 +24,8 @@ export class WhatsAppChannel implements Channel {
   private readonly maxReconnectAttempts = 10;
   private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000];
   private messageHandler: InboundMessageHandler | null = null;
+  private sttProvider: STTProvider | null = null;
+  private ttsProvider: TTSProvider | null = null;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -29,6 +33,14 @@ export class WhatsAppChannel implements Channel {
   }
 
   async start(): Promise<void> {
+    // Initialize voice providers
+    if (this.ctx.config.voice?.sttProvider && this.ctx.config.voice.sttProvider !== 'none') {
+      this.sttProvider = createSTTProvider({ provider: this.ctx.config.voice.sttProvider, apiKey: this.ctx.config.voice.sttApiKey });
+    }
+    if (this.ctx.config.voice?.ttsProvider && this.ctx.config.voice.ttsProvider !== 'none') {
+      this.ttsProvider = createTTSProvider({ provider: this.ctx.config.voice.ttsProvider, apiKey: this.ctx.config.voice.ttsApiKey, voice: this.ctx.config.voice.ttsVoice });
+    }
+
     try {
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = await import('@whiskeysockets/baileys');
       const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
@@ -136,6 +148,20 @@ export class WhatsAppChannel implements Channel {
           } catch (err) { logger.warn('Failed to download WhatsApp video:', err); }
         }
 
+        // Transcribe voice messages if STT is configured
+        if (this.sttProvider) {
+          for (const att of media) {
+            if (att.type === 'voice' && att.filePath) {
+              try {
+                const transcription = await this.sttProvider.transcribe(att.filePath);
+                att.caption = `[Transcribed from voice message]: ${transcription}`;
+              } catch (err) {
+                logger.warn('Voice transcription failed, passing file path instead:', err);
+              }
+            }
+          }
+        }
+
         if (!text && media.length === 0) return;
 
         try {
@@ -146,6 +172,10 @@ export class WhatsAppChannel implements Channel {
           let prompt = rawPrompt;
           if (media.length > 0) {
             const mediaDescriptions = media.map(m => {
+              // Use transcription if available (voice messages with STT)
+              if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) {
+                return m.caption;
+              }
               switch (m.type) {
                 case 'image': return `User sent an image: ${m.filePath}`;
                 case 'voice': return `User sent a voice message: ${m.filePath}`;
@@ -167,6 +197,19 @@ export class WhatsAppChannel implements Channel {
             : result.text || '(empty response)';
 
           await sock.sendPresenceUpdate('paused', sender).catch(() => {});
+
+          // TTS: send voice reply if configured
+          const voiceReplyMode = this.ctx.config.voice?.replyMode;
+          if (this.ttsProvider && (voiceReplyMode === 'voice' || voiceReplyMode === 'both')) {
+            try {
+              const audioPath = await this.ttsProvider.synthesize(responseText);
+              await sock.sendMessage(sender, { audio: { url: audioPath }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+              if (voiceReplyMode === 'voice') return; // Don't send text
+            } catch (err) {
+              logger.warn('TTS failed, sending text reply:', err);
+            }
+          }
+
           await this.sendResponse(sender, responseText, tabName);
         } catch (err) {
           logger.error('WhatsApp message handler error:', err);

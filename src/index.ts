@@ -101,4 +101,40 @@ program
     startDashboardServer(options.port ? parseInt(options.port) : 0);
   });
 
+program
+  .command('doctor')
+  .description('Run diagnostic checks on your BeeCork installation')
+  .action(async () => {
+    const { runDoctor } = await import('./cli/doctor.js');
+    await runDoctor();
+  });
+
+const mcpCmd = program
+  .command('mcp')
+  .description('Manage MCP server configurations');
+
+mcpCmd
+  .command('add <name> <command> [args...]')
+  .description('Register an MCP server')
+  .action(async (name: string, command: string, args: string[]) => {
+    const { mcpAdd } = await import('./cli/mcp.js');
+    mcpAdd(name, command, args);
+  });
+
+mcpCmd
+  .command('remove <name>')
+  .description('Unregister an MCP server')
+  .action(async (name: string) => {
+    const { mcpRemove } = await import('./cli/mcp.js');
+    mcpRemove(name);
+  });
+
+mcpCmd
+  .command('list')
+  .description('List configured MCP servers')
+  .action(async () => {
+    const { mcpList } = await import('./cli/mcp.js');
+    mcpList();
+  });
+
 program.parse();

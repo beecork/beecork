@@ -45,6 +45,15 @@ export interface PipeConfig {
   maxFollowUps: number;
 }
 
+export interface VoiceConfig {
+  sttProvider: 'whisper-api' | 'none';
+  sttApiKey?: string;
+  ttsProvider: 'openai' | 'elevenlabs' | 'none';
+  ttsApiKey?: string;
+  ttsVoice?: string;
+  replyMode: 'text' | 'voice' | 'both';
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
@@ -52,6 +61,7 @@ export interface BeecorkConfig {
   tabs: Record<string, TabConfig>;
   memory: MemoryConfig;
   pipe: PipeConfig;
+  voice?: VoiceConfig;
   deployment: 'local' | 'vps';
 }
 

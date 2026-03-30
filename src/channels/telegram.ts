@@ -9,6 +9,8 @@ import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import { createSTTProvider, type STTProvider } from '../voice/stt.js';
+import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
 
 /** Format tab status for Telegram display */
 export function formatTabStatus(tabs: Array<{ name: string; status: string; lastActivityAt: string }>): string {
@@ -30,6 +32,8 @@ export class TelegramChannel implements Channel {
   private ctx: ChannelContext;
   private activeChatIds: Set<number> = new Set();
   private messageHandler: InboundMessageHandler | null = null;
+  private sttProvider: STTProvider | null = null;
+  private ttsProvider: TTSProvider | null = null;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -55,6 +59,14 @@ export class TelegramChannel implements Channel {
     } catch (err) {
       logger.error('Failed to clear pending updates, starting anyway:', err);
     }
+    // Initialize voice providers
+    if (this.ctx.config.voice?.sttProvider && this.ctx.config.voice.sttProvider !== 'none') {
+      this.sttProvider = createSTTProvider({ provider: this.ctx.config.voice.sttProvider, apiKey: this.ctx.config.voice.sttApiKey });
+    }
+    if (this.ctx.config.voice?.ttsProvider && this.ctx.config.voice.ttsProvider !== 'none') {
+      this.ttsProvider = createTTSProvider({ provider: this.ctx.config.voice.ttsProvider, apiKey: this.ctx.config.voice.ttsApiKey, voice: this.ctx.config.voice.ttsVoice });
+    }
+
     this.bot.startPolling();
     this.setupHandlers();
     logger.info('Telegram bot started (polling mode, cleared pending updates)');
@@ -158,6 +170,20 @@ export class TelegramChannel implements Channel {
         } catch (err) { logger.warn('Failed to download video:', err); }
       }
 
+      // Transcribe voice messages if STT is configured
+      if (this.sttProvider) {
+        for (const m of media) {
+          if (m.type === 'voice' && m.filePath) {
+            try {
+              const transcription = await this.sttProvider.transcribe(m.filePath);
+              m.caption = `[Transcribed from voice message]: ${transcription}`;
+            } catch (err) {
+              logger.warn('Voice transcription failed, passing file path instead:', err);
+            }
+          }
+        }
+      }
+
       // Skip if no text AND no media
       if (!text && media.length === 0) return;
 
@@ -230,6 +256,10 @@ export class TelegramChannel implements Channel {
     let prompt = rawPrompt;
     if (media.length > 0) {
       const mediaDescriptions = media.map(m => {
+        // Use transcription if available (voice messages with STT)
+        if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) {
+          return m.caption;
+        }
         switch (m.type) {
           case 'image': return `User sent an image: ${m.filePath}`;
           case 'voice': return `User sent a voice message: ${m.filePath}`;
@@ -330,6 +360,19 @@ export class TelegramChannel implements Channel {
       }
 
       await this.setReaction(chatId, messageId, '✅');
+
+      // TTS: send voice reply if configured
+      const voiceReplyMode = this.ctx.config.voice?.replyMode;
+      if (this.ttsProvider && (voiceReplyMode === 'voice' || voiceReplyMode === 'both')) {
+        try {
+          const audioPath = await this.ttsProvider.synthesize(responseText);
+          await this.bot.sendVoice(chatId, audioPath);
+          if (voiceReplyMode === 'voice') return; // Don't send text
+        } catch (err) {
+          logger.warn('TTS failed, sending text reply:', err);
+        }
+      }
+
       await this.sendResponse(chatId, responseText, responseTab);
     } catch (err) {
       clearInterval(typingInterval);
