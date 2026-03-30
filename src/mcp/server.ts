@@ -406,6 +406,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if ((config as any).webhook?.enabled) {
           channels.push({ id: 'webhook', name: 'Webhook', streaming: false, media: false });
         }
+        if ((config as any).discord?.token) {
+          channels.push({ id: 'discord', name: 'Discord', streaming: false, media: true });
+        }
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],
         };

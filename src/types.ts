@@ -60,6 +60,11 @@ export interface VoiceConfig {
   replyMode: 'text' | 'voice' | 'both';
 }
 
+export interface DiscordConfig {
+  token: string;
+  allowedUserIds?: string[];
+}
+
 export interface WebhookConfig {
   enabled: boolean;
   port: number;
@@ -67,16 +72,25 @@ export interface WebhookConfig {
   hmacSecret?: string;
 }
 
+export interface GroupConfig {
+  activationMode: 'mention' | 'reply' | 'keyword' | 'always';
+  maxResponsesPerMinute: number;
+  tabPerGroup: boolean;
+  keywords?: string[];
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
   webhook?: WebhookConfig;
+  discord?: DiscordConfig;
   claudeCode: ClaudeCodeConfig;
   tabs: Record<string, TabConfig>;
   tabTemplates?: Record<string, TabTemplate>;
   memory: MemoryConfig;
   pipe: PipeConfig;
   voice?: VoiceConfig;
+  groups?: GroupConfig;
   deployment: 'local' | 'vps';
 }
 

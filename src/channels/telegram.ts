@@ -7,7 +7,7 @@ import { retryWithBackoff } from '../util/retry.js';
 import { getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
-import { inboundLimiter } from '../util/rate-limiter.js';
+import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 import { createSTTProvider, type STTProvider } from '../voice/stt.js';
 import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
@@ -34,6 +34,9 @@ export class TelegramChannel implements Channel {
   private messageHandler: InboundMessageHandler | null = null;
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
+  private botUserId: number | null = null;
+  private botUsername: string | null = null;
+  private mutedGroups = new Set<number>();
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -68,6 +71,16 @@ export class TelegramChannel implements Channel {
     }
 
     this.bot.startPolling();
+
+    // Cache bot identity for group mention detection
+    try {
+      const me = await this.bot.getMe();
+      this.botUserId = me.id;
+      this.botUsername = me.username ?? null;
+    } catch (err) {
+      logger.warn('Failed to fetch bot identity (group mentions may not work):', err);
+    }
+
     this.setupHandlers();
     logger.info('Telegram bot started (polling mode, cleared pending updates)');
   }
@@ -128,11 +141,49 @@ export class TelegramChannel implements Channel {
         await this.bot.sendMessage(chatId, "I'm receiving too many messages right now. Please wait a moment.");
         return;
       }
-      if (msg.chat.type === 'private') {
+
+      const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+
+      // Only add to activeChatIds for private chats
+      if (!isGroup) {
         this.activeChatIds.add(chatId);
       }
+
       // Extract text (from text, caption, etc.)
-      const text = msg.text?.trim() || msg.caption?.trim() || '';
+      let text = msg.text?.trim() || msg.caption?.trim() || '';
+
+      // ─── Group activation logic ───
+      if (isGroup) {
+        // Check muted status
+        if (this.mutedGroups.has(chatId)) return;
+
+        const groupConfig = this.ctx.config.groups || { activationMode: 'mention' as const, maxResponsesPerMinute: 3, tabPerGroup: true };
+
+        const isMentioned = this.botUsername ? text.includes(`@${this.botUsername}`) : false;
+        const isReplyToBot = msg.reply_to_message?.from?.id === this.botUserId;
+
+        let shouldActivate = false;
+        switch (groupConfig.activationMode) {
+          case 'mention': shouldActivate = !!isMentioned; break;
+          case 'reply': shouldActivate = !!isReplyToBot; break;
+          case 'keyword': shouldActivate = groupConfig.keywords?.some(kw => text.toLowerCase().includes(kw.toLowerCase())) ?? false; break;
+          case 'always': shouldActivate = true; break;
+        }
+
+        if (!shouldActivate) return;
+
+        // Group rate limiting
+        const groupKey = `group:${chatId}`;
+        if (!groupLimiter.check(groupKey)) {
+          // Silently ignore — don't spam the group with rate limit messages
+          return;
+        }
+
+        // Clean mention from text
+        if (isMentioned && this.botUsername) {
+          text = text.replace(new RegExp(`@${this.botUsername}`, 'gi'), '').trim();
+        }
+      }
 
       // Download media if present
       const media: MediaAttachment[] = [];
@@ -190,7 +241,7 @@ export class TelegramChannel implements Channel {
       try {
         // Commands bypass debouncing (only if pure text, no media)
         if (text.startsWith('/') && media.length === 0) {
-          await this.handleCommand(chatId, text, msg.from?.id, msg.message_id);
+          await this.handleCommand(chatId, text, msg.from?.id, msg.message_id, isGroup);
           return;
         }
 
@@ -200,7 +251,7 @@ export class TelegramChannel implements Channel {
         });
         logger.info(`[telegram] Message received from ${msg.from?.id}, sending typing`);
 
-        await this.handleMessage(chatId, text, msg.message_id, media);
+        await this.handleMessage(chatId, text, msg.message_id, media, isGroup);
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
         await this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.');
@@ -208,7 +259,18 @@ export class TelegramChannel implements Channel {
     });
   }
 
-  private async handleCommand(chatId: number, text: string, userId: number | undefined, messageId: number): Promise<void> {
+  private async handleCommand(chatId: number, text: string, userId: number | undefined, messageId: number, isGroup = false): Promise<void> {
+    if (text === '/mute' && isGroup) {
+      this.mutedGroups.add(chatId);
+      await this.bot.sendMessage(chatId, 'Beecork muted in this group. Use /unmute to re-enable.');
+      return;
+    }
+    if (text === '/unmute' && isGroup) {
+      this.mutedGroups.delete(chatId);
+      await this.bot.sendMessage(chatId, 'Beecork unmuted in this group.');
+      return;
+    }
+
     if (text === '/tabs' || text.startsWith('/tabs@')) {
       const tabs = this.ctx.tabManager.listTabs();
       const formatted = formatTabStatus(tabs);
@@ -261,9 +323,17 @@ export class TelegramChannel implements Channel {
     await this.handleMessage(chatId, text, messageId);
   }
 
-  private async handleMessage(chatId: number, text: string, messageId: number, media: MediaAttachment[] = []): Promise<void> {
-    const { tabName, prompt: rawPrompt } = parseTabMessage(text);
+  private async handleMessage(chatId: number, text: string, messageId: number, media: MediaAttachment[] = [], isGroup = false): Promise<void> {
+    let { tabName, prompt: rawPrompt } = parseTabMessage(text);
     if (!rawPrompt && media.length === 0) return;
+
+    // Group tab routing: use a dedicated tab per group unless /tab is explicit
+    if (isGroup) {
+      const groupConfig = this.ctx.config.groups || { activationMode: 'mention' as const, maxResponsesPerMinute: 3, tabPerGroup: true };
+      if (groupConfig.tabPerGroup && !text.startsWith('/tab ')) {
+        tabName = `group-tg-${Math.abs(chatId)}`;
+      }
+    }
 
     // Build prompt with media references
     let prompt = rawPrompt;

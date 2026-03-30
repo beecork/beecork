@@ -47,3 +47,6 @@ export class RateLimiter {
 
 /** Shared singleton rate limiter for inbound messages */
 export const inboundLimiter = new RateLimiter(60, 30);
+
+/** Rate limiter for group responses */
+export const groupLimiter = new RateLimiter(10, 3, 60000); // 10 global, 3 per group per minute

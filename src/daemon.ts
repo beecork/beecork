@@ -97,6 +97,11 @@ async function main(): Promise<void> {
     channelRegistry.register(new WebhookChannel(channelCtx));
   }
 
+  if ((config as any).discord?.token) {
+    const { DiscordChannel } = await import('./channels/discord.js');
+    channelRegistry.register(new DiscordChannel(channelCtx));
+  }
+
   await channelRegistry.start();
 
   // Wire up broadcast notifications to all active channels
