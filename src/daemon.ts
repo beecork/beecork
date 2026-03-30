@@ -8,6 +8,7 @@ import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
 import { execSync } from 'node:child_process';
 import { logger } from './util/logger.js';
+import { cleanupMedia } from './media/store.js';
 import { VERSION } from './version.js';
 
 let tabManager: TabManager;
@@ -104,10 +105,16 @@ async function main(): Promise<void> {
   cronScheduler.loadAndSchedule();
 
   // 9. Start IPC polling
+  let lastMediaCleanup = 0;
   pollInterval = setInterval(() => {
     try {
       cronScheduler.checkForReload();
       tabManager.processPendingMessages();
+      // Media cleanup every 60 seconds
+      if (Date.now() - lastMediaCleanup > 60000) {
+        lastMediaCleanup = Date.now();
+        cleanupMedia();
+      }
     } catch (err) {
       logger.error('Poll error:', err);
     }

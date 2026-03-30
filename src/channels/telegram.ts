@@ -6,7 +6,8 @@ import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
-import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
+import { saveMedia, isOversized } from '../media/store.js';
+import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 /** Format tab status for Telegram display */
 export function formatTabStatus(tabs: Array<{ name: string; status: string; lastActivityAt: string }>): string {
@@ -22,7 +23,7 @@ export class TelegramChannel implements Channel {
   readonly name = 'Telegram';
   readonly maxMessageLength = 4096;
   readonly supportsStreaming = true;
-  readonly supportsMedia = false;
+  readonly supportsMedia = true;
 
   private bot: TelegramBot;
   private ctx: ChannelContext;
@@ -111,12 +112,51 @@ export class TelegramChannel implements Channel {
       if (msg.chat.type === 'private') {
         this.activeChatIds.add(chatId);
       }
-      const text = msg.text?.trim();
-      if (!text) return;
+      // Extract text (from text, caption, etc.)
+      const text = msg.text?.trim() || msg.caption?.trim() || '';
+
+      // Download media if present
+      const media: MediaAttachment[] = [];
+      if (msg.photo) {
+        // Get largest photo
+        const photo = msg.photo[msg.photo.length - 1];
+        try {
+          const filePath = await this.downloadTelegramFile(photo.file_id, 'jpg');
+          if (filePath) media.push({ type: 'image', mimeType: 'image/jpeg', filePath, fileName: `photo-${photo.file_id}.jpg` });
+        } catch (err) { logger.warn('Failed to download photo:', err); }
+      }
+      if (msg.voice) {
+        try {
+          const filePath = await this.downloadTelegramFile(msg.voice.file_id, 'ogg');
+          if (filePath) media.push({ type: 'voice', mimeType: 'audio/ogg', filePath, duration: msg.voice.duration });
+        } catch (err) { logger.warn('Failed to download voice:', err); }
+      }
+      if (msg.audio) {
+        try {
+          const filePath = await this.downloadTelegramFile(msg.audio.file_id, 'mp3');
+          if (filePath) media.push({ type: 'audio', mimeType: msg.audio.mime_type || 'audio/mpeg', filePath, fileName: msg.audio.title, duration: msg.audio.duration });
+        } catch (err) { logger.warn('Failed to download audio:', err); }
+      }
+      if (msg.document) {
+        try {
+          const ext = msg.document.file_name?.split('.').pop() || 'bin';
+          const filePath = await this.downloadTelegramFile(msg.document.file_id, ext);
+          if (filePath) media.push({ type: 'document', mimeType: msg.document.mime_type || 'application/octet-stream', filePath, fileName: msg.document.file_name });
+        } catch (err) { logger.warn('Failed to download document:', err); }
+      }
+      if (msg.video) {
+        try {
+          const filePath = await this.downloadTelegramFile(msg.video.file_id, 'mp4');
+          if (filePath) media.push({ type: 'video', mimeType: msg.video.mime_type || 'video/mp4', filePath, duration: msg.video.duration });
+        } catch (err) { logger.warn('Failed to download video:', err); }
+      }
+
+      // Skip if no text AND no media
+      if (!text && media.length === 0) return;
 
       try {
-        // Commands bypass debouncing
-        if (text.startsWith('/')) {
+        // Commands bypass debouncing (only if pure text, no media)
+        if (text.startsWith('/') && media.length === 0) {
           await this.handleCommand(chatId, text, msg.from?.id, msg.message_id);
           return;
         }
@@ -127,7 +167,7 @@ export class TelegramChannel implements Channel {
         });
         logger.info(`[telegram] Message received from ${msg.from?.id}, sending typing`);
 
-        await this.handleMessage(chatId, text, msg.message_id);
+        await this.handleMessage(chatId, text, msg.message_id, media);
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
         await this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.');
@@ -175,9 +215,26 @@ export class TelegramChannel implements Channel {
     await this.handleMessage(chatId, text, messageId);
   }
 
-  private async handleMessage(chatId: number, text: string, messageId: number): Promise<void> {
-    const { tabName, prompt } = parseTabMessage(text);
-    if (!prompt) return;
+  private async handleMessage(chatId: number, text: string, messageId: number, media: MediaAttachment[] = []): Promise<void> {
+    const { tabName, prompt: rawPrompt } = parseTabMessage(text);
+    if (!rawPrompt && media.length === 0) return;
+
+    // Build prompt with media references
+    let prompt = rawPrompt;
+    if (media.length > 0) {
+      const mediaDescriptions = media.map(m => {
+        switch (m.type) {
+          case 'image': return `User sent an image: ${m.filePath}`;
+          case 'voice': return `User sent a voice message: ${m.filePath}`;
+          case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+          case 'video': return `User sent a video: ${m.filePath}`;
+          case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+          default: return `User sent a file: ${m.filePath}`;
+        }
+      });
+      const mediaText = mediaDescriptions.join('\n');
+      prompt = prompt ? `${mediaText}\n\n${prompt}` : mediaText;
+    }
 
     logger.info(`[telegram] Handling message for tab "${tabName}" (chat: ${chatId}, msg: ${messageId})`);
 
@@ -315,6 +372,24 @@ export class TelegramChannel implements Channel {
       fs.appendFileSync(failLog, entry);
       logger.error(`Delivery failed after retries for chat ${chatId}`);
     }
+  }
+
+  private async downloadTelegramFile(fileId: string, extension: string): Promise<string | null> {
+    const fileInfo = await this.bot.getFile(fileId);
+    if (!fileInfo.file_path) return null;
+
+    // Check file size (Telegram provides file_size in bytes)
+    if (fileInfo.file_size && isOversized(fileInfo.file_size)) {
+      logger.warn(`Skipping oversized file: ${fileInfo.file_size} bytes`);
+      return null;
+    }
+
+    const url = `https://api.telegram.org/file/bot${this.ctx.config.telegram.token}/${fileInfo.file_path}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    if (!response.ok) return null;
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return saveMedia(buffer, extension, fileInfo.file_path.split('/').pop());
   }
 
   private isAllowed(userId: number | undefined): boolean {

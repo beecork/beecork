@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import { logger } from '../util/logger.js';
+import { saveMedia, isOversized } from '../media/store.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { chunkText, parseTabMessage } from '../util/text.js';
-import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
+import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
 
@@ -11,7 +12,7 @@ export class WhatsAppChannel implements Channel {
   readonly name = 'WhatsApp';
   readonly maxMessageLength = WHATSAPP_MAX_LENGTH;
   readonly supportsStreaming = false;
-  readonly supportsMedia = false;
+  readonly supportsMedia = true;
 
   private sock: unknown = null;
   private ctx: ChannelContext;
@@ -28,7 +29,7 @@ export class WhatsAppChannel implements Channel {
 
   async start(): Promise<void> {
     try {
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import('@whiskeysockets/baileys');
+      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = await import('@whiskeysockets/baileys');
       const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
 
@@ -78,12 +79,78 @@ export class WhatsAppChannel implements Channel {
         if (!sender || !this.isAllowed(sender)) return;
 
         const text = msg.message.conversation ||
-          msg.message.extendedTextMessage?.text || '';
-        if (!text) return;
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          msg.message.videoMessage?.caption || '';
+
+        // Download media
+        const media: MediaAttachment[] = [];
+        if (msg.message.imageMessage) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+            if (buffer && !isOversized(buffer.length)) {
+              const filePath = saveMedia(buffer as Buffer, 'jpg');
+              media.push({ type: 'image', mimeType: msg.message.imageMessage.mimetype || 'image/jpeg', filePath });
+            }
+          } catch (err) { logger.warn('Failed to download WhatsApp image:', err); }
+        }
+        if (msg.message.audioMessage) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+            if (buffer && !isOversized(buffer.length)) {
+              const ext = msg.message.audioMessage.ptt ? 'ogg' : 'mp3';
+              const filePath = saveMedia(buffer as Buffer, ext);
+              media.push({
+                type: msg.message.audioMessage.ptt ? 'voice' : 'audio',
+                mimeType: msg.message.audioMessage.mimetype || 'audio/ogg',
+                filePath,
+                duration: msg.message.audioMessage.seconds ?? undefined,
+              });
+            }
+          } catch (err) { logger.warn('Failed to download WhatsApp audio:', err); }
+        }
+        if (msg.message.documentMessage) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+            if (buffer && !isOversized(buffer.length)) {
+              const ext = msg.message.documentMessage.fileName?.split('.').pop() || 'bin';
+              const filePath = saveMedia(buffer as Buffer, ext, msg.message.documentMessage.fileName ?? undefined);
+              media.push({ type: 'document', mimeType: msg.message.documentMessage.mimetype || 'application/octet-stream', filePath, fileName: msg.message.documentMessage.fileName ?? undefined });
+            }
+          } catch (err) { logger.warn('Failed to download WhatsApp document:', err); }
+        }
+        if (msg.message.videoMessage) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+            if (buffer && !isOversized(buffer.length)) {
+              const filePath = saveMedia(buffer as Buffer, 'mp4');
+              media.push({ type: 'video', mimeType: msg.message.videoMessage.mimetype || 'video/mp4', filePath, duration: msg.message.videoMessage.seconds ?? undefined });
+            }
+          } catch (err) { logger.warn('Failed to download WhatsApp video:', err); }
+        }
+
+        if (!text && media.length === 0) return;
 
         try {
-          const { tabName, prompt } = parseTabMessage(text);
-          if (!prompt) return;
+          const { tabName, prompt: rawPrompt } = parseTabMessage(text);
+          if (!rawPrompt && media.length === 0) return;
+
+          // Build prompt with media references
+          let prompt = rawPrompt;
+          if (media.length > 0) {
+            const mediaDescriptions = media.map(m => {
+              switch (m.type) {
+                case 'image': return `User sent an image: ${m.filePath}`;
+                case 'voice': return `User sent a voice message: ${m.filePath}`;
+                case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+                case 'video': return `User sent a video: ${m.filePath}`;
+                case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+                default: return `User sent a file: ${m.filePath}`;
+              }
+            });
+            const mediaText = mediaDescriptions.join('\n');
+            prompt = prompt ? `${mediaText}\n\n${prompt}` : mediaText;
+          }
 
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 

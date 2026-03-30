@@ -168,6 +168,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'beecork_send_media',
+      description: 'Send a media file (image, document, etc.) to the user via the active channel. The file must exist on disk.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          filePath: { type: 'string', description: 'Absolute path to the file to send' },
+          caption: { type: 'string', description: 'Optional caption for the media' },
+          tabName: { type: 'string', description: 'Tab name to determine which channel/peer to send to (optional, defaults to current)' },
+        },
+        required: ['filePath'],
+      },
+    },
+    {
       name: 'beecork_channels',
       description: 'List active channels and their capabilities',
       inputSchema: { type: 'object' as const, properties: {} },
@@ -339,15 +352,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
       }
 
+      case 'beecork_send_media': {
+        const { filePath, caption, tabName } = args as { filePath: string; caption?: string; tabName?: string };
+        if (!fs.existsSync(filePath)) {
+          return { content: [{ type: 'text' as const, text: `File not found: ${filePath}` }], isError: true };
+        }
+        // Store as pending message with media flag
+        const tab = tabName || 'default';
+        db.prepare(
+          'INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)'
+        ).run(tab, JSON.stringify({ type: 'media', filePath, caption }), 'media');
+        return { content: [{ type: 'text' as const, text: `Media queued for sending: ${filePath}` }] };
+      }
+
       case 'beecork_channels': {
         // Read channel info from config to show configured channels
         const config = getConfig();
         const channels = [];
         if (config.telegram?.token) {
-          channels.push({ id: 'telegram', name: 'Telegram', streaming: true, media: false });
+          channels.push({ id: 'telegram', name: 'Telegram', streaming: true, media: true });
         }
         if (config.whatsapp?.enabled) {
-          channels.push({ id: 'whatsapp', name: 'WhatsApp', streaming: false, media: false });
+          channels.push({ id: 'whatsapp', name: 'WhatsApp', streaming: false, media: true });
         }
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],
