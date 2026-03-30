@@ -9,6 +9,7 @@ import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
 import { execSync } from 'node:child_process';
 import { logger } from './util/logger.js';
 import { cleanupMedia } from './media/store.js';
+import { createNotificationProvider, type NotificationProvider } from './notifications/index.js';
 import { VERSION } from './version.js';
 
 let tabManager: TabManager;
@@ -17,10 +18,14 @@ let cronScheduler: CronScheduler;
 let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
 let shutdownFn: (() => Promise<void>) | null = null;
+const notificationProviders: NotificationProvider[] = [];
 
-/** Broadcast notifications to all active channels */
+/** Broadcast notifications to all active channels and notification providers */
 async function broadcastNotify(text: string): Promise<void> {
-  await channelRegistry.broadcastNotify(text);
+  await Promise.all([
+    channelRegistry.broadcastNotify(text),
+    ...notificationProviders.map(p => p.send(text).catch(err => logger.warn(`${p.name} notification failed:`, err))),
+  ]);
 }
 
 async function main(): Promise<void> {
@@ -103,6 +108,17 @@ async function main(): Promise<void> {
   }
 
   await channelRegistry.start();
+
+  // Initialize notification providers
+  if (config.notifications) {
+    for (const notifConfig of config.notifications) {
+      const provider = createNotificationProvider(notifConfig);
+      if (provider) {
+        notificationProviders.push(provider);
+        logger.info(`Notification provider registered: ${provider.name}`);
+      }
+    }
+  }
 
   // Wire up broadcast notifications to all active channels
   tabManager.setNotifyCallback(broadcastNotify);

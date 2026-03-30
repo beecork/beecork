@@ -109,6 +109,29 @@ const MIGRATIONS: Migration[] = [
     description: 'Add system_prompt column to tabs',
     up: "ALTER TABLE tabs ADD COLUMN system_prompt TEXT DEFAULT NULL",
   },
+  {
+    version: 9,
+    description: 'Add users table',
+    up: `CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      budget_usd REAL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
+  {
+    version: 10,
+    description: 'Add identities table for cross-channel identity',
+    up: `CREATE TABLE IF NOT EXISTS identities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      channel_id TEXT NOT NULL,
+      peer_id TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(channel_id, peer_id)
+    )`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { platform } from 'node:os';
 import { VERSION } from './version.js';
 import { setupWizard } from './cli/setup.js';
 import {
@@ -85,6 +86,40 @@ program
   .command('send <message>')
   .description('Send a message to the default tab (for testing)')
   .action(sendMessage);
+
+program
+  .command('quickstart')
+  .description('Print a getting-started checklist')
+  .action(() => {
+    const os = platform();
+    console.log(`
+Beecork Quickstart
+==================
+
+1. Install Claude Code (if not installed):
+   npm install -g @anthropic-ai/claude-code
+
+2. Run the setup wizard:
+   beecork setup
+
+3. Start the daemon:
+   beecork start
+
+4. Send a message on Telegram to your bot
+
+5. Check status:
+   beecork status
+
+Useful commands:
+  beecork tabs      \u2014 List active tabs
+  beecork logs      \u2014 View daemon logs
+  beecork doctor    \u2014 Run diagnostics
+  beecork dashboard \u2014 Open web dashboard
+  beecork cron list \u2014 View scheduled tasks
+
+${os === 'darwin' ? 'On macOS: beecork runs as a launchd service.\n  Check: launchctl list | grep beecork' : ''}${os === 'linux' ? 'On Linux: beecork runs as a systemd service.\n  Check: systemctl --user status beecork' : ''}
+    `);
+  });
 
 program
   .command('update')

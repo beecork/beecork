@@ -79,6 +79,19 @@ export interface GroupConfig {
   keywords?: string[];
 }
 
+export interface NotificationConfig {
+  type: 'pushover' | 'ntfy' | 'webhook';
+  // Pushover
+  userKey?: string;
+  appToken?: string;
+  // ntfy
+  topic?: string;
+  server?: string;
+  // Webhook
+  url?: string;
+  headers?: Record<string, string>;
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
@@ -91,6 +104,7 @@ export interface BeecorkConfig {
   pipe: PipeConfig;
   voice?: VoiceConfig;
   groups?: GroupConfig;
+  notifications?: NotificationConfig[];
   deployment: 'local' | 'vps';
 }
 

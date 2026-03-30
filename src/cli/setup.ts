@@ -33,15 +33,54 @@ export async function setupWizard(): Promise<void> {
   console.log('This wizard will configure Beecork to make Claude Code always-on.\n');
 
   try {
-    // 1. Telegram token
-    const token = await ask(rl, 'Telegram Bot token (from @BotFather)');
-    if (!token) {
-      console.log('Telegram token is required. Get one from @BotFather on Telegram.');
-      return;
+    // 0. Auto-detect Claude Code
+    console.log('Checking prerequisites...\n');
+    try {
+      const version = execSync('claude --version 2>&1', { encoding: 'utf-8' }).trim();
+      console.log(`  \u2713 Claude Code found: ${version}`);
+    } catch {
+      console.log('  \u2717 Claude Code not found. Install: npm install -g @anthropic-ai/claude-code');
+    }
+    console.log('');
+
+    // 1. Telegram token with step-by-step instructions
+    console.log('Step 1: Create a Telegram Bot');
+    console.log('  1. Open Telegram and search for @BotFather');
+    console.log('  2. Send /newbot');
+    console.log('  3. Choose a name (e.g., "My Beecork")');
+    console.log('  4. Choose a username (must end in "bot", e.g., "mybeecork_bot")');
+    console.log('  5. Copy the token BotFather gives you\n');
+
+    let token = '';
+    while (!token) {
+      token = await ask(rl, 'Paste your Telegram Bot token');
+      if (!token) {
+        console.log('Telegram token is required. Get one from @BotFather on Telegram.');
+        continue;
+      }
+
+      // Validate token by calling getMe
+      try {
+        const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const data = await resp.json() as { result: { username: string } };
+          console.log(`  \u2713 Connected to bot: @${data.result.username}\n`);
+        } else {
+          console.log('  \u2717 Invalid token. Please check and try again.\n');
+          token = '';
+        }
+      } catch {
+        console.log('  \u26A0 Could not verify token (network error). Continuing anyway.\n');
+      }
     }
 
     // 2. Telegram user ID
-    const userIdStr = await ask(rl, 'Your Telegram user ID (send /start to @userinfobot)');
+    console.log('Step 2: Find your Telegram User ID');
+    console.log('  1. Search for @userinfobot on Telegram');
+    console.log('  2. Send it any message');
+    console.log('  3. It will reply with your user ID (a number like 123456789)\n');
+
+    const userIdStr = await ask(rl, 'Your Telegram user ID');
     const userId = parseInt(userIdStr, 10);
     if (isNaN(userId)) {
       console.log('Invalid user ID. Must be a number.');
@@ -147,9 +186,9 @@ export async function setupWizard(): Promise<void> {
     }
 
     console.log('\n✅ Setup complete!\n');
-    console.log('Next steps:');
-    console.log('  beecork start     — Start the daemon');
-    console.log('  Send a message to your Telegram bot to test\n');
+    console.log('  Start the daemon: beecork start');
+    console.log('  Then send a message to your Telegram bot to test.\n');
+    console.log('  Run "beecork quickstart" for a full getting-started checklist.\n');
 
   } finally {
     rl.close();

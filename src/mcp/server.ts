@@ -157,6 +157,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           message: { type: 'string', description: 'The notification message to send' },
           urgent: { type: 'boolean', description: 'If true, sends with higher priority (default: false)' },
+          provider: { type: 'string', description: 'Optional: send via specific provider (pushover, ntfy, webhook-notify). Omit to broadcast to all.' },
         },
         required: ['message'],
       },

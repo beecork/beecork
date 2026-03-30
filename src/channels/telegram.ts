@@ -37,6 +37,7 @@ export class TelegramChannel implements Channel {
   private botUserId: number | null = null;
   private botUsername: string | null = null;
   private mutedGroups = new Set<number>();
+  private welcomeSent = new Set<number>();
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -143,6 +144,31 @@ export class TelegramChannel implements Channel {
       }
 
       const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+
+      // First-run welcome message (once per user)
+      if (msg.chat.type === 'private' && !this.welcomeSent.has(chatId)) {
+        const db = (await import('../db/index.js')).getDb();
+        const hasMessages = db.prepare('SELECT COUNT(*) as c FROM messages').get() as { c: number };
+        if (hasMessages.c === 0) {
+          this.welcomeSent.add(chatId);
+          const welcomeText = msg.text?.trim() || '';
+          await this.bot.sendMessage(chatId, [
+            '\uD83D\uDC4B Welcome to Beecork!\n',
+            'Send any message and I\'ll pass it to Claude Code.',
+            '',
+            'Quick tips:',
+            '\u2022 `/tab name message` \u2014 organize work into tabs',
+            '\u2022 `/tabs` \u2014 see what\'s running',
+            '\u2022 `/stop name` \u2014 stop a tab',
+            '',
+            'Let\'s get started! Send me something.',
+          ].join('\n'));
+          // Don't return - let the actual message be processed too (unless it was just /start)
+          if (welcomeText === '/start') return;
+        } else {
+          this.welcomeSent.add(chatId);
+        }
+      }
 
       // Only add to activeChatIds for private chats
       if (!isGroup) {
@@ -316,6 +342,55 @@ export class TelegramChannel implements Channel {
         return;
       }
       await this.handleMessage(chatId, text, messageId);
+      return;
+    }
+
+    if (text === '/register' || text.startsWith('/register ')) {
+      const { resolveUser, registerUser, hasAdmin } = await import('../users/index.js');
+      const existing = resolveUser('telegram', String(userId));
+      if (existing) {
+        await this.bot.sendMessage(chatId, `You're already registered as "${existing.name}" (${existing.role}).`);
+        return;
+      }
+      // First user becomes admin, rest need approval
+      const name = text.slice(10).trim() || `user-${userId}`;
+      const role = hasAdmin() ? 'user' : 'admin';
+      const user = registerUser(name, 'telegram', String(userId), role);
+      await this.bot.sendMessage(chatId, `Registered as "${user.name}" (${user.role}).${role === 'admin' ? ' You are the admin.' : ''}`);
+      return;
+    }
+
+    if (text.startsWith('/link ')) {
+      // /link discord:123456789
+      const { resolveUser, linkIdentity } = await import('../users/index.js');
+      const user = resolveUser('telegram', String(userId));
+      if (!user) {
+        await this.bot.sendMessage(chatId, 'Register first: /register');
+        return;
+      }
+      const parts = text.slice(6).trim().split(':');
+      if (parts.length !== 2) {
+        await this.bot.sendMessage(chatId, 'Usage: /link channel:peerId (e.g., /link discord:123456789)');
+        return;
+      }
+      const success = linkIdentity(user.id, parts[0], parts[1]);
+      await this.bot.sendMessage(chatId, success ? `Linked ${parts[0]} identity.` : 'Failed to link — already linked or invalid.');
+      return;
+    }
+
+    if (text === '/users') {
+      if (!this.isAdmin(userId)) {
+        await this.bot.sendMessage(chatId, 'Admin only.');
+        return;
+      }
+      const { listUsers } = await import('../users/index.js');
+      const users = listUsers();
+      if (users.length === 0) {
+        await this.bot.sendMessage(chatId, 'No registered users.');
+        return;
+      }
+      const list = users.map(u => `• ${u.name} [${u.role}] — ${u.id.slice(0, 8)}`).join('\n');
+      await this.bot.sendMessage(chatId, `${users.length} user(s):\n${list}`);
       return;
     }
 
