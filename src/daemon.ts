@@ -150,6 +150,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // Initialize media generators
+  try {
+    const { initMediaGenerators } = await import('./media/index.js');
+    const generators = initMediaGenerators((config as any).mediaGenerators);
+    if (generators.length > 0) {
+      logger.info(`${generators.length} media generator(s) initialized`);
+    }
+  } catch (err) {
+    logger.warn('Media generator init failed:', err);
+  }
+
   // Wire up broadcast notifications to all active channels
   tabManager.setNotifyCallback(broadcastNotify);
   if (pipeBrain) {

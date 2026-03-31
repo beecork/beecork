@@ -92,6 +92,13 @@ export interface NotificationConfig {
   headers?: Record<string, string>;
 }
 
+export interface MediaGeneratorConfig {
+  provider: string;
+  apiKey?: string;
+  model?: string;
+  style?: string;
+}
+
 export interface BeecorkConfig {
   telegram: TelegramConfig;
   whatsapp?: WhatsAppConfig;
@@ -105,6 +112,7 @@ export interface BeecorkConfig {
   voice?: VoiceConfig;
   groups?: GroupConfig;
   notifications?: NotificationConfig[];
+  mediaGenerators?: MediaGeneratorConfig[];
   deployment: 'local' | 'vps';
 }
 

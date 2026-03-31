@@ -380,4 +380,30 @@ program
     console.log('');
   });
 
+const mediaCmd = program
+  .command('media')
+  .description('Configure media generation providers (image, video, audio)');
+
+mediaCmd
+  .command('setup')
+  .description('Interactive media provider setup')
+  .action(async () => {
+    const { mediaSetup } = await import('./cli/media.js');
+    await mediaSetup();
+  });
+
+mediaCmd
+  .command('list')
+  .description('List configured media providers')
+  .action(async () => {
+    const { mediaList } = await import('./cli/media.js');
+    mediaList();
+  });
+
+// Also make `beecork media` (no subcommand) run setup
+mediaCmd.action(async () => {
+  const { mediaSetup } = await import('./cli/media.js');
+  await mediaSetup();
+});
+
 program.parse();

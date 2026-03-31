@@ -238,6 +238,54 @@ export async function setupWizard(): Promise<void> {
       if (!webhookToken) console.log(`  Auth token: ${whToken}\n`);
     }
 
+    // Optional: Media generation
+    console.log('\nOptional: Media Generation\n');
+    console.log('Beecork can generate images, videos, and music using AI providers.');
+    console.log('You can add these later with: beecork media\n');
+
+    const addMedia = await ask(rl, 'Set up media generation? (y/n)', 'n');
+    if (addMedia.toLowerCase() === 'y') {
+      const mediaGenerators: Array<{ provider: string; apiKey: string; model?: string }> = [];
+
+      console.log('\nImage: 1) DALL-E (OpenAI)  2) Stable Diffusion');
+      const imgChoice = await ask(rl, 'Choose image provider (1/2 or Enter to skip)');
+      if (imgChoice === '1') {
+        const key = await ask(rl, '  OpenAI API key');
+        if (key) mediaGenerators.push({ provider: 'dall-e', apiKey: key });
+      } else if (imgChoice === '2') {
+        const key = await ask(rl, '  Stability AI API key');
+        if (key) mediaGenerators.push({ provider: 'stable-diffusion', apiKey: key });
+      }
+
+      console.log('\nVideo: 1) Runway  2) Veo  3) Kling');
+      const vidChoice = await ask(rl, 'Choose video provider (1/2/3 or Enter to skip)');
+      if (vidChoice === '1') {
+        const key = await ask(rl, '  Runway API key');
+        if (key) mediaGenerators.push({ provider: 'runway', apiKey: key });
+      } else if (vidChoice === '2') {
+        const key = await ask(rl, '  Google AI API key');
+        if (key) mediaGenerators.push({ provider: 'veo', apiKey: key });
+      } else if (vidChoice === '3') {
+        const key = await ask(rl, '  Kling API key');
+        if (key) mediaGenerators.push({ provider: 'kling', apiKey: key });
+      }
+
+      console.log('\nAudio: 1) Suno (music)  2) ElevenLabs (sound effects)');
+      const audChoice = await ask(rl, 'Choose audio provider (1/2 or Enter to skip)');
+      if (audChoice === '1') {
+        const key = await ask(rl, '  Suno API key');
+        if (key) mediaGenerators.push({ provider: 'suno', apiKey: key });
+      } else if (audChoice === '2') {
+        const key = await ask(rl, '  ElevenLabs API key');
+        if (key) mediaGenerators.push({ provider: 'elevenlabs-sfx', apiKey: key });
+      }
+
+      if (mediaGenerators.length > 0) {
+        (config as any).mediaGenerators = mediaGenerators;
+        console.log(`\n  ✓ ${mediaGenerators.length} media provider(s) configured`);
+      }
+    }
+
     console.log('You can add or change channels later with:');
     console.log('  beecork discord    — add/reconfigure Discord');
     console.log('  beecork whatsapp   — add/reconfigure WhatsApp');

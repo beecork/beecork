@@ -181,6 +181,19 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
+      if (path === '/api/media/config') {
+        const { getConfig } = await import('../config.js');
+        const config = getConfig();
+        const generators = (config as any).mediaGenerators || [];
+        const info = generators.map((g: any) => ({
+          provider: g.provider,
+          model: g.model,
+          configured: !!g.apiKey,
+        }));
+        json(res, { generators: info });
+        return;
+      }
+
       if (path === '/api/channels/config') {
         const { getConfig } = await import('../config.js');
         const config = getConfig();

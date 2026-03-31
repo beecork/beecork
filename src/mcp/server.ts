@@ -295,6 +295,51 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['tabName'],
       },
     },
+    {
+      name: 'beecork_generate_image',
+      description: 'Generate an image from a text prompt using the configured image provider (DALL-E, Stable Diffusion, etc.)',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          prompt: { type: 'string', description: 'Image description' },
+          style: { type: 'string', description: 'Optional style (e.g., "hd", "vivid", "natural")' },
+          provider: { type: 'string', description: 'Optional: specific provider to use' },
+        },
+        required: ['prompt'],
+      },
+    },
+    {
+      name: 'beecork_generate_video',
+      description: 'Generate a video from a text prompt using the configured video provider (Runway, Veo, Kling)',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          prompt: { type: 'string', description: 'Video description' },
+          duration: { type: 'number', description: 'Duration in seconds (default 5)' },
+          provider: { type: 'string', description: 'Optional: specific provider' },
+        },
+        required: ['prompt'],
+      },
+    },
+    {
+      name: 'beecork_generate_audio',
+      description: 'Generate audio (music or sound effects) from a text prompt',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          prompt: { type: 'string', description: 'Audio description' },
+          type: { type: 'string', enum: ['music', 'sfx'], description: 'Music or sound effect' },
+          style: { type: 'string', description: 'Optional: music genre or style' },
+          provider: { type: 'string', description: 'Optional: specific provider' },
+        },
+        required: ['prompt'],
+      },
+    },
+    {
+      name: 'beecork_media_providers',
+      description: 'List configured media generation providers and their capabilities',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
   ],
 }));
 
@@ -624,6 +669,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { closeTab } = await import('../projects/index.js');
         const closed = closeTab(tabName);
         return closed ? ok(`Tab "${tabName}" permanently closed.`) : fail(`Tab "${tabName}" not found.`);
+      }
+
+      case 'beecork_generate_image': {
+        const { prompt, style, provider } = args as { prompt: string; style?: string; provider?: string };
+        if (!prompt) return fail('Prompt is required.');
+        const config = getConfig();
+        const { initMediaGenerators } = await import('../media/index.js');
+        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const gen = provider
+          ? generators.find(g => g.id === provider && g.supportedTypes.includes('image'))
+          : generators.find(g => g.supportedTypes.includes('image'));
+        if (!gen) return fail('No image generation provider configured. Add a mediaGenerators entry to config.');
+        const result = await gen.generate('image', prompt, { style });
+        // Queue the generated media for sending
+        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated image: ${prompt.slice(0, 100)}` }), 'media'
+        );
+        return ok(`Image generated: ${result.filePath} (${result.mimeType})`);
+      }
+
+      case 'beecork_generate_video': {
+        const { prompt, duration, provider } = args as { prompt: string; duration?: number; provider?: string };
+        if (!prompt) return fail('Prompt is required.');
+        const config = getConfig();
+        const { initMediaGenerators } = await import('../media/index.js');
+        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const gen = provider
+          ? generators.find(g => g.id === provider && g.supportedTypes.includes('video'))
+          : generators.find(g => g.supportedTypes.includes('video'));
+        if (!gen) return fail('No video generation provider configured. Add a mediaGenerators entry to config.');
+        const result = await gen.generate('video', prompt, { duration });
+        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated video: ${prompt.slice(0, 100)}` }), 'media'
+        );
+        return ok(`Video generated: ${result.filePath} (${result.mimeType}, ${result.durationMs ? result.durationMs / 1000 + 's' : 'unknown duration'})`);
+      }
+
+      case 'beecork_generate_audio': {
+        const { prompt, type: audioType, style, provider } = args as { prompt: string; type?: string; style?: string; provider?: string };
+        if (!prompt) return fail('Prompt is required.');
+        const mediaType = audioType === 'music' ? 'music' as const : 'audio' as const;
+        const config = getConfig();
+        const { initMediaGenerators } = await import('../media/index.js');
+        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const gen = provider
+          ? generators.find(g => g.id === provider && g.supportedTypes.includes(mediaType))
+          : generators.find(g => g.supportedTypes.includes(mediaType));
+        if (!gen) return fail(`No ${mediaType} generation provider configured. Add a mediaGenerators entry to config.`);
+        const result = await gen.generate(mediaType, prompt, { style });
+        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated ${mediaType}: ${prompt.slice(0, 100)}` }), 'media'
+        );
+        return ok(`Audio generated: ${result.filePath} (${result.mimeType})`);
+      }
+
+      case 'beecork_media_providers': {
+        const config = getConfig();
+        const { initMediaGenerators } = await import('../media/index.js');
+        const generators = initMediaGenerators((config as any).mediaGenerators);
+        if (generators.length === 0) {
+          return ok('No media generators configured. Add mediaGenerators to config.json.');
+        }
+        const lines = generators.map(g => `- ${g.name} (${g.id}): ${g.supportedTypes.join(', ')}`);
+        return ok(lines.join('\n'));
       }
 
       default:
