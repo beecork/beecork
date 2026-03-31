@@ -1,6 +1,6 @@
 {
   "name": "beecork",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "description": "Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock",
   "type": "module",
   "bin": {
