@@ -1,16 +1,9 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { logger } from '../util/logger.js';
-import { parseTabMessage } from '../util/text.js';
 import { validateTabName } from '../config.js';
+import type { WebhookConfig } from '../types.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
-
-export interface WebhookConfig {
-  enabled: boolean;
-  port: number;
-  authToken?: string;
-  hmacSecret?: string;
-}
 
 export class WebhookChannel implements Channel {
   readonly id = 'webhook';
@@ -188,6 +181,6 @@ export class WebhookChannel implements Channel {
   }
 
   private getConfig(): WebhookConfig | undefined {
-    return (this.ctx.config as any).webhook;
+    return this.ctx.config.webhook;
   }
 }

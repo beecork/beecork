@@ -77,7 +77,14 @@ export function discoverProjects(scanPaths?: string[]): Project[] {
 /** Create a new project */
 export function createProject(name: string, parentDir?: string): Project {
   const parent = parentDir || getWorkspaceRoot();
-  const projectPath = path.join(parent, name);
+  // Sanitize name to prevent path traversal
+  const safeName = path.basename(name.replace(/\.\./g, ''));
+  if (!safeName) throw new Error('Invalid project name');
+  const projectPath = path.resolve(parent, safeName);
+  // Ensure resolved path is within the parent directory
+  if (!projectPath.startsWith(path.resolve(parent))) {
+    throw new Error('Project path must be within the parent directory');
+  }
 
   if (fs.existsSync(projectPath)) {
     // Folder already exists — just register it

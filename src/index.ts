@@ -26,8 +26,12 @@ program
 
 program
   .command('setup')
-  .description('First-time setup wizard')
-  .action(setupWizard);
+  .description('Set up Beecork')
+  .option('--quick', 'Quick setup: just Telegram, done in 60 seconds')
+  .option('--full', 'Full guided setup: all options')
+  .action(async (options: { quick?: boolean; full?: boolean }) => {
+    await setupWizard(options.full ? 'full' : options.quick ? 'quick' : 'quick');
+  });
 
 program
   .command('start')
@@ -431,5 +435,29 @@ mediaCmd.action(async () => {
   const { mediaSetup } = await import('./cli/media.js');
   await mediaSetup();
 });
+
+program
+  .command('enable <capability>')
+  .description('Enable a capability (email, calendar, github, notion, drive, web, database)')
+  .action(async (capability: string) => {
+    const { enableCapability } = await import('./cli/capabilities.js');
+    await enableCapability(capability);
+  });
+
+program
+  .command('disable <capability>')
+  .description('Disable a capability')
+  .action(async (capability: string) => {
+    const { disableCapability } = await import('./cli/capabilities.js');
+    await disableCapability(capability);
+  });
+
+program
+  .command('capabilities')
+  .description('List available and enabled capabilities')
+  .action(async () => {
+    const { listCapabilities } = await import('./cli/capabilities.js');
+    await listCapabilities();
+  });
 
 program.parse();

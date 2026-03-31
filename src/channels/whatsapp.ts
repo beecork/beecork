@@ -193,7 +193,7 @@ export class WhatsAppChannel implements Channel {
             const cmdResult = await handleSharedCommand({
               userId: waUserId,
               text,
-              isAdmin: false,
+              isAdmin: this.allowedNumbers.size > 0 && waUserId === [...this.allowedNumbers][0],
               channelId: 'whatsapp',
             }, this.ctx.tabManager);
             if (cmdResult.handled) {

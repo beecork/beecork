@@ -1,7 +1,6 @@
 import { logger } from '../util/logger.js';
 import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { validateTabName } from '../config.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { initVoiceProviders } from '../voice/index.js';
@@ -26,12 +25,12 @@ export class DiscordChannel implements Channel {
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
     this.allowedUserIds = new Set(
-      ((ctx.config as any).discord?.allowedUserIds ?? []).map(String)
+      (ctx.config.discord?.allowedUserIds ?? []).map(String)
     );
   }
 
   async start(): Promise<void> {
-    const discordConfig = (this.ctx.config as any).discord;
+    const discordConfig = this.ctx.config.discord;
     if (!discordConfig?.token) {
       logger.warn('No Discord token configured');
       return;
@@ -125,7 +124,7 @@ export class DiscordChannel implements Channel {
           const cmdResult = await handleSharedCommand({
             userId: message.author.id,
             text,
-            isAdmin: false, // Discord has no admin concept currently
+            isAdmin: this.allowedUserIds.size > 0 && message.author.id === [...this.allowedUserIds][0],
             channelId: 'discord',
           }, this.ctx.tabManager);
           if (cmdResult.handled) {

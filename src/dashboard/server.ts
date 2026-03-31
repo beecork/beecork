@@ -158,10 +158,12 @@ export function startDashboardServer(port = 0): void {
         try { parsedCron = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { name, scheduleType, schedule, tabName, message } = parsedCron;
         if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
+        const effectiveTab = tabName || 'default';
+        if (!validateTabName(effectiveTab)) { json(res, { error: 'Invalid tab name' }, 400); return; }
 
         const id = crypto.randomUUID();
         withWriteDb(db => db.prepare('INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
-          id, name, scheduleType || 'every', schedule, tabName || 'default', message
+          id, name, scheduleType || 'every', schedule, effectiveTab, message
         ));
         json(res, { success: true, id });
         return;
@@ -223,22 +225,24 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      if (path === '/api/computer-use') {
-        const { getConfig } = await import('../config.js');
-        const config = getConfig();
-        json(res, { enabled: !!config.claudeCode.computerUse });
-        return;
-      }
-
       if (path === '/api/computer-use' && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) body += chunk;
-        const { enabled } = JSON.parse(body);
+        let parsedCU: any;
+        try { parsedCU = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { enabled } = parsedCU;
         const { getConfig, saveConfig } = await import('../config.js');
         const config = getConfig();
         config.claudeCode.computerUse = !!enabled;
         saveConfig(config);
         json(res, { enabled: !!enabled, message: 'Restart daemon to apply.' });
+        return;
+      }
+
+      if (path === '/api/computer-use') {
+        const { getConfig } = await import('../config.js');
+        const config = getConfig();
+        json(res, { enabled: !!config.claudeCode.computerUse });
         return;
       }
 
@@ -321,6 +325,44 @@ export function startDashboardServer(port = 0): void {
           ORDER BY day
         `).all();
         json(res, costs);
+        return;
+      }
+
+      // GET /api/capabilities — list all packs + enabled status
+      if (path === '/api/capabilities') {
+        const { getAvailablePacks, isEnabled } = await import('../capabilities/index.js');
+        const packs = getAvailablePacks().map(p => ({
+          ...p,
+          enabled: isEnabled(p.id),
+          // Don't expose API keys in the response
+          mcpServer: { package: p.mcpServer.package },
+        }));
+        json(res, { packs });
+        return;
+      }
+
+      // POST /api/capabilities/:id/enable — enable a pack
+      if (path.match(/^\/api\/capabilities\/[^/]+\/enable$/) && req.method === 'POST') {
+        const packId = path.split('/')[3];
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { apiKey } = JSON.parse(body);
+        const { enablePack } = await import('../capabilities/index.js');
+        try {
+          enablePack(packId, apiKey);
+          json(res, { success: true, message: 'Restart daemon to activate.' });
+        } catch (err: any) {
+          json(res, { error: err.message }, 400);
+        }
+        return;
+      }
+
+      // POST /api/capabilities/:id/disable — disable a pack
+      if (path.match(/^\/api\/capabilities\/[^/]+\/disable$/) && req.method === 'POST') {
+        const packId = path.split('/')[3];
+        const { disablePack } = await import('../capabilities/index.js');
+        disablePack(packId);
+        json(res, { success: true });
         return;
       }
 

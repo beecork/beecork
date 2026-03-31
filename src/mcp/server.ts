@@ -37,6 +37,17 @@ function getDb(): Database.Database {
 // Clean up on process exit
 process.on('exit', () => { cachedDb?.close(); });
 
+// Cached media generators (lazy singleton, like cachedDb)
+let cachedGenerators: any[] | null = null;
+async function getGenerators(): Promise<any[]> {
+  if (!cachedGenerators) {
+    const config = getConfig();
+    const { initMediaGenerators } = await import('../media/index.js');
+    cachedGenerators = initMediaGenerators(config.mediaGenerators);
+  }
+  return cachedGenerators;
+}
+
 const MAX_CONTENT_LENGTH = 10240; // 10KB
 const MAX_NAME_LENGTH = 256;
 const VALID_SCHEDULE_TYPES = ['at', 'every', 'cron'];
@@ -338,6 +349,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'beecork_media_providers',
       description: 'List configured media generation providers and their capabilities',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'beecork_capabilities',
+      description: 'List available and enabled capability packs (email, calendar, github, etc.)',
       inputSchema: { type: 'object' as const, properties: {} },
     },
   ],
@@ -666,6 +682,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'beecork_close_tab': {
         const { tabName } = args as { tabName: string };
+        // Mark tab as stopped so daemon's recovery loop cleans up the subprocess
+        db.prepare("UPDATE tabs SET status = 'stopped', pid = NULL WHERE name = ? AND status = 'running'").run(tabName);
         const { closeTab } = await import('../projects/index.js');
         const closed = closeTab(tabName);
         return closed ? ok(`Tab "${tabName}" permanently closed.`) : fail(`Tab "${tabName}" not found.`);
@@ -674,9 +692,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'beecork_generate_image': {
         const { prompt, style, provider } = args as { prompt: string; style?: string; provider?: string };
         if (!prompt) return fail('Prompt is required.');
-        const config = getConfig();
-        const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators(config.mediaGenerators);
+        const generators = await getGenerators();
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes('image'))
           : generators.find(g => g.supportedTypes.includes('image'));
@@ -692,9 +708,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'beecork_generate_video': {
         const { prompt, duration, provider } = args as { prompt: string; duration?: number; provider?: string };
         if (!prompt) return fail('Prompt is required.');
-        const config = getConfig();
-        const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators(config.mediaGenerators);
+        const generators = await getGenerators();
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes('video'))
           : generators.find(g => g.supportedTypes.includes('video'));
@@ -710,9 +724,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { prompt, type: audioType, style, provider } = args as { prompt: string; type?: string; style?: string; provider?: string };
         if (!prompt) return fail('Prompt is required.');
         const mediaType = audioType === 'music' ? 'music' as const : 'audio' as const;
-        const config = getConfig();
-        const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators(config.mediaGenerators);
+        const generators = await getGenerators();
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes(mediaType))
           : generators.find(g => g.supportedTypes.includes(mediaType));
@@ -725,14 +737,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'beecork_media_providers': {
-        const config = getConfig();
-        const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators(config.mediaGenerators);
+        const generators = await getGenerators();
         if (generators.length === 0) {
           return ok('No media generators configured. Add mediaGenerators to config.json.');
         }
         const lines = generators.map(g => `- ${g.name} (${g.id}): ${g.supportedTypes.join(', ')}`);
         return ok(lines.join('\n'));
+      }
+
+      case 'beecork_capabilities': {
+        const { getAvailablePacks, isEnabled } = await import('../capabilities/index.js');
+        const packs = getAvailablePacks();
+        const capLines = packs.map(p => {
+          const status = isEnabled(p.id) ? '✓ enabled' : '○ available';
+          return `${status} | ${p.id} — ${p.name}: ${p.description}`;
+        });
+        return ok(capLines.join('\n'));
       }
 
       default:

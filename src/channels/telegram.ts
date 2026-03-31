@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chunkText, timeAgo, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { getAdminUserId, validateTabName } from '../config.js';
+import { getAdminUserId } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';

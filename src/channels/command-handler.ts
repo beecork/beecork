@@ -191,6 +191,8 @@ export async function handleSharedCommand(
   if (text.startsWith('/close ')) {
     const tabNameToClose = text.slice(7).trim();
     if (!tabNameToClose) return { handled: true, response: 'Usage: /close <tabname>' };
+    // Stop any running subprocess before deleting records
+    tabManager.stopTab(tabNameToClose);
     const { closeTab } = await import('../projects/index.js');
     const closed = closeTab(tabNameToClose);
     return { handled: true, response: closed ? `Tab "${tabNameToClose}" permanently closed. History deleted.` : `Tab "${tabNameToClose}" not found.` };
