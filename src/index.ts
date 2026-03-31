@@ -87,6 +87,34 @@ program
   .description('Send a message to the default tab (for testing)')
   .action(sendMessage);
 
+const channelCmd = program
+  .command('channel')
+  .description('Manage community channel plugins');
+
+channelCmd
+  .command('install <package>')
+  .description('Install a community channel (npm package)')
+  .action(async (pkg: string) => {
+    const { channelInstall } = await import('./cli/channel.js');
+    channelInstall(pkg);
+  });
+
+channelCmd
+  .command('create <name>')
+  .description('Scaffold a new channel plugin')
+  .action(async (name: string) => {
+    const { channelCreate } = await import('./cli/channel.js');
+    channelCreate(name);
+  });
+
+channelCmd
+  .command('list')
+  .description('List installed community channels')
+  .action(async () => {
+    const { channelList } = await import('./cli/channel.js');
+    channelList();
+  });
+
 program
   .command('quickstart')
   .description('Print a getting-started checklist')

@@ -107,6 +107,20 @@ async function main(): Promise<void> {
     channelRegistry.register(new DiscordChannel(channelCtx));
   }
 
+  // Load community channels
+  try {
+    const { loadCommunityChannels } = await import('./channels/loader.js');
+    const communityChannels = await loadCommunityChannels(channelCtx);
+    for (const channel of communityChannels) {
+      channelRegistry.register(channel);
+    }
+    if (communityChannels.length > 0) {
+      logger.info(`Loaded ${communityChannels.length} community channel(s)`);
+    }
+  } catch (err) {
+    logger.warn('Failed to load community channels:', err);
+  }
+
   await channelRegistry.start();
 
   // Initialize notification providers

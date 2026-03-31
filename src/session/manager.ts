@@ -384,6 +384,23 @@ export class TabManager {
             return; // Don't resolve yet — compaction flow will resolve
           }
 
+          // Check for delegation completion
+          import('../delegation/manager.js').then(({ completeDelegation }) => {
+            const delegation = completeDelegation(tab.name, result.text);
+            if (delegation && delegation.returnToTab) {
+              // Queue result message back to the source tab
+              db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+                delegation.returnToTab,
+                `[Result from tab:${tab.name}]: ${result.text.slice(0, 10000)}`,
+                'delegation_result'
+              );
+              this.onNotify?.(`Delegation complete: ${tab.name} → result sent back to ${delegation.returnToTab}`).catch(() => {});
+              logger.info(`Delegation result sent: ${tab.name} → ${delegation.returnToTab}`);
+            }
+          }).catch(err => {
+            logger.warn('Delegation completion check failed:', err);
+          });
+
           resolve(result);
 
           // Auto-extract memories from completed sessions (fire and forget)

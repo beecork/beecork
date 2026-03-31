@@ -132,6 +132,22 @@ const MIGRATIONS: Migration[] = [
       UNIQUE(channel_id, peer_id)
     )`,
   },
+  {
+    version: 11,
+    description: 'Add delegations table for multi-agent orchestration',
+    up: `CREATE TABLE IF NOT EXISTS delegations (
+      id TEXT PRIMARY KEY,
+      source_tab TEXT NOT NULL,
+      target_tab TEXT NOT NULL,
+      message TEXT NOT NULL,
+      return_to_tab TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      depth INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT
+    )`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

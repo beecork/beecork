@@ -236,6 +236,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['tabName'],
       },
     },
+    {
+      name: 'beecork_delegate',
+      description: 'Delegate a task to another tab. The target tab runs independently and the result is automatically sent back to the source tab when complete. Use this for tasks that need their own working directory or context.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          tabName: { type: 'string', description: 'Target tab name (created if it does not exist)' },
+          message: { type: 'string', description: 'The task to delegate' },
+          returnToTab: { type: 'string', description: 'Tab to send results back to (defaults to current tab)' },
+        },
+        required: ['tabName', 'message'],
+      },
+    },
+    {
+      name: 'beecork_delegation_status',
+      description: 'Check status of delegated tasks',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          tabName: { type: 'string', description: 'Filter by source tab (optional)' },
+        },
+      },
+    },
   ],
 }));
 
@@ -543,6 +566,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           recentMessages: messages.reverse().map((m: any) => ({ role: m.role, preview: m.content.slice(0, 200) })),
         };
         return { content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }] };
+      }
+
+      case 'beecork_delegate': {
+        const { tabName, message, returnToTab } = args as { tabName: string; message: string; returnToTab?: string };
+        try {
+          const { createDelegation } = await import('../delegation/manager.js');
+          const delegation = createDelegation(returnToTab || 'default', tabName, message, returnToTab);
+          // Queue the message for the target tab
+          db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'delegation');
+          return { content: [{ type: 'text' as const, text: `Delegated to tab "${tabName}". Result will be sent back to "${delegation.returnToTab}" when complete.\n\nDelegation ID: ${delegation.id}` }] };
+        } catch (err: any) {
+          return { content: [{ type: 'text' as const, text: `Delegation failed: ${err.message}` }], isError: true };
+        }
+      }
+
+      case 'beecork_delegation_status': {
+        const { tabName } = (args || {}) as { tabName?: string };
+        const { getPendingDelegations } = await import('../delegation/manager.js');
+        const delegations = getPendingDelegations(tabName);
+        if (delegations.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No pending delegations.' }] };
+        }
+        const lines = delegations.map(d => `${d.sourceTab} → ${d.targetTab} [${d.status}] (depth ${d.depth})\n  "${d.message.slice(0, 100)}"`);
+        return { content: [{ type: 'text' as const, text: lines.join('\n\n') }] };
       }
 
       default:
