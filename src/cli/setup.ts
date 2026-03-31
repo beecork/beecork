@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import crypto from 'node:crypto';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -144,6 +145,69 @@ export async function setupWizard(): Promise<void> {
       },
       deployment: 'local',
     };
+
+    // Optional: Additional channels
+    console.log('\nOptional: Add more channels\n');
+    console.log('You can also connect via WhatsApp, Discord, or Webhooks.');
+    console.log('You can always add these later with: beecork discord, beecork whatsapp, etc.\n');
+
+    const addDiscord = await ask(rl, 'Set up Discord? (y/n)', 'n');
+    if (addDiscord.toLowerCase() === 'y') {
+      console.log('\nDiscord Setup:');
+      console.log('  1. Go to https://discord.com/developers/applications');
+      console.log('  2. Click "New Application", give it a name');
+      console.log('  3. Go to Bot → click "Add Bot"');
+      console.log('  4. Copy the bot token');
+      console.log('  5. Under Bot → enable "Message Content Intent"');
+      console.log('  6. Use OAuth2 URL Generator to invite bot to your server\n');
+
+      const discordToken = await ask(rl, 'Discord bot token (or press Enter to skip)');
+      if (discordToken) {
+        const discordUserId = await ask(rl, 'Your Discord user ID (right-click your name → Copy User ID)');
+        (config as any).discord = {
+          token: discordToken,
+          allowedUserIds: discordUserId ? [discordUserId] : [],
+        };
+        console.log('  ✓ Discord configured\n');
+      }
+    }
+
+    const addWhatsApp = await ask(rl, 'Set up WhatsApp? (y/n)', 'n');
+    if (addWhatsApp.toLowerCase() === 'y') {
+      console.log('\nWhatsApp Setup:');
+      console.log('  WhatsApp uses QR code scanning (like WhatsApp Web).');
+      console.log('  The QR code will appear when you start the daemon.\n');
+
+      const waNumber = await ask(rl, 'Your WhatsApp phone number (e.g., 14155551234)');
+      if (waNumber) {
+        (config as any).whatsapp = {
+          enabled: true,
+          mode: 'baileys',
+          sessionPath: `${getBeecorkHome()}/whatsapp-session`,
+          allowedNumbers: [waNumber],
+        };
+        console.log('  ✓ WhatsApp configured (scan QR code when daemon starts)\n');
+      }
+    }
+
+    const addWebhook = await ask(rl, 'Enable Webhook API? (y/n)', 'n');
+    if (addWebhook.toLowerCase() === 'y') {
+      const webhookPort = await ask(rl, 'Webhook port', '8374');
+      const webhookToken = await ask(rl, 'Webhook auth token (press Enter to auto-generate)');
+      const whToken = webhookToken || crypto.randomBytes(24).toString('base64url');
+      (config as any).webhook = {
+        enabled: true,
+        port: parseInt(webhookPort),
+        authToken: whToken,
+      };
+      console.log(`  ✓ Webhook enabled on port ${webhookPort}`);
+      if (!webhookToken) console.log(`  Auth token: ${whToken}\n`);
+    }
+
+    console.log('You can add or change channels later with:');
+    console.log('  beecork discord    — add/reconfigure Discord');
+    console.log('  beecork whatsapp   — add/reconfigure WhatsApp');
+    console.log('  beecork dashboard  — manage everything from the web UI\n');
 
     // Write everything
     ensureBeecorkDirs();

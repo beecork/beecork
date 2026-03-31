@@ -116,6 +116,93 @@ channelCmd
   });
 
 program
+  .command('discord')
+  .description('Configure Discord channel')
+  .action(async () => {
+    const readline = await import('node:readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+
+    console.log('\nDiscord Setup\n');
+    console.log('  1. Go to https://discord.com/developers/applications');
+    console.log('  2. Click "New Application", give it a name');
+    console.log('  3. Go to Bot → click "Add Bot"');
+    console.log('  4. Copy the bot token');
+    console.log('  5. Under Bot → enable "Message Content Intent"');
+    console.log('  6. Use OAuth2 URL Generator to invite bot to your server\n');
+
+    const token = await ask('Discord bot token');
+    if (!token) { console.log('No token provided. Cancelled.'); rl.close(); return; }
+
+    const userId = await ask('Your Discord user ID');
+
+    const { getConfig, saveConfig } = await import('./config.js');
+    const config = getConfig();
+    (config as any).discord = { token, allowedUserIds: userId ? [userId] : [] };
+    saveConfig(config);
+    console.log('\n✓ Discord configured. Restart daemon: beecork stop && beecork start\n');
+    rl.close();
+  });
+
+program
+  .command('whatsapp')
+  .description('Configure WhatsApp channel')
+  .action(async () => {
+    const readline = await import('node:readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+
+    console.log('\nWhatsApp Setup\n');
+    console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
+    console.log('  When you start the daemon, a QR code will appear in the terminal.');
+    console.log('  Scan it with your phone to link.\n');
+
+    const number = await ask('Your WhatsApp phone number (e.g., 14155551234)');
+    if (!number) { console.log('No number provided. Cancelled.'); rl.close(); return; }
+
+    const { getConfig, saveConfig } = await import('./config.js');
+    const { getBeecorkHome } = await import('./util/paths.js');
+    const config = getConfig();
+    (config as any).whatsapp = {
+      enabled: true,
+      mode: 'baileys',
+      sessionPath: `${getBeecorkHome()}/whatsapp-session`,
+      allowedNumbers: [number],
+    };
+    saveConfig(config);
+    console.log('\n✓ WhatsApp configured. Restart daemon to scan QR: beecork stop && beecork start\n');
+    rl.close();
+  });
+
+program
+  .command('webhook')
+  .description('Configure Webhook channel')
+  .action(async () => {
+    const readline = await import('node:readline');
+    const crypto = await import('node:crypto');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+
+    console.log('\nWebhook Setup\n');
+    console.log('  Webhooks let any service trigger Beecork via HTTP.');
+    console.log('  Send POST requests to: http://localhost:PORT/webhook/tabName\n');
+
+    const port = await ask('Port', '8374');
+    const tokenInput = await ask('Auth token (Enter to auto-generate)');
+    const token = tokenInput || crypto.randomBytes(24).toString('base64url');
+
+    const { getConfig, saveConfig } = await import('./config.js');
+    const config = getConfig();
+    (config as any).webhook = { enabled: true, port: parseInt(port), authToken: token };
+    saveConfig(config);
+    console.log(`\n✓ Webhook enabled on port ${port}`);
+    console.log(`  Auth token: ${token}`);
+    console.log(`  Example: curl -X POST http://localhost:${port}/webhook/default -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"prompt":"hello"}'`);
+    console.log('\n  Restart daemon: beecork stop && beecork start\n');
+    rl.close();
+  });
+
+program
   .command('quickstart')
   .description('Print a getting-started checklist')
   .action(() => {

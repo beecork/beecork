@@ -181,6 +181,19 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
+      if (path === '/api/channels/config') {
+        const { getConfig } = await import('../config.js');
+        const config = getConfig();
+        const channels = {
+          telegram: { configured: !!config.telegram?.token, botUsername: null as string | null },
+          discord: { configured: !!(config as any).discord?.token },
+          whatsapp: { configured: !!(config as any).whatsapp?.enabled },
+          webhook: { configured: !!(config as any).webhook?.enabled, port: (config as any).webhook?.port },
+        };
+        json(res, channels);
+        return;
+      }
+
       const db = getDashDb();
 
       if (path === '/api/status') {
