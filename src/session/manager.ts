@@ -72,7 +72,7 @@ export class TabManager {
   }
 
   /** Ensure a tab exists in the database. Creates it if missing. */
-  ensureTab(tabName: string): Tab {
+  ensureTab(tabName: string, workingDirOverride?: string): Tab {
     const db = getDb();
     const existing = this.queryTab(db, tabName);
     if (existing) return existing;
@@ -91,7 +91,7 @@ export class TabManager {
       name: tabName,
       sessionId: uuidv4(),
       status: 'idle',
-      workingDir: template?.workingDir || resolveWorkingDir(tabName),
+      workingDir: workingDirOverride || template?.workingDir || resolveWorkingDir(tabName),
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
       pid: null,
@@ -108,8 +108,8 @@ export class TabManager {
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean }): Promise<SendResult> {
-    const tab = this.ensureTab(tabName);
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean; projectPath?: string }): Promise<SendResult> {
+    const tab = this.ensureTab(tabName, options?.projectPath);
 
     // If a subprocess is already running on this tab, queue the message
     if (this.subprocesses.get(tabName)?.isRunning) {

@@ -162,6 +162,36 @@ const MIGRATIONS: Migration[] = [
       created_at TEXT DEFAULT (datetime('now'))
     )`,
   },
+  {
+    version: 13,
+    description: 'Recreate projects table with new schema',
+    up: `DROP TABLE IF EXISTS projects;
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      path TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'user-project',
+      last_used_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
+  {
+    version: 14,
+    description: 'Add routing_preferences table',
+    up: `CREATE TABLE IF NOT EXISTS routing_preferences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pattern TEXT NOT NULL,
+      project_name TEXT NOT NULL,
+      confidence REAL DEFAULT 1.0,
+      hit_count INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
+  {
+    version: 15,
+    description: 'Add project_id to tabs',
+    up: 'ALTER TABLE tabs ADD COLUMN project_id TEXT DEFAULT NULL',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

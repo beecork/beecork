@@ -267,6 +267,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: 'beecork_project_create',
+      description: 'Create a new project folder in the workspace',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Project name' },
+          path: { type: 'string', description: 'Optional: custom path. Defaults to workspace root.' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'beecork_project_list',
+      description: 'List all known projects and categories',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'beecork_close_tab',
+      description: 'Permanently close a tab — deletes all history and session. Cannot be undone.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          tabName: { type: 'string', description: 'Tab to permanently close' },
+        },
+        required: ['tabName'],
+      },
+    },
   ],
 }));
 
@@ -574,6 +602,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const lines = delegations.map(d => `${d.sourceTab} → ${d.targetTab} [${d.status}] (depth ${d.depth})\n  "${d.message.slice(0, 100)}"`);
         return ok(lines.join('\n\n'));
+      }
+
+      case 'beecork_project_create': {
+        const { name, path: customPath } = args as { name: string; path?: string };
+        const { createProject } = await import('../projects/index.js');
+        const project = createProject(name, customPath);
+        return ok(`Project "${name}" created at ${project.path}`);
+      }
+
+      case 'beecork_project_list': {
+        const { listProjects } = await import('../projects/index.js');
+        const projects = listProjects();
+        if (projects.length === 0) return ok('No projects discovered. Create one with beecork_project_create.');
+        const lines = projects.map(p => `${p.type === 'category' ? '📁' : '📦'} ${p.name} — ${p.path}`);
+        return ok(lines.join('\n'));
+      }
+
+      case 'beecork_close_tab': {
+        const { tabName } = args as { tabName: string };
+        const { closeTab } = await import('../projects/index.js');
+        const closed = closeTab(tabName);
+        return closed ? ok(`Tab "${tabName}" permanently closed.`) : fail(`Tab "${tabName}" not found.`);
       }
 
       default:

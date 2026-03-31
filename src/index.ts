@@ -362,4 +362,22 @@ program
     console.log('');
   });
 
+program
+  .command('projects')
+  .description('List all discovered projects')
+  .action(async () => {
+    const { listProjects } = await import('./projects/index.js');
+    const projects = listProjects();
+    if (projects.length === 0) {
+      console.log('No projects found. Start the daemon to discover projects.');
+      return;
+    }
+    console.log(`\n${projects.length} project(s):\n`);
+    for (const p of projects) {
+      const icon = p.type === 'category' ? '📁' : '📦';
+      console.log(`  ${icon} ${p.name} — ${p.path}`);
+    }
+    console.log('');
+  });
+
 program.parse();

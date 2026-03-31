@@ -449,6 +449,90 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    // /projects — list all projects
+    if (text === '/projects' || text.startsWith('/projects@')) {
+      const { listProjects } = await import('../projects/index.js');
+      const projects = listProjects();
+      if (projects.length === 0) {
+        await this.bot.sendMessage(chatId, 'No projects found. Create one with /newproject <name>');
+        return;
+      }
+      const userProjects = projects.filter((p: any) => p.type === 'user-project');
+      const categories = projects.filter((p: any) => p.type === 'category');
+      let msg2 = '📦 Projects:\n';
+      if (userProjects.length > 0) {
+        msg2 += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
+      }
+      if (categories.length > 0) {
+        msg2 += '\n\n📁 Categories:\n';
+        msg2 += categories.map((p: any) => `  • ${p.name}`).join('\n');
+      }
+      await this.bot.sendMessage(chatId, msg2);
+      return;
+    }
+
+    // /project <name> — switch to a project
+    if (text.startsWith('/project ') && !text.startsWith('/projects')) {
+      const name = text.slice(9).trim();
+      const { getProject, setUserContext } = await import('../projects/index.js');
+      const project = getProject(name);
+      if (!project) {
+        await this.bot.sendMessage(chatId, `Project "${name}" not found. Use /projects to list or /newproject to create.`);
+        return;
+      }
+      setUserContext(String(userId || 'default'), project.name, project.name);
+      await this.bot.sendMessage(chatId, `Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.`);
+      return;
+    }
+
+    // /newproject <name> [path] — create a new project
+    if (text.startsWith('/newproject ')) {
+      const parts = text.slice(12).trim().split(/\s+/);
+      const name = parts[0];
+      const customPath = parts[1] || undefined;
+      if (!name) {
+        await this.bot.sendMessage(chatId, 'Usage: /newproject <name> [path]');
+        return;
+      }
+      const { createProject, setUserContext } = await import('../projects/index.js');
+      const project = createProject(name, customPath);
+      setUserContext(String(userId || 'default'), project.name, project.name);
+      await this.bot.sendMessage(chatId, `✓ Project "${name}" created at ${project.path}\nSwitched to this project.`);
+      return;
+    }
+
+    // /close <tab> — permanently close a tab
+    if (text.startsWith('/close ')) {
+      const tabNameToClose = text.slice(7).trim();
+      if (!tabNameToClose) {
+        await this.bot.sendMessage(chatId, 'Usage: /close <tabname>');
+        return;
+      }
+      const { closeTab } = await import('../projects/index.js');
+      const closed = closeTab(tabNameToClose);
+      if (closed) {
+        await this.bot.sendMessage(chatId, `Tab "${tabNameToClose}" permanently closed. History deleted.`);
+      } else {
+        await this.bot.sendMessage(chatId, `Tab "${tabNameToClose}" not found.`);
+      }
+      return;
+    }
+
+    // /fresh <project> — start a new tab in a project
+    if (text.startsWith('/fresh ')) {
+      const projectName = text.slice(7).trim();
+      const { getProject, setUserContext } = await import('../projects/index.js');
+      const project = getProject(projectName);
+      if (!project) {
+        await this.bot.sendMessage(chatId, `Project "${projectName}" not found.`);
+        return;
+      }
+      const freshTabName = `${projectName}-${Date.now().toString(36).slice(-4)}`;
+      setUserContext(String(userId || 'default'), project.name, freshTabName);
+      await this.bot.sendMessage(chatId, `Fresh start in "${projectName}" (tab: ${freshTabName})\nSend your message now.`);
+      return;
+    }
+
     // Unknown command — treat as regular message
     await this.handleMessage(chatId, text, messageId);
   }
@@ -465,10 +549,37 @@ export class TelegramChannel implements Channel {
       }
     }
 
+    // Smart project routing (if no explicit /tab command)
+    let effectiveTabName = tabName;
+    let projectPath: string | undefined;
+
+    if (tabName === 'default' && !text.startsWith('/tab ')) {
+      try {
+        const { routeMessage, setUserContext } = await import('../projects/index.js');
+        const decision = routeMessage(rawPrompt, {
+          userId: String(chatId),
+        });
+
+        if (decision.needsConfirmation) {
+          const { listProjects } = await import('../projects/index.js');
+          const projects = listProjects().filter((p: any) => p.type === 'user-project');
+          const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
+          await this.bot.sendMessage(chatId, `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`);
+          return;
+        }
+
+        effectiveTabName = decision.tabName;
+        projectPath = decision.project.path;
+        setUserContext(String(chatId), decision.project.name, decision.tabName);
+      } catch (err) {
+        logger.warn('Project routing failed, using default:', err);
+      }
+    }
+
     // Build prompt with media references
     const prompt = buildMediaPrompt(media, rawPrompt);
 
-    logger.info(`[telegram] Handling message for tab "${tabName}" (chat: ${chatId}, msg: ${messageId})`);
+    logger.info(`[telegram] Handling message for tab "${effectiveTabName}" (chat: ${chatId}, msg: ${messageId})`);
 
     // React with ⏳
     await this.setReaction(chatId, messageId, '⏳');
@@ -482,13 +593,13 @@ export class TelegramChannel implements Channel {
 
     // "Still working" timeout
     const stillWorkingTimeout = setTimeout(() => {
-      this.bot.sendMessage(chatId, `Still working on your request in tab "${tabName}"...`).catch(() => {});
+      this.bot.sendMessage(chatId, `Still working on your request in tab "${effectiveTabName}"...`).catch(() => {});
     }, 120000);
 
     try {
       let responseText: string;
       let responseError: boolean;
-      let responseTab = tabName;
+      let responseTab = effectiveTabName;
 
       if (this.ctx.pipeBrain) {
         const pipeResult = await this.ctx.pipeBrain.process(text, { chatId, userId: 0, messageId });
@@ -511,7 +622,7 @@ export class TelegramChannel implements Channel {
           if (streamBuffer.length < 100 || now - lastEditTime < 1000) return;
           lastEditTime = now;
           try {
-            const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
+            const prefix = effectiveTabName !== 'default' ? `[${effectiveTabName}] ` : '';
             const preview = prefix + streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
             if (!streamMsgId) {
               const sent = await this.bot.sendMessage(chatId, preview);
@@ -523,13 +634,14 @@ export class TelegramChannel implements Channel {
         };
 
         // Progress updates for long tasks (every 30 seconds)
-        const progressTracker = new ProgressTracker(tabName, (msg) => {
+        const progressTracker = new ProgressTracker(effectiveTabName, (msg) => {
           this.bot.sendMessage(chatId, msg).catch(() => {});
         });
 
-        const result = await this.ctx.tabManager.sendMessage(tabName, prompt, {
+        const result = await this.ctx.tabManager.sendMessage(effectiveTabName, prompt, {
           onTextChunk,
           onToolUse: (name, input) => progressTracker.record(name, input),
+          projectPath,
         });
         progressTracker.stop();
         responseText = result.text || '(empty response)';
@@ -540,15 +652,15 @@ export class TelegramChannel implements Channel {
           clearTimeout(stillWorkingTimeout);
           await this.setReaction(chatId, messageId, '✅');
           try {
-            const prefix = tabName !== 'default' ? `[${tabName}] ` : '';
+            const prefix = effectiveTabName !== 'default' ? `[${effectiveTabName}] ` : '';
             const finalText = prefix + responseText;
             if (finalText.length <= 4096) {
               await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
             } else {
-              await this.sendResponse(chatId, responseText, tabName);
+              await this.sendResponse(chatId, responseText, effectiveTabName);
             }
           } catch {
-            await this.sendResponse(chatId, responseText, tabName);
+            await this.sendResponse(chatId, responseText, effectiveTabName);
           }
           return;
         }

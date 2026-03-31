@@ -61,6 +61,16 @@ async function main(): Promise<void> {
   const projectPaths = config.pipe?.projectScanPaths || [os.homedir()];
   registerThisMachine(projectPaths);
 
+  // 2c. Discover projects in workspace
+  try {
+    const { discoverProjects, ensureCategory } = await import('./projects/index.js');
+    const projects = discoverProjects(config.pipe?.projectScanPaths);
+    ensureCategory('general'); // Ensure default category exists
+    logger.info(`Discovered ${projects.length} projects`);
+  } catch (err) {
+    logger.warn('Project discovery failed:', err);
+  }
+
   // 3. Write PID file with exclusive lock to prevent race condition
   try {
     const fd = fs.openSync(pidPath, 'wx'); // Fails if file already exists (atomic create)

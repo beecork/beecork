@@ -139,8 +139,124 @@ export class DiscordChannel implements Channel {
           return;
         }
 
+        // /projects — list all projects
+        if (text === '/projects') {
+          const { listProjects } = await import('../projects/index.js');
+          const projects = listProjects();
+          if (projects.length === 0) {
+            await message.reply('No projects found. Create one with /newproject <name>');
+            return;
+          }
+          const userProjects = projects.filter((p: any) => p.type === 'user-project');
+          const categories = projects.filter((p: any) => p.type === 'category');
+          let msg2 = '📦 **Projects:**\n';
+          if (userProjects.length > 0) {
+            msg2 += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
+          }
+          if (categories.length > 0) {
+            msg2 += '\n\n📁 **Categories:**\n';
+            msg2 += categories.map((p: any) => `  • ${p.name}`).join('\n');
+          }
+          await message.reply(msg2);
+          return;
+        }
+
+        // /project <name> — switch to a project
+        if (text.startsWith('/project ') && !text.startsWith('/projects')) {
+          const pname = text.slice(9).trim();
+          const { getProject, setUserContext } = await import('../projects/index.js');
+          const project = getProject(pname);
+          if (!project) {
+            await message.reply(`Project "${pname}" not found. Use /projects to list or /newproject to create.`);
+            return;
+          }
+          setUserContext(message.author.id, project.name, project.name);
+          await message.reply(`Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.`);
+          return;
+        }
+
+        // /newproject <name> [path] — create a new project
+        if (text.startsWith('/newproject ')) {
+          const parts = text.slice(12).trim().split(/\s+/);
+          const pname = parts[0];
+          const customPath = parts[1] || undefined;
+          if (!pname) {
+            await message.reply('Usage: /newproject <name> [path]');
+            return;
+          }
+          const { createProject, setUserContext } = await import('../projects/index.js');
+          const project = createProject(pname, customPath);
+          setUserContext(message.author.id, project.name, project.name);
+          await message.reply(`✓ Project "${pname}" created at ${project.path}\nSwitched to this project.`);
+          return;
+        }
+
+        // /close <tab> — permanently close a tab
+        if (text.startsWith('/close ')) {
+          const tabToClose = text.slice(7).trim();
+          if (!tabToClose) {
+            await message.reply('Usage: /close <tabname>');
+            return;
+          }
+          const { closeTab } = await import('../projects/index.js');
+          const closed = closeTab(tabToClose);
+          if (closed) {
+            await message.reply(`Tab "${tabToClose}" permanently closed. History deleted.`);
+          } else {
+            await message.reply(`Tab "${tabToClose}" not found.`);
+          }
+          return;
+        }
+
+        // /fresh <project> — start a new tab in a project
+        if (text.startsWith('/fresh ')) {
+          const projectName = text.slice(7).trim();
+          const { getProject, setUserContext } = await import('../projects/index.js');
+          const project = getProject(projectName);
+          if (!project) {
+            await message.reply(`Project "${projectName}" not found.`);
+            return;
+          }
+          const freshTab = `${projectName}-${Date.now().toString(36).slice(-4)}`;
+          setUserContext(message.author.id, project.name, freshTab);
+          await message.reply(`Fresh start in "${projectName}" (tab: ${freshTab})\nSend your message now.`);
+          return;
+        }
+
         // Build prompt with media
         const fullPrompt = buildMediaPrompt(media, prompt || '');
+
+        // Smart project routing (if no explicit /tab command)
+        let effectiveTab = tabName;
+        let projectPath: string | undefined;
+
+        // Use thread name as tab if in a thread
+        if (message.channel.isThread?.()) {
+          effectiveTab = message.channel.name || tabName;
+        }
+
+        if (effectiveTab === 'default' && !text.startsWith('/tab ')) {
+          try {
+            const { routeMessage, setUserContext } = await import('../projects/index.js');
+            const decision = routeMessage(prompt || '', {
+              userId: message.author.id,
+            });
+
+            if (decision.needsConfirmation) {
+              const { listProjects } = await import('../projects/index.js');
+              const projects = listProjects().filter((p: any) => p.type === 'user-project');
+              const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
+              await message.reply(`Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`);
+              return;
+            }
+
+            effectiveTab = decision.tabName;
+            projectPath = decision.project.path;
+            setUserContext(message.author.id, decision.project.name, decision.tabName);
+          } catch (err) {
+            logger.warn('Project routing failed, using default:', err);
+          }
+        }
 
         // Typing indicator refresh
         const typingInterval = setInterval(() => {
@@ -148,12 +264,6 @@ export class DiscordChannel implements Channel {
         }, 8000); // Discord typing lasts 10s
 
         try {
-          // Use thread name as tab if in a thread
-          let effectiveTab = tabName;
-          if (message.channel.isThread?.()) {
-            effectiveTab = message.channel.name || tabName;
-          }
-
           // Progress updates for long tasks (every 30 seconds)
           const progressTracker = new ProgressTracker(effectiveTab, (msg) => {
             message.channel.send(msg).catch(() => {});
@@ -161,6 +271,7 @@ export class DiscordChannel implements Channel {
 
           const result = await this.ctx.tabManager.sendMessage(effectiveTab, fullPrompt, {
             onToolUse: (name, input) => progressTracker.record(name, input),
+            projectPath,
           });
           progressTracker.stop();
           clearInterval(typingInterval);
