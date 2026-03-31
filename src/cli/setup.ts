@@ -247,14 +247,17 @@ export async function setupWizard(): Promise<void> {
     if (addMedia.toLowerCase() === 'y') {
       const mediaGenerators: Array<{ provider: string; apiKey: string; model?: string }> = [];
 
-      console.log('\nImage: 1) DALL-E (OpenAI)  2) Stable Diffusion');
-      const imgChoice = await ask(rl, 'Choose image provider (1/2 or Enter to skip)');
+      console.log('\nImage: 1) DALL-E (OpenAI)  2) Stable Diffusion  3) Google Imagen');
+      const imgChoice = await ask(rl, 'Choose image provider (1/2/3 or Enter to skip)');
       if (imgChoice === '1') {
         const key = await ask(rl, '  OpenAI API key');
         if (key) mediaGenerators.push({ provider: 'dall-e', apiKey: key });
       } else if (imgChoice === '2') {
         const key = await ask(rl, '  Stability AI API key');
         if (key) mediaGenerators.push({ provider: 'stable-diffusion', apiKey: key });
+      } else if (imgChoice === '3') {
+        const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
+        if (key) mediaGenerators.push({ provider: 'imagen', apiKey: key });
       }
 
       console.log('\nVideo: 1) Runway  2) Veo  3) Kling');
@@ -409,16 +412,31 @@ const BEECORK_CLAUDE_MD = `${BEECORK_MARKER_START}
 
 You have Beecork MCP tools available when running inside Beecork:
 
-- **beecork_remember** — Store facts in long-term memory (preferences, addresses, decisions)
-- **beecork_recall** — Search memories. Call this at the start of complex tasks.
-- **beecork_cron_create** — Schedule tasks: "at" (one-time), "every" (interval), "cron" (expression)
-- **beecork_cron_list / beecork_cron_delete** — Manage scheduled tasks
-- **beecork_tab_create / beecork_tab_list** — Manage virtual tabs
-- **beecork_send_message** — Send message to another tab
-- **beecork_notify** — Notify the user mid-task without stopping
-- **beecork_status** — Check system status
+**Memory:** beecork_remember, beecork_recall — store and search long-term memory
+**Scheduling:** beecork_cron_create/list/delete — schedule recurring tasks
+**Tabs:** beecork_tab_create/list, beecork_send_message — manage virtual tabs
+**Communication:** beecork_notify, beecork_send_media — notify user, send files
+**Delegation:** beecork_delegate, beecork_delegation_status — delegate tasks to other tabs
+**Media:** beecork_generate_image/video/audio — generate media via AI providers
+**Projects:** beecork_project_create/list — manage projects
+**Observability:** beecork_cost, beecork_activity, beecork_status — track spending and activity
+**Handoff:** beecork_handoff — export session for terminal resume
 
-When running unattended: always call beecork_recall first, always beecork_remember important outcomes, use beecork_notify for progress on long tasks.
+### Self-Extension
+
+You can install new capabilities for yourself. If the user asks for a tool or media provider that isn't configured:
+
+1. Check if a community package exists: \`beecork-media-<name>\` or \`beecork-channel-<name>\` on npm
+2. Install it: \`npm install -g beecork-media-<name>\`
+3. Or create a custom MCP server: write a Node.js script wrapping the API, register in \`~/.beecork/mcp-config.json\`
+4. Tell the user to restart: \`beecork stop && beecork start\`
+
+### Guidelines
+
+- Always call beecork_recall at the start of complex tasks
+- Always beecork_remember important outcomes and decisions
+- Use beecork_notify for progress on long tasks
+- Use beecork_delegate for independent subtasks that need their own workspace
 ${BEECORK_MARKER_END}`;
 
 function injectClaudeMd(): void {

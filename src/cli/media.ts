@@ -8,6 +8,7 @@ function ask(rl: readline.Interface, question: string, defaultValue?: string): P
 const IMAGE_PROVIDERS = [
   { id: 'dall-e', name: 'DALL-E (OpenAI)', keyHint: 'OpenAI API key (sk-...)' },
   { id: 'stable-diffusion', name: 'Stable Diffusion (Stability AI)', keyHint: 'Stability AI API key' },
+  { id: 'imagen', name: 'Google Imagen', keyHint: 'Google AI API key (from ai.google.dev)' },
 ];
 
 const VIDEO_PROVIDERS = [
