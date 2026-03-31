@@ -132,6 +132,7 @@ async function main(): Promise<void> {
 
   // 9. Start IPC polling
   let lastMediaCleanup = 0;
+  let lastAnomalyCheck = 0;
   pollInterval = setInterval(() => {
     try {
       cronScheduler.checkForReload();
@@ -140,6 +141,14 @@ async function main(): Promise<void> {
       if (Date.now() - lastMediaCleanup > 60000) {
         lastMediaCleanup = Date.now();
         cleanupMedia();
+      }
+      // Anomaly detection (hourly)
+      if (Date.now() - lastAnomalyCheck > 3600000) {
+        lastAnomalyCheck = Date.now();
+        import('./observability/analytics.js').then(({ checkAnomalies }) => {
+          const anomaly = checkAnomalies();
+          if (anomaly) broadcastNotify(anomaly);
+        }).catch(() => {});
       }
     } catch (err) {
       logger.error('Poll error:', err);

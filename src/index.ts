@@ -195,4 +195,34 @@ mcpCmd
     mcpList();
   });
 
+program
+  .command('export <tab>')
+  .description('Export a tab session for handoff to terminal')
+  .action(async (tab: string) => {
+    const { exportTab, formatHandoffInfo } = await import('./cli/handoff.js');
+    const info = exportTab(tab);
+    if (!info) {
+      console.error(`Tab "${tab}" not found.`);
+      process.exit(1);
+    }
+    console.log(formatHandoffInfo(info));
+  });
+
+program
+  .command('attach <tab>')
+  .description('Attach to a tab session in your terminal (resume Claude Code)')
+  .action(async (tab: string) => {
+    const { attachTab } = await import('./cli/handoff.js');
+    attachTab(tab);
+  });
+
+program
+  .command('activity [hours]')
+  .description('Show activity summary')
+  .action(async (hours?: string) => {
+    const h = parseInt(hours || '24');
+    const { getActivitySummary, formatActivitySummary } = await import('./observability/analytics.js');
+    console.log(formatActivitySummary(getActivitySummary(h)));
+  });
+
 program.parse();

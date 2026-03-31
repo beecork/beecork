@@ -203,6 +203,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'Show messages that failed to deliver after retries',
       inputSchema: { type: 'object' as const, properties: {} },
     },
+    {
+      name: 'beecork_activity',
+      description: 'Show activity summary for the last N hours',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          hours: { type: 'number', description: 'Number of hours to look back (default 24)' },
+        },
+      },
+    },
+    {
+      name: 'beecork_export_data',
+      description: 'Export cost and activity data as JSON',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          type: { type: 'string', enum: ['costs', 'messages', 'crons'], description: 'Data type to export' },
+          days: { type: 'number', description: 'Number of days to export (default 30)' },
+        },
+        required: ['type'],
+      },
+    },
+    {
+      name: 'beecork_handoff',
+      description: 'Get session handoff info for a tab — session ID, working dir, and recent context for resuming in terminal',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          tabName: { type: 'string', description: 'Tab name to export' },
+        },
+        required: ['tabName'],
+      },
+    },
   ],
 }));
 
@@ -459,6 +492,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const failedLines = (failed as any[]).map((f: any) => `[${f.created_at}] tab:${f.tab_name} retries:${f.retry_count}\n  ${f.content.slice(0, 200)}`);
         return { content: [{ type: 'text' as const, text: failedLines.join('\n\n') }] };
+      }
+
+      case 'beecork_activity': {
+        const hours = (args as any)?.hours || 24;
+        const since = new Date(Date.now() - hours * 3600000).toISOString();
+        const msgs = (db.prepare("SELECT COUNT(*) as c FROM messages WHERE created_at > ?").get(since) as any).c;
+        const crons = (db.prepare("SELECT COUNT(*) as c FROM cron_jobs WHERE last_run_at > ?").get(since) as any).c;
+        const mems = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE created_at > ?").get(since) as any).c;
+        const cost = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as t FROM messages WHERE created_at > ?").get(since) as any).t;
+        const text = `Activity (last ${hours}h): ${msgs} messages, ${crons} cron fires, ${mems} memories, $${cost.toFixed(4)} spent`;
+        return { content: [{ type: 'text' as const, text }] };
+      }
+
+      case 'beecork_export_data': {
+        const { type: dataType, days = 30 } = args as { type: string; days?: number };
+        const since = new Date(Date.now() - days * 86400000).toISOString();
+        let data;
+        switch (dataType) {
+          case 'costs':
+            data = db.prepare("SELECT date(created_at) as day, SUM(cost_usd) as cost, COUNT(*) as messages FROM messages WHERE role = 'assistant' AND created_at > ? GROUP BY date(created_at) ORDER BY day").all(since);
+            break;
+          case 'messages':
+            data = db.prepare("SELECT m.role, m.content, m.cost_usd, m.created_at, t.name as tab FROM messages m JOIN tabs t ON t.id = m.tab_id WHERE m.created_at > ? ORDER BY m.created_at DESC LIMIT 500").all(since);
+            break;
+          case 'crons':
+            data = db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all();
+            break;
+          default:
+            return { content: [{ type: 'text' as const, text: 'Invalid type. Use: costs, messages, or crons' }], isError: true };
+        }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+
+      case 'beecork_handoff': {
+        const { tabName } = args as { tabName: string };
+        const tab = db.prepare('SELECT * FROM tabs WHERE name = ?').get(tabName) as any;
+        if (!tab) return { content: [{ type: 'text' as const, text: `Tab "${tabName}" not found` }], isError: true };
+
+        const messages = db.prepare(
+          'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
+        ).all(tab.id) as Array<{ role: string; content: string }>;
+
+        const info = {
+          sessionId: tab.session_id,
+          workingDir: tab.working_dir,
+          status: tab.status,
+          resumeCommand: `beecork attach ${tabName}`,
+          manualCommand: `cd ${tab.working_dir} && claude --session-id ${tab.session_id} --resume`,
+          recentMessages: messages.reverse().map((m: any) => ({ role: m.role, preview: m.content.slice(0, 200) })),
+        };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }] };
       }
 
       default:

@@ -394,6 +394,34 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    if (text === '/cost' || text.startsWith('/cost ')) {
+      const { getCostSummary, formatCostSummary } = await import('../observability/analytics.js');
+      const summary = getCostSummary();
+      await this.bot.sendMessage(chatId, formatCostSummary(summary));
+      return;
+    }
+
+    if (text === '/activity' || text.startsWith('/activity ')) {
+      const hoursStr = text.slice(10).trim();
+      const hours = parseInt(hoursStr) || 24;
+      const { getActivitySummary, formatActivitySummary } = await import('../observability/analytics.js');
+      const summary = getActivitySummary(hours);
+      await this.bot.sendMessage(chatId, formatActivitySummary(summary));
+      return;
+    }
+
+    if (text.startsWith('/handoff')) {
+      const tabName = text.slice(9).trim() || 'default';
+      const { exportTab, formatHandoffInfo } = await import('../cli/handoff.js');
+      const info = exportTab(tabName);
+      if (!info) {
+        await this.bot.sendMessage(chatId, `Tab "${tabName}" not found.`);
+        return;
+      }
+      await this.bot.sendMessage(chatId, formatHandoffInfo(info));
+      return;
+    }
+
     // Unknown command — treat as regular message
     await this.handleMessage(chatId, text, messageId);
   }
