@@ -35,22 +35,41 @@ export async function setupWizard(): Promise<void> {
 
   try {
     // 0. Auto-detect Claude Code
+    let claudeCodeMissing = false;
     console.log('Checking prerequisites...\n');
     try {
       const version = execSync('claude --version 2>&1', { encoding: 'utf-8' }).trim();
       console.log(`  \u2713 Claude Code found: ${version}`);
     } catch {
-      console.log('  \u2717 Claude Code not found. Install: npm install -g @anthropic-ai/claude-code');
+      claudeCodeMissing = true;
+      console.log('  \u2717 Claude Code is not installed yet.');
+      console.log('');
+      console.log('    Claude Code is the AI brain that Beecork connects to.');
+      console.log('    You need a Claude Pro or Max subscription ($20/month) from anthropic.com');
+      console.log('    Then install it: npm install -g @anthropic-ai/claude-code');
+      console.log('');
+      console.log('    You can continue setup now and install Claude Code afterwards.');
+      console.log('    Beecork will remind you at the end.');
+      console.log('');
+      console.log('    Guide: https://support.beecork.com/claude-code-setup');
     }
     console.log('');
 
     // 1. Telegram token with step-by-step instructions
     console.log('Step 1: Create a Telegram Bot');
-    console.log('  1. Open Telegram and search for @BotFather');
-    console.log('  2. Send /newbot');
-    console.log('  3. Choose a name (e.g., "My Beecork")');
-    console.log('  4. Choose a username (must end in "bot", e.g., "mybeecork_bot")');
-    console.log('  5. Copy the token BotFather gives you\n');
+    console.log('');
+    console.log('  A Telegram bot is your personal AI phone number.');
+    console.log('  Only you can talk to it — nobody else can access your Claude.');
+    console.log('');
+    console.log('  How to create one:');
+    console.log('  1. Open Telegram on your phone');
+    console.log('  2. Search for @BotFather (it has a blue checkmark)');
+    console.log('  3. Tap "Start" and then send: /newbot');
+    console.log('  4. Choose a display name (e.g., "My Beecork")');
+    console.log('  5. Choose a username ending in "bot" (e.g., "mybeecork_bot")');
+    console.log('  6. BotFather will reply with a token — copy it');
+    console.log('');
+    console.log('  Detailed guide: https://support.beecork.com/telegram-setup\n');
 
     let token = '';
     while (!token) {
@@ -77,9 +96,16 @@ export async function setupWizard(): Promise<void> {
 
     // 2. Telegram user ID
     console.log('Step 2: Find your Telegram User ID');
+    console.log('');
+    console.log('  Your user ID tells Beecork who is allowed to use the bot.');
+    console.log('  Without it, anyone who finds your bot could use your Claude.');
+    console.log('');
+    console.log('  How to find it:');
     console.log('  1. Search for @userinfobot on Telegram');
-    console.log('  2. Send it any message');
-    console.log('  3. It will reply with your user ID (a number like 123456789)\n');
+    console.log('  2. Tap "Start" and send it any message');
+    console.log('  3. It replies with your user ID (a number like 123456789)');
+    console.log('');
+    console.log('  Detailed guide: https://support.beecork.com/telegram-setup\n');
 
     const userIdStr = await ask(rl, 'Your Telegram user ID');
     const userId = parseInt(userIdStr, 10);
@@ -159,7 +185,9 @@ export async function setupWizard(): Promise<void> {
       console.log('  3. Go to Bot → click "Add Bot"');
       console.log('  4. Copy the bot token');
       console.log('  5. Under Bot → enable "Message Content Intent"');
-      console.log('  6. Use OAuth2 URL Generator to invite bot to your server\n');
+      console.log('  6. Use OAuth2 URL Generator to invite bot to your server');
+      console.log('');
+      console.log('  Detailed guide: https://support.beecork.com/discord-setup\n');
 
       const discordToken = await ask(rl, 'Discord bot token (or press Enter to skip)');
       if (discordToken) {
@@ -175,8 +203,14 @@ export async function setupWizard(): Promise<void> {
     const addWhatsApp = await ask(rl, 'Set up WhatsApp? (y/n)', 'n');
     if (addWhatsApp.toLowerCase() === 'y') {
       console.log('\nWhatsApp Setup:');
-      console.log('  WhatsApp uses QR code scanning (like WhatsApp Web).');
-      console.log('  The QR code will appear when you start the daemon.\n');
+      console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
+      console.log('  When you start the daemon, a QR code appears in the terminal.');
+      console.log('  Scan it with your phone to link your WhatsApp account.');
+      console.log('');
+      console.log('  Note: This uses reverse-engineered WhatsApp Web protocol.');
+      console.log('  For personal use only — not officially supported by WhatsApp.');
+      console.log('');
+      console.log('  Guide: https://support.beecork.com/whatsapp-setup\n');
 
       const waNumber = await ask(rl, 'Your WhatsApp phone number (e.g., 14155551234)');
       if (waNumber) {
@@ -250,9 +284,29 @@ export async function setupWizard(): Promise<void> {
     }
 
     console.log('\n✅ Setup complete!\n');
-    console.log('  Start the daemon: beecork start');
-    console.log('  Then send a message to your Telegram bot to test.\n');
-    console.log('  Run "beecork quickstart" for a full getting-started checklist.\n');
+
+    if (claudeCodeMissing) {
+      console.log('  ⚠️  IMPORTANT: Install Claude Code before starting the daemon:');
+      console.log('');
+      console.log('     npm install -g @anthropic-ai/claude-code');
+      console.log('');
+      console.log('     You also need a Claude Pro or Max subscription ($20/month).');
+      console.log('     Sign up at: https://claude.ai');
+      console.log('     Guide: https://support.beecork.com/claude-code-setup');
+      console.log('');
+    }
+
+    console.log('  Next steps:');
+    console.log('    1. Start the daemon:  beecork start');
+    console.log('    2. Send a message to your Telegram bot');
+    console.log('    3. Check status:      beecork status');
+    console.log('');
+    console.log('  Useful commands:');
+    console.log('    beecork doctor     — check if everything is working');
+    console.log('    beecork dashboard  — open web control panel');
+    console.log('    beecork quickstart — full getting-started checklist');
+    console.log('');
+    console.log('  Need help? https://support.beecork.com\n');
 
   } finally {
     rl.close();
