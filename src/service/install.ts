@@ -9,18 +9,28 @@ import {
   getLaunchdPlistPath,
   getSystemdUnitPath,
 } from './templates.js';
+import {
+  installWindowsService,
+  startWindowsService,
+  stopWindowsService,
+  uninstallWindowsService,
+} from './windows.js';
 
 function findNodePath(): string {
   try {
-    return execSync('which node', { encoding: 'utf-8' }).trim();
+    const cmd = process.platform === 'win32' ? 'where node' : 'which node';
+    return execSync(cmd, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
   } catch {
-    return '/usr/local/bin/node';
+    return process.platform === 'win32' ? 'node' : '/usr/local/bin/node';
   }
 }
 
 function findDaemonPath(): string {
   // import.meta.url is dist/service/install.js — daemon is at dist/daemon.js (one level up)
-  const thisFile = new URL(import.meta.url).pathname;
+  const thisFileUrl = new URL(import.meta.url);
+  const thisFile = process.platform === 'win32'
+    ? thisFileUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1') // strip leading / on Windows drive paths
+    : thisFileUrl.pathname;
   const distDir = path.dirname(path.dirname(thisFile)); // go up from service/ to dist/
   const daemonPath = path.join(distDir, 'daemon.js');
   if (fs.existsSync(daemonPath)) return daemonPath;
@@ -38,7 +48,10 @@ export function installService(): string {
   const nodePath = findNodePath();
   const daemonPath = findDaemonPath();
 
-  if (platform === 'mac') {
+  if (platform === 'windows') {
+    installWindowsService(`${nodePath}" "${daemonPath}`);
+    return 'Windows Task Scheduler';
+  } else if (platform === 'mac') {
     return installLaunchd(nodePath, daemonPath);
   } else {
     return installSystemd(nodePath, daemonPath);
@@ -47,7 +60,10 @@ export function installService(): string {
 
 export function uninstallService(): string {
   const platform = getPlatform();
-  if (platform === 'mac') {
+  if (platform === 'windows') {
+    uninstallWindowsService();
+    return 'Windows Task Scheduler';
+  } else if (platform === 'mac') {
     return uninstallLaunchd();
   } else {
     return uninstallSystemd();
@@ -56,7 +72,9 @@ export function uninstallService(): string {
 
 export function startService(): void {
   const platform = getPlatform();
-  if (platform === 'mac') {
+  if (platform === 'windows') {
+    startWindowsService();
+  } else if (platform === 'mac') {
     const plistPath = getLaunchdPlistPath();
     execSync(`launchctl load "${plistPath}"`, { stdio: 'inherit' });
   } else {
@@ -66,7 +84,9 @@ export function startService(): void {
 
 export function stopService(): void {
   const platform = getPlatform();
-  if (platform === 'mac') {
+  if (platform === 'windows') {
+    stopWindowsService();
+  } else if (platform === 'mac') {
     const plistPath = getLaunchdPlistPath();
     try {
       execSync(`launchctl unload "${plistPath}"`, { stdio: 'inherit' });

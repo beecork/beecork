@@ -31,7 +31,7 @@ export function startDashboardServer(port = 0): void {
   // Generate auth token at server start
   const authToken = crypto.randomBytes(24).toString('base64url');
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://localhost`);
     const path = url.pathname;
 
@@ -62,6 +62,128 @@ export function startDashboardServer(port = 0): void {
 
     // API routes
     try {
+      // SSE endpoint for real-time updates
+      if (path === '/api/events') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+
+        res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
+        const interval = setInterval(() => {
+          try {
+            const db = getDashDb();
+            const tabs = db.prepare('SELECT name, status, last_activity_at FROM tabs ORDER BY last_activity_at DESC').all();
+            const activeCount = tabs.filter((t: any) => t.status === 'running').length;
+            res.write(`data: ${JSON.stringify({ type: 'update', tabs, activeTabs: activeCount })}\n\n`);
+          } catch {}
+        }, 2000);
+
+        req.on('close', () => {
+          clearInterval(interval);
+        });
+        return;
+      }
+
+      // POST: Send message to tab
+      if (path.match(/^\/api\/tabs\/[^/]+\/send$/) && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { message } = JSON.parse(body);
+        if (!message) { json(res, { error: 'Missing message' }, 400); return; }
+
+        const tabName = decodeURIComponent(path.split('/')[3]);
+        const writeDb = new Database(getDbPath());
+        writeDb.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'user');
+        writeDb.close();
+        json(res, { success: true, tab: tabName });
+        return;
+      }
+
+      // POST: Create tab
+      if (path === '/api/tabs' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { name, workingDir, systemPrompt } = JSON.parse(body);
+        if (!name) { json(res, { error: 'Missing tab name' }, 400); return; }
+
+        const writeDb = new Database(getDbPath());
+        const id = crypto.randomUUID();
+        writeDb.prepare('INSERT OR IGNORE INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)').run(
+          id, name, crypto.randomUUID(), 'idle', workingDir || process.env.HOME || '/', systemPrompt || null
+        );
+        writeDb.close();
+        json(res, { success: true, name });
+        return;
+      }
+
+      // DELETE: Delete tab
+      if (path.match(/^\/api\/tabs\/[^/]+$/) && req.method === 'DELETE') {
+        const tabName = decodeURIComponent(path.split('/')[3]);
+        const writeDb = new Database(getDbPath());
+        const tab = writeDb.prepare('SELECT id FROM tabs WHERE name = ?').get(tabName) as { id: string } | undefined;
+        if (tab) {
+          writeDb.prepare('DELETE FROM messages WHERE tab_id = ?').run(tab.id);
+          writeDb.prepare('DELETE FROM tabs WHERE id = ?').run(tab.id);
+        }
+        writeDb.close();
+        json(res, { success: true });
+        return;
+      }
+
+      // POST: Create cron job
+      if (path === '/api/crons' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { name, scheduleType, schedule, tabName, message } = JSON.parse(body);
+        if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
+
+        const writeDb = new Database(getDbPath());
+        const id = crypto.randomUUID();
+        writeDb.prepare('INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
+          id, name, scheduleType || 'every', schedule, tabName || 'default', message
+        );
+        writeDb.close();
+        json(res, { success: true, id });
+        return;
+      }
+
+      // DELETE: Delete cron job
+      if (path.match(/^\/api\/crons\/[^/]+$/) && req.method === 'DELETE') {
+        const cronId = decodeURIComponent(path.split('/')[3]);
+        const writeDb = new Database(getDbPath());
+        writeDb.prepare('DELETE FROM cron_jobs WHERE id = ?').run(cronId);
+        writeDb.close();
+        json(res, { success: true });
+        return;
+      }
+
+      // POST: Create memory
+      if (path === '/api/memories' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { content, tabName } = JSON.parse(body);
+        if (!content) { json(res, { error: 'Missing content' }, 400); return; }
+
+        const writeDb = new Database(getDbPath());
+        writeDb.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(content, tabName || null, 'tool');
+        writeDb.close();
+        json(res, { success: true });
+        return;
+      }
+
+      // DELETE: Delete memory
+      if (path.match(/^\/api\/memories\/\d+$/) && req.method === 'DELETE') {
+        const memoryId = path.split('/')[3];
+        const writeDb = new Database(getDbPath());
+        writeDb.prepare('DELETE FROM memories WHERE id = ?').run(memoryId);
+        writeDb.close();
+        json(res, { success: true });
+        return;
+      }
+
       const db = getDashDb();
 
       if (path === '/api/status') {
@@ -74,7 +196,7 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      if (path === '/api/tabs') {
+      if (path === '/api/tabs' && req.method === 'GET') {
         const tabs = db.prepare(`
           SELECT t.*,
             (SELECT COUNT(*) FROM messages WHERE tab_id = t.id) as message_count,
@@ -103,7 +225,7 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      if (path === '/api/memories') {
+      if (path === '/api/memories' && req.method === 'GET') {
         const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
         const offset = parseInt(url.searchParams.get('offset') || '0');
         const q = url.searchParams.get('q') || '';
@@ -123,7 +245,7 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      if (path === '/api/crons') {
+      if (path === '/api/crons' && req.method === 'GET') {
         const crons = db.prepare('SELECT * FROM cron_jobs ORDER BY created_at').all();
         json(res, crons);
         return;
