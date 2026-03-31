@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version_bump:
-        description: 'Version bump type'
+        description: 'Version bump type (use "none" to publish current version as-is)'
         required: true
         default: 'patch'
         type: choice
@@ -12,6 +12,7 @@ on:
           - patch
           - minor
           - major
+          - none
 
 jobs:
   publish:
@@ -40,6 +41,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version
+        if: ${{ inputs.version_bump != 'none' }}
         run: npm version ${{ inputs.version_bump }}
 
       - name: Publish to npm
@@ -48,4 +50,5 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push version commit and tag
+        if: ${{ inputs.version_bump != 'none' }}
         run: git push && git push --tags
