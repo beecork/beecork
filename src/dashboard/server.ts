@@ -17,6 +17,15 @@ function getDashDb(): Database.Database {
   return cachedDashDb;
 }
 
+function withWriteDb<T>(fn: (db: Database.Database) => T): T {
+  const db = new Database(getDbPath());
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
 function json(res: http.ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
@@ -95,9 +104,7 @@ export function startDashboardServer(port = 0): void {
         if (!message) { json(res, { error: 'Missing message' }, 400); return; }
 
         const tabName = decodeURIComponent(path.split('/')[3]);
-        const writeDb = new Database(getDbPath());
-        writeDb.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'user');
-        writeDb.close();
+        withWriteDb(db => db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'user'));
         json(res, { success: true, tab: tabName });
         return;
       }
@@ -109,12 +116,10 @@ export function startDashboardServer(port = 0): void {
         const { name, workingDir, systemPrompt } = JSON.parse(body);
         if (!name) { json(res, { error: 'Missing tab name' }, 400); return; }
 
-        const writeDb = new Database(getDbPath());
         const id = crypto.randomUUID();
-        writeDb.prepare('INSERT OR IGNORE INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)').run(
+        withWriteDb(db => db.prepare('INSERT OR IGNORE INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)').run(
           id, name, crypto.randomUUID(), 'idle', workingDir || process.env.HOME || '/', systemPrompt || null
-        );
-        writeDb.close();
+        ));
         json(res, { success: true, name });
         return;
       }
@@ -122,13 +127,13 @@ export function startDashboardServer(port = 0): void {
       // DELETE: Delete tab
       if (path.match(/^\/api\/tabs\/[^/]+$/) && req.method === 'DELETE') {
         const tabName = decodeURIComponent(path.split('/')[3]);
-        const writeDb = new Database(getDbPath());
-        const tab = writeDb.prepare('SELECT id FROM tabs WHERE name = ?').get(tabName) as { id: string } | undefined;
-        if (tab) {
-          writeDb.prepare('DELETE FROM messages WHERE tab_id = ?').run(tab.id);
-          writeDb.prepare('DELETE FROM tabs WHERE id = ?').run(tab.id);
-        }
-        writeDb.close();
+        withWriteDb(db => {
+          const tab = db.prepare('SELECT id FROM tabs WHERE name = ?').get(tabName) as { id: string } | undefined;
+          if (tab) {
+            db.prepare('DELETE FROM messages WHERE tab_id = ?').run(tab.id);
+            db.prepare('DELETE FROM tabs WHERE id = ?').run(tab.id);
+          }
+        });
         json(res, { success: true });
         return;
       }
@@ -140,12 +145,10 @@ export function startDashboardServer(port = 0): void {
         const { name, scheduleType, schedule, tabName, message } = JSON.parse(body);
         if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
 
-        const writeDb = new Database(getDbPath());
         const id = crypto.randomUUID();
-        writeDb.prepare('INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
+        withWriteDb(db => db.prepare('INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
           id, name, scheduleType || 'every', schedule, tabName || 'default', message
-        );
-        writeDb.close();
+        ));
         json(res, { success: true, id });
         return;
       }
@@ -153,9 +156,7 @@ export function startDashboardServer(port = 0): void {
       // DELETE: Delete cron job
       if (path.match(/^\/api\/crons\/[^/]+$/) && req.method === 'DELETE') {
         const cronId = decodeURIComponent(path.split('/')[3]);
-        const writeDb = new Database(getDbPath());
-        writeDb.prepare('DELETE FROM cron_jobs WHERE id = ?').run(cronId);
-        writeDb.close();
+        withWriteDb(db => db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(cronId));
         json(res, { success: true });
         return;
       }
@@ -167,9 +168,7 @@ export function startDashboardServer(port = 0): void {
         const { content, tabName } = JSON.parse(body);
         if (!content) { json(res, { error: 'Missing content' }, 400); return; }
 
-        const writeDb = new Database(getDbPath());
-        writeDb.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(content, tabName || null, 'tool');
-        writeDb.close();
+        withWriteDb(db => db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(content, tabName || null, 'tool'));
         json(res, { success: true });
         return;
       }
@@ -177,9 +176,7 @@ export function startDashboardServer(port = 0): void {
       // DELETE: Delete memory
       if (path.match(/^\/api\/memories\/\d+$/) && req.method === 'DELETE') {
         const memoryId = path.split('/')[3];
-        const writeDb = new Database(getDbPath());
-        writeDb.prepare('DELETE FROM memories WHERE id = ?').run(memoryId);
-        writeDb.close();
+        withWriteDb(db => db.prepare('DELETE FROM memories WHERE id = ?').run(memoryId));
         json(res, { success: true });
         return;
       }

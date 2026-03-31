@@ -35,14 +35,14 @@ export function getCostSummary(): CostSummary {
 
 export function getActivitySummary(hours: number = 24): ActivitySummary {
   const db = getDb();
-  const since = `datetime('now', '-${hours} hours')`;
+  const sinceDate = new Date(Date.now() - hours * 3600000).toISOString();
 
-  const messagesReceived = (db.prepare(`SELECT COUNT(*) as c FROM messages WHERE role = 'user' AND created_at > ${since}`).get() as any).c;
-  const messagesFromAssistant = (db.prepare(`SELECT COUNT(*) as c FROM messages WHERE role = 'assistant' AND created_at > ${since}`).get() as any).c;
-  const cronJobsFired = (db.prepare(`SELECT COUNT(*) as c FROM cron_jobs WHERE last_run_at > ${since}`).get() as any).c;
-  const memoriesCreated = (db.prepare(`SELECT COUNT(*) as c FROM memories WHERE created_at > ${since}`).get() as any).c;
-  const totalCost = (db.prepare(`SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > ${since}`).get() as any).total;
-  const activeTabsCount = (db.prepare(`SELECT COUNT(DISTINCT tab_id) as c FROM messages WHERE created_at > ${since}`).get() as any).c;
+  const messagesReceived = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('user', sinceDate) as any).c;
+  const messagesFromAssistant = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('assistant', sinceDate) as any).c;
+  const cronJobsFired = (db.prepare('SELECT COUNT(*) as c FROM cron_jobs WHERE last_run_at > ?').get(sinceDate) as any).c;
+  const memoriesCreated = (db.prepare('SELECT COUNT(*) as c FROM memories WHERE created_at > ?').get(sinceDate) as any).c;
+  const totalCost = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > ?').get(sinceDate) as any).total;
+  const activeTabsCount = (db.prepare('SELECT COUNT(DISTINCT tab_id) as c FROM messages WHERE created_at > ?').get(sinceDate) as any).c;
 
   return {
     period: `Last ${hours} hours`,

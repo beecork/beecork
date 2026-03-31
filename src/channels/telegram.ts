@@ -1,7 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chunkText, timeAgo, parseTabMessage } from '../util/text.js';
+import { chunkText, timeAgo, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { getAdminUserId, validateTabName } from '../config.js';
@@ -9,8 +9,12 @@ import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
-import { createSTTProvider, type STTProvider } from '../voice/stt.js';
-import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
+import type { GroupConfig } from '../types.js';
+import { initVoiceProviders } from '../voice/index.js';
+import type { STTProvider } from '../voice/stt.js';
+import type { TTSProvider } from '../voice/tts.js';
+
+const DEFAULT_GROUP_CONFIG: GroupConfig = { activationMode: 'mention', maxResponsesPerMinute: 3, tabPerGroup: true };
 
 /** Format tab status for Telegram display */
 export function formatTabStatus(tabs: Array<{ name: string; status: string; lastActivityAt: string }>): string {
@@ -64,12 +68,9 @@ export class TelegramChannel implements Channel {
       logger.error('Failed to clear pending updates, starting anyway:', err);
     }
     // Initialize voice providers
-    if (this.ctx.config.voice?.sttProvider && this.ctx.config.voice.sttProvider !== 'none') {
-      this.sttProvider = createSTTProvider({ provider: this.ctx.config.voice.sttProvider, apiKey: this.ctx.config.voice.sttApiKey });
-    }
-    if (this.ctx.config.voice?.ttsProvider && this.ctx.config.voice.ttsProvider !== 'none') {
-      this.ttsProvider = createTTSProvider({ provider: this.ctx.config.voice.ttsProvider, apiKey: this.ctx.config.voice.ttsApiKey, voice: this.ctx.config.voice.ttsVoice });
-    }
+    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
+    this.sttProvider = stt;
+    this.ttsProvider = tts;
 
     this.bot.startPolling();
 
@@ -183,7 +184,7 @@ export class TelegramChannel implements Channel {
         // Check muted status
         if (this.mutedGroups.has(chatId)) return;
 
-        const groupConfig = this.ctx.config.groups || { activationMode: 'mention' as const, maxResponsesPerMinute: 3, tabPerGroup: true };
+        const groupConfig = this.ctx.config.groups || DEFAULT_GROUP_CONFIG;
 
         const isMentioned = this.botUsername ? text.includes(`@${this.botUsername}`) : false;
         const isReplyToBot = msg.reply_to_message?.from?.id === this.botUserId;
@@ -211,41 +212,49 @@ export class TelegramChannel implements Channel {
         }
       }
 
-      // Download media if present
-      const media: MediaAttachment[] = [];
+      // Download media if present (in parallel)
+      const downloadTasks: Array<Promise<MediaAttachment | null>> = [];
       if (msg.photo) {
-        // Get largest photo
         const photo = msg.photo[msg.photo.length - 1];
-        try {
-          const filePath = await this.downloadTelegramFile(photo.file_id, 'jpg');
-          if (filePath) media.push({ type: 'image', mimeType: 'image/jpeg', filePath, fileName: `photo-${photo.file_id}.jpg` });
-        } catch (err) { logger.warn('Failed to download photo:', err); }
+        downloadTasks.push(
+          this.downloadTelegramFile(photo.file_id, 'jpg')
+            .then(fp => fp ? { type: 'image' as const, mimeType: 'image/jpeg', filePath: fp, fileName: `photo-${photo.file_id}.jpg` } : null)
+            .catch(() => null)
+        );
       }
       if (msg.voice) {
-        try {
-          const filePath = await this.downloadTelegramFile(msg.voice.file_id, 'ogg');
-          if (filePath) media.push({ type: 'voice', mimeType: 'audio/ogg', filePath, duration: msg.voice.duration });
-        } catch (err) { logger.warn('Failed to download voice:', err); }
+        downloadTasks.push(
+          this.downloadTelegramFile(msg.voice.file_id, 'ogg')
+            .then(fp => fp ? { type: 'voice' as const, mimeType: 'audio/ogg', filePath: fp, duration: msg.voice!.duration } : null)
+            .catch(() => null)
+        );
       }
       if (msg.audio) {
-        try {
-          const filePath = await this.downloadTelegramFile(msg.audio.file_id, 'mp3');
-          if (filePath) media.push({ type: 'audio', mimeType: msg.audio.mime_type || 'audio/mpeg', filePath, fileName: msg.audio.title, duration: msg.audio.duration });
-        } catch (err) { logger.warn('Failed to download audio:', err); }
+        downloadTasks.push(
+          this.downloadTelegramFile(msg.audio.file_id, 'mp3')
+            .then(fp => fp ? { type: 'audio' as const, mimeType: msg.audio!.mime_type || 'audio/mpeg', filePath: fp, fileName: msg.audio!.title, duration: msg.audio!.duration } : null)
+            .catch(() => null)
+        );
       }
       if (msg.document) {
-        try {
-          const ext = msg.document.file_name?.split('.').pop() || 'bin';
-          const filePath = await this.downloadTelegramFile(msg.document.file_id, ext);
-          if (filePath) media.push({ type: 'document', mimeType: msg.document.mime_type || 'application/octet-stream', filePath, fileName: msg.document.file_name });
-        } catch (err) { logger.warn('Failed to download document:', err); }
+        const ext = msg.document.file_name?.split('.').pop() || 'bin';
+        downloadTasks.push(
+          this.downloadTelegramFile(msg.document.file_id, ext)
+            .then(fp => fp ? { type: 'document' as const, mimeType: msg.document!.mime_type || 'application/octet-stream', filePath: fp, fileName: msg.document!.file_name } : null)
+            .catch(() => null)
+        );
       }
       if (msg.video) {
-        try {
-          const filePath = await this.downloadTelegramFile(msg.video.file_id, 'mp4');
-          if (filePath) media.push({ type: 'video', mimeType: msg.video.mime_type || 'video/mp4', filePath, duration: msg.video.duration });
-        } catch (err) { logger.warn('Failed to download video:', err); }
+        downloadTasks.push(
+          this.downloadTelegramFile(msg.video.file_id, 'mp4')
+            .then(fp => fp ? { type: 'video' as const, mimeType: msg.video!.mime_type || 'video/mp4', filePath: fp, duration: msg.video!.duration } : null)
+            .catch(() => null)
+        );
       }
+      const downloadResults = await Promise.allSettled(downloadTasks);
+      const media: MediaAttachment[] = downloadResults
+        .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
+        .map(r => r.value!);
 
       // Transcribe voice messages if STT is configured
       if (this.sttProvider) {
@@ -449,32 +458,14 @@ export class TelegramChannel implements Channel {
 
     // Group tab routing: use a dedicated tab per group unless /tab is explicit
     if (isGroup) {
-      const groupConfig = this.ctx.config.groups || { activationMode: 'mention' as const, maxResponsesPerMinute: 3, tabPerGroup: true };
+      const groupConfig = this.ctx.config.groups || DEFAULT_GROUP_CONFIG;
       if (groupConfig.tabPerGroup && !text.startsWith('/tab ')) {
         tabName = `group-tg-${Math.abs(chatId)}`;
       }
     }
 
     // Build prompt with media references
-    let prompt = rawPrompt;
-    if (media.length > 0) {
-      const mediaDescriptions = media.map(m => {
-        // Use transcription if available (voice messages with STT)
-        if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) {
-          return m.caption;
-        }
-        switch (m.type) {
-          case 'image': return `User sent an image: ${m.filePath}`;
-          case 'voice': return `User sent a voice message: ${m.filePath}`;
-          case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-          case 'video': return `User sent a video: ${m.filePath}`;
-          case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-          default: return `User sent a file: ${m.filePath}`;
-        }
-      });
-      const mediaText = mediaDescriptions.join('\n');
-      prompt = prompt ? `${mediaText}\n\n${prompt}` : mediaText;
-    }
+    const prompt = buildMediaPrompt(media, rawPrompt);
 
     logger.info(`[telegram] Handling message for tab "${tabName}" (chat: ${chatId}, msg: ${messageId})`);
 

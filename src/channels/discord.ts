@@ -1,12 +1,12 @@
 import { logger } from '../util/logger.js';
-import { chunkText } from '../util/text.js';
-import { parseTabMessage } from '../util/text.js';
+import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { validateTabName } from '../config.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { saveMedia, isOversized } from '../media/store.js';
-import { createSTTProvider, type STTProvider } from '../voice/stt.js';
-import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
+import { initVoiceProviders } from '../voice/index.js';
+import type { STTProvider } from '../voice/stt.js';
+import type { TTSProvider } from '../voice/tts.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 export class DiscordChannel implements Channel {
@@ -50,12 +50,9 @@ export class DiscordChannel implements Channel {
     });
 
     // Voice providers
-    if (this.ctx.config.voice?.sttProvider && this.ctx.config.voice.sttProvider !== 'none') {
-      this.sttProvider = createSTTProvider({ provider: this.ctx.config.voice.sttProvider, apiKey: this.ctx.config.voice.sttApiKey });
-    }
-    if (this.ctx.config.voice?.ttsProvider && this.ctx.config.voice.ttsProvider !== 'none') {
-      this.ttsProvider = createTTSProvider({ provider: this.ctx.config.voice.ttsProvider, apiKey: this.ctx.config.voice.ttsApiKey, voice: this.ctx.config.voice.ttsVoice });
-    }
+    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
+    this.sttProvider = stt;
+    this.ttsProvider = tts;
 
     this.client.on(Events.MessageCreate, async (message: any) => {
       // Ignore bot messages
@@ -142,18 +139,7 @@ export class DiscordChannel implements Channel {
         }
 
         // Build prompt with media
-        let fullPrompt = prompt || '';
-        if (media.length > 0) {
-          const descriptions = media.map(m => {
-            switch (m.type) {
-              case 'image': return `User sent an image: ${m.filePath}`;
-              case 'video': return `User sent a video: ${m.filePath}`;
-              case 'audio': return `User sent an audio file: ${m.filePath}`;
-              default: return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-            }
-          });
-          fullPrompt = fullPrompt ? `${descriptions.join('\n')}\n\n${fullPrompt}` : descriptions.join('\n');
-        }
+        const fullPrompt = buildMediaPrompt(media, prompt || '');
 
         // Typing indicator refresh
         const typingInterval = setInterval(() => {

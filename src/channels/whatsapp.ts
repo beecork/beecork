@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { chunkText, parseTabMessage } from '../util/text.js';
+import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
-import { createSTTProvider, type STTProvider } from '../voice/stt.js';
-import { createTTSProvider, type TTSProvider } from '../voice/tts.js';
+import { initVoiceProviders } from '../voice/index.js';
+import type { STTProvider } from '../voice/stt.js';
+import type { TTSProvider } from '../voice/tts.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
 
@@ -34,12 +35,9 @@ export class WhatsAppChannel implements Channel {
 
   async start(): Promise<void> {
     // Initialize voice providers
-    if (this.ctx.config.voice?.sttProvider && this.ctx.config.voice.sttProvider !== 'none') {
-      this.sttProvider = createSTTProvider({ provider: this.ctx.config.voice.sttProvider, apiKey: this.ctx.config.voice.sttApiKey });
-    }
-    if (this.ctx.config.voice?.ttsProvider && this.ctx.config.voice.ttsProvider !== 'none') {
-      this.ttsProvider = createTTSProvider({ provider: this.ctx.config.voice.ttsProvider, apiKey: this.ctx.config.voice.ttsApiKey, voice: this.ctx.config.voice.ttsVoice });
-    }
+    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
+    this.sttProvider = stt;
+    this.ttsProvider = tts;
 
     try {
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = await import('@whiskeysockets/baileys');
@@ -102,51 +100,71 @@ export class WhatsAppChannel implements Channel {
           msg.message.imageMessage?.caption ||
           msg.message.videoMessage?.caption || '';
 
-        // Download media
-        const media: MediaAttachment[] = [];
+        // Download media (in parallel)
+        const waDownloadTasks: Array<Promise<MediaAttachment | null>> = [];
         if (msg.message.imageMessage) {
-          try {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            if (buffer && !isOversized(buffer.length)) {
-              const filePath = saveMedia(buffer as Buffer, 'jpg');
-              media.push({ type: 'image', mimeType: msg.message.imageMessage.mimetype || 'image/jpeg', filePath });
-            }
-          } catch (err) { logger.warn('Failed to download WhatsApp image:', err); }
+          waDownloadTasks.push(
+            downloadMediaMessage(msg, 'buffer', {})
+              .then((buffer: any) => {
+                if (buffer && !isOversized(buffer.length)) {
+                  const filePath = saveMedia(buffer as Buffer, 'jpg');
+                  return { type: 'image' as const, mimeType: msg.message.imageMessage.mimetype || 'image/jpeg', filePath };
+                }
+                return null;
+              })
+              .catch(() => null)
+          );
         }
         if (msg.message.audioMessage) {
-          try {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            if (buffer && !isOversized(buffer.length)) {
-              const ext = msg.message.audioMessage.ptt ? 'ogg' : 'mp3';
-              const filePath = saveMedia(buffer as Buffer, ext);
-              media.push({
-                type: msg.message.audioMessage.ptt ? 'voice' : 'audio',
-                mimeType: msg.message.audioMessage.mimetype || 'audio/ogg',
-                filePath,
-                duration: msg.message.audioMessage.seconds ?? undefined,
-              });
-            }
-          } catch (err) { logger.warn('Failed to download WhatsApp audio:', err); }
+          waDownloadTasks.push(
+            downloadMediaMessage(msg, 'buffer', {})
+              .then((buffer: any) => {
+                if (buffer && !isOversized(buffer.length)) {
+                  const ext = msg.message.audioMessage.ptt ? 'ogg' : 'mp3';
+                  const filePath = saveMedia(buffer as Buffer, ext);
+                  return {
+                    type: (msg.message.audioMessage.ptt ? 'voice' : 'audio') as 'voice' | 'audio',
+                    mimeType: msg.message.audioMessage.mimetype || 'audio/ogg',
+                    filePath,
+                    duration: msg.message.audioMessage.seconds ?? undefined,
+                  };
+                }
+                return null;
+              })
+              .catch(() => null)
+          );
         }
         if (msg.message.documentMessage) {
-          try {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            if (buffer && !isOversized(buffer.length)) {
-              const ext = msg.message.documentMessage.fileName?.split('.').pop() || 'bin';
-              const filePath = saveMedia(buffer as Buffer, ext, msg.message.documentMessage.fileName ?? undefined);
-              media.push({ type: 'document', mimeType: msg.message.documentMessage.mimetype || 'application/octet-stream', filePath, fileName: msg.message.documentMessage.fileName ?? undefined });
-            }
-          } catch (err) { logger.warn('Failed to download WhatsApp document:', err); }
+          waDownloadTasks.push(
+            downloadMediaMessage(msg, 'buffer', {})
+              .then((buffer: any) => {
+                if (buffer && !isOversized(buffer.length)) {
+                  const ext = msg.message.documentMessage.fileName?.split('.').pop() || 'bin';
+                  const filePath = saveMedia(buffer as Buffer, ext, msg.message.documentMessage.fileName ?? undefined);
+                  return { type: 'document' as const, mimeType: msg.message.documentMessage.mimetype || 'application/octet-stream', filePath, fileName: msg.message.documentMessage.fileName ?? undefined };
+                }
+                return null;
+              })
+              .catch(() => null)
+          );
         }
         if (msg.message.videoMessage) {
-          try {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            if (buffer && !isOversized(buffer.length)) {
-              const filePath = saveMedia(buffer as Buffer, 'mp4');
-              media.push({ type: 'video', mimeType: msg.message.videoMessage.mimetype || 'video/mp4', filePath, duration: msg.message.videoMessage.seconds ?? undefined });
-            }
-          } catch (err) { logger.warn('Failed to download WhatsApp video:', err); }
+          waDownloadTasks.push(
+            downloadMediaMessage(msg, 'buffer', {})
+              .then((buffer: any) => {
+                if (buffer && !isOversized(buffer.length)) {
+                  const filePath = saveMedia(buffer as Buffer, 'mp4');
+                  return { type: 'video' as const, mimeType: msg.message.videoMessage.mimetype || 'video/mp4', filePath, duration: msg.message.videoMessage.seconds ?? undefined };
+                }
+                return null;
+              })
+              .catch(() => null)
+          );
         }
+        const waResults = await Promise.allSettled(waDownloadTasks);
+        const media: MediaAttachment[] = waResults
+          .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
+          .map(r => r.value!);
 
         // Transcribe voice messages if STT is configured
         if (this.sttProvider) {
@@ -169,25 +187,7 @@ export class WhatsAppChannel implements Channel {
           if (!rawPrompt && media.length === 0) return;
 
           // Build prompt with media references
-          let prompt = rawPrompt;
-          if (media.length > 0) {
-            const mediaDescriptions = media.map(m => {
-              // Use transcription if available (voice messages with STT)
-              if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) {
-                return m.caption;
-              }
-              switch (m.type) {
-                case 'image': return `User sent an image: ${m.filePath}`;
-                case 'voice': return `User sent a voice message: ${m.filePath}`;
-                case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-                case 'video': return `User sent a video: ${m.filePath}`;
-                case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-                default: return `User sent a file: ${m.filePath}`;
-              }
-            });
-            const mediaText = mediaDescriptions.join('\n');
-            prompt = prompt ? `${mediaText}\n\n${prompt}` : mediaText;
-          }
+          const prompt = buildMediaPrompt(media, rawPrompt);
 
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 

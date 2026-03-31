@@ -14,6 +14,9 @@ import os from 'node:os';
 // MCP server runs as a child of `claude`, not the Beecork daemon.
 // It communicates with the daemon via shared SQLite + signal files.
 
+function ok(text: string) { return { content: [{ type: 'text' as const, text }] }; }
+function fail(text: string) { return { content: [{ type: 'text' as const, text }], isError: true as const }; }
+
 const BEECORK_HOME = process.env.BEECORK_HOME || path.join(os.homedir(), '.beecork');
 const DB_PATH = path.join(BEECORK_HOME, 'memory.db');
 const CRON_RELOAD_SIGNAL = path.join(BEECORK_HOME, '.cron-reload');
@@ -277,11 +280,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'beecork_remember': {
         const { content, category } = args as { content: string; category?: string };
         if (!content || content.length > MAX_CONTENT_LENGTH) {
-          return { content: [{ type: 'text' as const, text: `Content is required and must be under ${MAX_CONTENT_LENGTH} characters.` }], isError: true };
+          return fail(`Content is required and must be under ${MAX_CONTENT_LENGTH} characters.`);
         }
         const fullContent = category ? `[${category}] ${content}` : content;
         db.prepare('INSERT INTO memories (content, source) VALUES (?, ?)').run(fullContent, 'tool');
-        return { content: [{ type: 'text' as const, text: `Remembered: "${fullContent}"` }] };
+        return ok(`Remembered: "${fullContent}"`);
       }
 
       case 'beecork_cron_create': {
@@ -289,20 +292,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           name: string; scheduleType: string; schedule: string; message: string; tabName?: string;
         };
         if (!jobName || jobName.length > MAX_NAME_LENGTH) {
-          return { content: [{ type: 'text' as const, text: `Job name is required and must be under ${MAX_NAME_LENGTH} characters.` }], isError: true };
+          return fail(`Job name is required and must be under ${MAX_NAME_LENGTH} characters.`);
         }
         if (!VALID_SCHEDULE_TYPES.includes(scheduleType)) {
-          return { content: [{ type: 'text' as const, text: `Invalid scheduleType "${scheduleType}". Must be one of: ${VALID_SCHEDULE_TYPES.join(', ')}` }], isError: true };
+          return fail(`Invalid scheduleType "${scheduleType}". Must be one of: ${VALID_SCHEDULE_TYPES.join(', ')}`);
         }
         if (!message || message.length > MAX_CONTENT_LENGTH) {
-          return { content: [{ type: 'text' as const, text: `Message is required and must be under ${MAX_CONTENT_LENGTH} characters.` }], isError: true };
+          return fail(`Message is required and must be under ${MAX_CONTENT_LENGTH} characters.`);
         }
         const id = uuidv4();
         const tab = tabName || 'default';
         if (tab !== 'default') {
           const tabError = validateTabName(tab);
           if (tabError) {
-            return { content: [{ type: 'text' as const, text: tabError }], isError: true };
+            return fail(tabError);
           }
         }
         db.prepare(
@@ -310,48 +313,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
            VALUES (?, ?, ?, ?, ?, ?, 1, 'local', ?)`
         ).run(id, jobName, scheduleType, schedule, tab, message, new Date().toISOString());
         signalCronReload();
-        return { content: [{ type: 'text' as const, text: `Cron job created: "${jobName}" (${scheduleType}: ${schedule}) → tab:${tab}\nID: ${id}` }] };
+        return ok(`Cron job created: "${jobName}" (${scheduleType}: ${schedule}) → tab:${tab}\nID: ${id}`);
       }
 
       case 'beecork_cron_list': {
         const jobs = db.prepare('SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
         if (jobs.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No cron jobs scheduled.' }] };
+          return ok('No cron jobs scheduled.');
         }
         const lines = jobs.map(j =>
           `- ${j.name} [${j.enabled ? 'enabled' : 'disabled'}] (${j.schedule_type}: ${j.schedule}) → tab:${j.tab_name} (ID: ${j.id})`
         );
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+        return ok(lines.join('\n'));
       }
 
       case 'beecork_cron_delete': {
         const { id } = args as { id: string };
         const result = db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(id);
         if (result.changes === 0) {
-          return { content: [{ type: 'text' as const, text: `No cron job found with ID: ${id}` }] };
+          return ok(`No cron job found with ID: ${id}`);
         }
         signalCronReload();
-        return { content: [{ type: 'text' as const, text: `Deleted cron job: ${id}` }] };
+        return ok(`Deleted cron job: ${id}`);
       }
 
       case 'beecork_tab_create': {
         const { name: tabName, workingDir, template: templateName, systemPrompt } = args as { name: string; workingDir?: string; template?: string; systemPrompt?: string };
         if (!tabName) {
-          return { content: [{ type: 'text' as const, text: 'Tab name is required.' }], isError: true };
+          return fail('Tab name is required.');
         }
         const tabCreateError = validateTabName(tabName);
         if (tabCreateError) {
-          return { content: [{ type: 'text' as const, text: tabCreateError }], isError: true };
+          return fail(tabCreateError);
         }
         const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(tabName);
         if (existing) {
-          return { content: [{ type: 'text' as const, text: `Tab "${tabName}" already exists.` }] };
+          return ok(`Tab "${tabName}" already exists.`);
         }
         // Apply template if specified
         const config = getConfig();
         const template = templateName ? config.tabTemplates?.[templateName] : undefined;
         if (templateName && !template) {
-          return { content: [{ type: 'text' as const, text: `Template "${templateName}" not found. Available: ${Object.keys(config.tabTemplates || {}).join(', ') || 'none'}` }], isError: true };
+          return fail(`Template "${templateName}" not found. Available: ${Object.keys(config.tabTemplates || {}).join(', ') || 'none'}`);
         }
         const id = uuidv4();
         // Explicit args take precedence over template values
@@ -359,7 +362,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         dir = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir;
         dir = path.resolve(dir);
         if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-          return { content: [{ type: 'text' as const, text: `Working directory does not exist or is not a directory: ${dir}` }], isError: true };
+          return fail(`Working directory does not exist or is not a directory: ${dir}`);
         }
         const tabSystemPrompt = systemPrompt || template?.systemPrompt || null;
         db.prepare(
@@ -368,7 +371,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const parts = [`Created tab: "${tabName}" (working dir: ${dir})`];
         if (tabSystemPrompt) parts.push(`System prompt: "${tabSystemPrompt.slice(0, 100)}${tabSystemPrompt.length > 100 ? '...' : ''}"`);
         if (templateName) parts.push(`Template: ${templateName}`);
-        return { content: [{ type: 'text' as const, text: parts.join('\n') }] };
+        return ok(parts.join('\n'));
       }
 
       case 'beecork_tab_list': {
@@ -376,28 +379,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           name: string; status: string; working_dir: string; last_activity_at: string;
         }>;
         if (tabs.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No tabs.' }] };
+          return ok('No tabs.');
         }
         const lines = tabs.map(t => `- ${t.name} [${t.status}] dir:${t.working_dir} last:${t.last_activity_at}`);
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+        return ok(lines.join('\n'));
       }
 
       case 'beecork_send_message': {
         const { tabName, message } = args as { tabName: string; message: string };
         if (!tabName || !message) {
-          return { content: [{ type: 'text' as const, text: 'Both tabName and message are required.' }], isError: true };
+          return fail('Both tabName and message are required.');
         }
         if (tabName !== 'default') {
           const sendTabError = validateTabName(tabName);
           if (sendTabError) {
-            return { content: [{ type: 'text' as const, text: sendTabError }], isError: true };
+            return fail(sendTabError);
           }
         }
         if (message.length > MAX_CONTENT_LENGTH) {
-          return { content: [{ type: 'text' as const, text: `Message must be under ${MAX_CONTENT_LENGTH} characters.` }], isError: true };
+          return fail(`Message must be under ${MAX_CONTENT_LENGTH} characters.`);
         }
         db.prepare('INSERT INTO pending_messages (tab_name, message) VALUES (?, ?)').run(tabName, message);
-        return { content: [{ type: 'text' as const, text: `Message queued for tab "${tabName}".` }] };
+        return ok(`Message queued for tab "${tabName}".`);
       }
 
       case 'beecork_recall': {
@@ -409,23 +412,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: string; tab_name: string | null; source: string; created_at: string;
         }>;
         if (memories.length === 0) {
-          return { content: [{ type: 'text' as const, text: `No memories found matching "${query}".` }] };
+          return ok(`No memories found matching "${query}".`);
         }
         const lines = memories.map(m => {
           const scope = m.tab_name ? `tab:${m.tab_name}` : 'global';
           return `- [${m.source}, ${scope}, ${m.created_at}] ${m.content}`;
         });
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+        return ok(lines.join('\n'));
       }
 
       case 'beecork_notify': {
         const { message, urgent } = args as { message: string; urgent?: boolean };
         if (!message) {
-          return { content: [{ type: 'text' as const, text: 'Message is required.' }], isError: true };
+          return fail('Message is required.');
         }
         const prefix = urgent ? '🚨 ' : '';
         db.prepare("INSERT INTO pending_messages (tab_name, message, type) VALUES ('_notify', ?, 'notification')").run(prefix + message);
-        return { content: [{ type: 'text' as const, text: `Notification sent to user.` }] };
+        return ok(`Notification sent to user.`);
       }
 
       case 'beecork_status': {
@@ -439,20 +442,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           `Cron jobs: ${cronCount} active`,
           `Memories: ${memoryCount} stored`,
         ];
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+        return ok(lines.join('\n'));
       }
 
       case 'beecork_send_media': {
         const { filePath, caption, tabName } = args as { filePath: string; caption?: string; tabName?: string };
         if (!fs.existsSync(filePath)) {
-          return { content: [{ type: 'text' as const, text: `File not found: ${filePath}` }], isError: true };
+          return fail(`File not found: ${filePath}`);
         }
         // Store as pending message with media flag
         const tab = tabName || 'default';
         db.prepare(
           'INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)'
         ).run(tab, JSON.stringify({ type: 'media', filePath, caption }), 'media');
-        return { content: [{ type: 'text' as const, text: `Media queued for sending: ${filePath}` }] };
+        return ok(`Media queued for sending: ${filePath}`);
       }
 
       case 'beecork_channels': {
@@ -471,44 +474,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if ((config as any).discord?.token) {
           channels.push({ id: 'discord', name: 'Discord', streaming: false, media: true });
         }
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(channels, null, 2) }],
-        };
+        return ok(JSON.stringify(channels, null, 2));
       }
 
       case 'beecork_cost': {
         const { tabName } = (args || {}) as { tabName?: string };
-
-        // Per-tab costs
-        let tabCosts;
+        const { getCostSummary, formatCostSummary } = await import('../observability/analytics.js');
+        const summary = getCostSummary();
         if (tabName) {
-          const tab = db.prepare('SELECT id, name FROM tabs WHERE name = ?').get(tabName) as { id: string; name: string } | undefined;
-          if (!tab) return { content: [{ type: 'text' as const, text: `Tab "${tabName}" not found` }], isError: true };
-          const cost = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total, COUNT(*) as messages FROM messages WHERE tab_id = ?').get(tab.id) as { total: number; messages: number };
-          tabCosts = [{ name: tab.name, cost: cost.total, messages: cost.messages }];
-        } else {
-          tabCosts = db.prepare(`
-            SELECT t.name, COALESCE(SUM(m.cost_usd), 0) as cost, COUNT(m.id) as messages
-            FROM tabs t LEFT JOIN messages m ON m.tab_id = t.id
-            GROUP BY t.id ORDER BY cost DESC
-          `).all() as Array<{ name: string; cost: number; messages: number }>;
+          const tab = summary.perTab.find(t => t.name === tabName);
+          if (!tab) return fail(`Tab "${tabName}" not found`);
+          return ok(`Tab "${tabName}": $${tab.cost.toFixed(4)} (${tab.messages} messages)`);
         }
-
-        // Today's spend
-        const today = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')").get() as { total: number };
-
-        // 30-day spend
-        const month = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-30 days')").get() as { total: number };
-
-        const lines = [
-          `Today: $${today.total.toFixed(4)}`,
-          `30 days: $${month.total.toFixed(4)}`,
-          '',
-          'Per tab:',
-          ...tabCosts.map((t: any) => `  ${t.name}: $${t.cost.toFixed(4)} (${t.messages} messages)`),
-        ];
-
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+        return ok(formatCostSummary(summary));
       }
 
       case 'beecork_failed_deliveries': {
@@ -516,21 +494,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "SELECT m.content, m.created_at, m.retry_count, t.name as tab_name FROM messages m JOIN tabs t ON t.id = m.tab_id WHERE m.delivery_status = 'failed' ORDER BY m.created_at DESC LIMIT 20"
         ).all();
         if ((failed as any[]).length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No failed deliveries.' }] };
+          return ok('No failed deliveries.');
         }
         const failedLines = (failed as any[]).map((f: any) => `[${f.created_at}] tab:${f.tab_name} retries:${f.retry_count}\n  ${f.content.slice(0, 200)}`);
-        return { content: [{ type: 'text' as const, text: failedLines.join('\n\n') }] };
+        return ok(failedLines.join('\n\n'));
       }
 
       case 'beecork_activity': {
         const hours = (args as any)?.hours || 24;
-        const since = new Date(Date.now() - hours * 3600000).toISOString();
-        const msgs = (db.prepare("SELECT COUNT(*) as c FROM messages WHERE created_at > ?").get(since) as any).c;
-        const crons = (db.prepare("SELECT COUNT(*) as c FROM cron_jobs WHERE last_run_at > ?").get(since) as any).c;
-        const mems = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE created_at > ?").get(since) as any).c;
-        const cost = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as t FROM messages WHERE created_at > ?").get(since) as any).t;
-        const text = `Activity (last ${hours}h): ${msgs} messages, ${crons} cron fires, ${mems} memories, $${cost.toFixed(4)} spent`;
-        return { content: [{ type: 'text' as const, text }] };
+        const { getActivitySummary, formatActivitySummary } = await import('../observability/analytics.js');
+        return ok(formatActivitySummary(getActivitySummary(hours)));
       }
 
       case 'beecork_export_data': {
@@ -548,15 +521,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             data = db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all();
             break;
           default:
-            return { content: [{ type: 'text' as const, text: 'Invalid type. Use: costs, messages, or crons' }], isError: true };
+            return fail('Invalid type. Use: costs, messages, or crons');
         }
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        return ok(JSON.stringify(data, null, 2));
       }
 
       case 'beecork_handoff': {
         const { tabName } = args as { tabName: string };
         const tab = db.prepare('SELECT * FROM tabs WHERE name = ?').get(tabName) as any;
-        if (!tab) return { content: [{ type: 'text' as const, text: `Tab "${tabName}" not found` }], isError: true };
+        if (!tab) return fail(`Tab "${tabName}" not found`);
 
         const messages = db.prepare(
           'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
@@ -570,13 +543,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           manualCommand: `cd ${tab.working_dir} && claude --session-id ${tab.session_id} --resume`,
           recentMessages: messages.reverse().map((m: any) => ({ role: m.role, preview: m.content.slice(0, 200) })),
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }] };
+        return ok(JSON.stringify(info, null, 2));
       }
 
       case 'beecork_machines': {
         const { listMachines } = await import('../machines/index.js');
         const machines = listMachines();
-        return { content: [{ type: 'text' as const, text: JSON.stringify(machines, null, 2) }] };
+        return ok(JSON.stringify(machines, null, 2));
       }
 
       case 'beecork_delegate': {
@@ -586,9 +559,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const delegation = createDelegation(returnToTab || 'default', tabName, message, returnToTab);
           // Queue the message for the target tab
           db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'delegation');
-          return { content: [{ type: 'text' as const, text: `Delegated to tab "${tabName}". Result will be sent back to "${delegation.returnToTab}" when complete.\n\nDelegation ID: ${delegation.id}` }] };
+          return ok(`Delegated to tab "${tabName}". Result will be sent back to "${delegation.returnToTab}" when complete.\n\nDelegation ID: ${delegation.id}`);
         } catch (err: any) {
-          return { content: [{ type: 'text' as const, text: `Delegation failed: ${err.message}` }], isError: true };
+          return fail(`Delegation failed: ${err.message}`);
         }
       }
 
@@ -597,18 +570,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { getPendingDelegations } = await import('../delegation/manager.js');
         const delegations = getPendingDelegations(tabName);
         if (delegations.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No pending delegations.' }] };
+          return ok('No pending delegations.');
         }
         const lines = delegations.map(d => `${d.sourceTab} → ${d.targetTab} [${d.status}] (depth ${d.depth})\n  "${d.message.slice(0, 100)}"`);
-        return { content: [{ type: 'text' as const, text: lines.join('\n\n') }] };
+        return ok(lines.join('\n\n'));
       }
 
       default:
-        return { content: [{ type: 'text' as const, text: `Unknown tool: ${name}` }], isError: true };
+        return fail(`Unknown tool: ${name}`);
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: 'text' as const, text: `Beecork error: ${errMsg}` }], isError: true };
+    return fail(`Beecork error: ${errMsg}`);
   }
 });
 

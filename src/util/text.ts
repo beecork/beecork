@@ -1,3 +1,5 @@
+import type { MediaAttachment } from '../channels/types.js';
+
 const DEFAULT_MAX_LENGTH = 4096;
 
 /** Split long text into chunks that fit within a message limit */
@@ -52,4 +54,22 @@ export function parseTabMessage(text: string): { tabName: string; prompt: string
     return { tabName: rest.slice(0, spaceIdx), prompt: rest.slice(spaceIdx + 1).trim() };
   }
   return { tabName: 'default', prompt: text };
+}
+
+/** Build prompt text from media attachments */
+export function buildMediaPrompt(media: MediaAttachment[], textPrompt: string): string {
+  if (media.length === 0) return textPrompt;
+  const descriptions = media.map(m => {
+    if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) return m.caption;
+    switch (m.type) {
+      case 'image': return `User sent an image: ${m.filePath}`;
+      case 'voice': return `User sent a voice message: ${m.filePath}`;
+      case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+      case 'video': return `User sent a video: ${m.filePath}`;
+      case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+      default: return `User sent a file: ${m.filePath}`;
+    }
+  });
+  const mediaText = descriptions.join('\n');
+  return textPrompt ? `${mediaText}\n\n${textPrompt}` : mediaText;
 }
