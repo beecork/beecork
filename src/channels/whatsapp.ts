@@ -4,6 +4,7 @@ import { saveMedia, isOversized } from '../media/store.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
+import { ProgressTracker } from '../util/progress.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 import { initVoiceProviders } from '../voice/index.js';
 import type { STTProvider } from '../voice/stt.js';
@@ -191,7 +192,15 @@ export class WhatsAppChannel implements Channel {
 
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 
-          const result = await this.ctx.tabManager.sendMessage(tabName, prompt);
+          // Progress updates for long tasks (every 30 seconds)
+          const progressTracker = new ProgressTracker(tabName, (msg) => {
+            sock.sendMessage(sender, { text: msg }).catch(() => {});
+          });
+
+          const result = await this.ctx.tabManager.sendMessage(tabName, prompt, {
+            onToolUse: (name, input) => progressTracker.record(name, input),
+          });
+          progressTracker.stop();
           const responseText = result.error
             ? `Error: ${result.text}`
             : result.text || '(empty response)';

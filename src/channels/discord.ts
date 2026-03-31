@@ -7,6 +7,7 @@ import { saveMedia, isOversized } from '../media/store.js';
 import { initVoiceProviders } from '../voice/index.js';
 import type { STTProvider } from '../voice/stt.js';
 import type { TTSProvider } from '../voice/tts.js';
+import { ProgressTracker } from '../util/progress.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 export class DiscordChannel implements Channel {
@@ -153,7 +154,15 @@ export class DiscordChannel implements Channel {
             effectiveTab = message.channel.name || tabName;
           }
 
-          const result = await this.ctx.tabManager.sendMessage(effectiveTab, fullPrompt);
+          // Progress updates for long tasks (every 30 seconds)
+          const progressTracker = new ProgressTracker(effectiveTab, (msg) => {
+            message.channel.send(msg).catch(() => {});
+          });
+
+          const result = await this.ctx.tabManager.sendMessage(effectiveTab, fullPrompt, {
+            onToolUse: (name, input) => progressTracker.record(name, input),
+          });
+          progressTracker.stop();
           clearInterval(typingInterval);
 
           const responseText = result.error

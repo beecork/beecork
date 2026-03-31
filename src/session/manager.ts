@@ -108,7 +108,7 @@ export class TabManager {
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; skipExtraction?: boolean }): Promise<SendResult> {
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean }): Promise<SendResult> {
     const tab = this.ensureTab(tabName);
 
     // If a subprocess is already running on this tab, queue the message
@@ -126,7 +126,7 @@ export class TabManager {
       });
     }
 
-    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction);
+    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction, options?.onToolUse);
   }
 
   /** Get all tabs from the database */
@@ -200,7 +200,7 @@ export class TabManager {
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean): Promise<SendResult> {
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void): Promise<SendResult> {
     const db = getDb();
 
     // Budget check before spawning
@@ -296,6 +296,7 @@ export class TabManager {
                 onTextChunk?.(block.text);
               } else if (block.type === 'tool_use') {
                 const toolUse = block as StreamContentToolUse;
+                onToolUse?.(toolUse.name, toolUse.input);
                 const action: CircuitBreakerAction = breaker.recordToolCall(toolUse);
                 if (action === 'break') {
                   logger.warn(`[${tab.name}] Circuit breaker tripped, killing subprocess`);

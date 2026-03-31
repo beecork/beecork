@@ -8,6 +8,7 @@ import { getAdminUserId, validateTabName } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';
+import { ProgressTracker } from '../util/progress.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 import type { GroupConfig } from '../types.js';
 import { initVoiceProviders } from '../voice/index.js';
@@ -521,7 +522,16 @@ export class TelegramChannel implements Channel {
           } catch { /* edit failures are non-critical */ }
         };
 
-        const result = await this.ctx.tabManager.sendMessage(tabName, prompt, { onTextChunk });
+        // Progress updates for long tasks (every 30 seconds)
+        const progressTracker = new ProgressTracker(tabName, (msg) => {
+          this.bot.sendMessage(chatId, msg).catch(() => {});
+        });
+
+        const result = await this.ctx.tabManager.sendMessage(tabName, prompt, {
+          onTextChunk,
+          onToolUse: (name, input) => progressTracker.record(name, input),
+        });
+        progressTracker.stop();
         responseText = result.text || '(empty response)';
         responseError = result.error;
 
