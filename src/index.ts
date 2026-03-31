@@ -253,4 +253,26 @@ program
     console.log(formatActivitySummary(getActivitySummary(h)));
   });
 
+program
+  .command('machines')
+  .description('List registered machines')
+  .action(async () => {
+    const { listMachines } = await import('./machines/index.js');
+    const machines = listMachines();
+    if (machines.length === 0) {
+      console.log('No machines registered. Start the daemon to register this machine.');
+      return;
+    }
+    console.log(`\n${machines.length} machine(s):\n`);
+    for (const m of machines) {
+      const primary = m.isPrimary ? ' (primary)' : '';
+      const remote = m.host ? ` — ${m.sshUser}@${m.host}` : ' — local';
+      console.log(`  ${m.name}${primary}${remote}`);
+      for (const p of m.projectPaths) {
+        console.log(`    ${p}`);
+      }
+    }
+    console.log('');
+  });
+
 program.parse();

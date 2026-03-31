@@ -148,6 +148,20 @@ const MIGRATIONS: Migration[] = [
       completed_at TEXT
     )`,
   },
+  {
+    version: 12,
+    description: 'Add machines table for multi-machine routing',
+    up: `CREATE TABLE IF NOT EXISTS machines (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      host TEXT,
+      ssh_user TEXT,
+      project_paths TEXT,
+      is_primary INTEGER DEFAULT 0,
+      last_seen_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

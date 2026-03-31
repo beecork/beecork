@@ -422,6 +422,23 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    if (text === '/machines' || text.startsWith('/machines@')) {
+      const { listMachines } = await import('../machines/index.js');
+      const machines = listMachines();
+      if (machines.length === 0) {
+        await this.bot.sendMessage(chatId, 'No machines registered.');
+        return;
+      }
+      const list = machines.map(m => {
+        const primary = m.isPrimary ? ' \u2B50' : '';
+        const remote = m.host ? ` (${m.sshUser}@${m.host})` : ' (local)';
+        const paths = m.projectPaths.slice(0, 3).join(', ');
+        return `\u2022 ${m.name}${primary}${remote}\n  Projects: ${paths}`;
+      }).join('\n\n');
+      await this.bot.sendMessage(chatId, `\uD83D\uDDA5 ${machines.length} machine(s):\n\n${list}`);
+      return;
+    }
+
     // Unknown command — treat as regular message
     await this.handleMessage(chatId, text, messageId);
   }

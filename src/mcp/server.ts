@@ -237,6 +237,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'beecork_machines',
+      description: 'List registered machines and their project paths. Shows which machine handles which projects.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
       name: 'beecork_delegate',
       description: 'Delegate a task to another tab. The target tab runs independently and the result is automatically sent back to the source tab when complete. Use this for tasks that need their own working directory or context.',
       inputSchema: {
@@ -566,6 +571,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           recentMessages: messages.reverse().map((m: any) => ({ role: m.role, preview: m.content.slice(0, 200) })),
         };
         return { content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }] };
+      }
+
+      case 'beecork_machines': {
+        const { listMachines } = await import('../machines/index.js');
+        const machines = listMachines();
+        return { content: [{ type: 'text' as const, text: JSON.stringify(machines, null, 2) }] };
       }
 
       case 'beecork_delegate': {

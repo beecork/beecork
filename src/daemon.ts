@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
@@ -54,6 +55,11 @@ async function main(): Promise<void> {
 
   // 2. Initialize database
   getDb();
+
+  // 2b. Register this machine
+  const { registerThisMachine } = await import('./machines/index.js');
+  const projectPaths = config.pipe?.projectScanPaths || [os.homedir()];
+  registerThisMachine(projectPaths);
 
   // 3. Write PID file with exclusive lock to prevent race condition
   try {
