@@ -45,7 +45,7 @@ program
 
 program
   .command('status')
-  .description('Show daemon status, running tabs, and cron jobs')
+  .description('Show daemon status, running tabs, and tasks')
   .action(showStatus);
 
 program
@@ -58,9 +58,38 @@ program
   .description('Tail logs for a tab (default: daemon logs)')
   .action(tailLogs);
 
+// Tasks (new name)
+const taskCmd = program
+  .command('tasks')
+  .description('Manage scheduled tasks');
+
+taskCmd
+  .command('list')
+  .description('List all tasks')
+  .action(listCrons);
+
+taskCmd
+  .command('delete <id>')
+  .description('Delete a task by ID')
+  .action(deleteCron);
+
+program
+  .command('task')
+  .description('Alias for tasks')
+  .argument('[subcommand]', 'Subcommand (list, delete)')
+  .argument('[id]', 'Task ID (for delete)')
+  .action(async (sub?: string, id?: string) => {
+    if (sub === 'delete' && id) {
+      await deleteCron(id);
+    } else {
+      await listCrons();
+    }
+  });
+
+// Backward-compatible cron aliases (hidden)
 const cronCmd = program
-  .command('cron')
-  .description('Manage cron jobs');
+  .command('cron', { hidden: true })
+  .description('Manage cron jobs (alias for tasks)');
 
 cronCmd
   .command('list')
@@ -71,6 +100,29 @@ cronCmd
   .command('delete <id>')
   .description('Delete a cron job by ID')
   .action(deleteCron);
+
+// Watcher commands
+program
+  .command('watches')
+  .description('List all watchers')
+  .action(async () => {
+    const { listWatchers } = await import('./cli/commands.js');
+    await listWatchers();
+  });
+
+program
+  .command('watch')
+  .description('Manage watchers')
+  .argument('[subcommand]', 'Subcommand (list, delete)')
+  .argument('[id]', 'Watcher ID (for delete)')
+  .action(async (sub?: string, id?: string) => {
+    const { listWatchers, deleteWatcher } = await import('./cli/commands.js');
+    if (sub === 'delete' && id) {
+      await deleteWatcher(id);
+    } else {
+      await listWatchers();
+    }
+  });
 
 const memoryCmd = program
   .command('memory')
@@ -260,7 +312,8 @@ Useful commands:
   beecork logs      \u2014 View daemon logs
   beecork doctor    \u2014 Run diagnostics
   beecork dashboard \u2014 Open web dashboard
-  beecork cron list \u2014 View scheduled tasks
+  beecork tasks list \u2014 View scheduled tasks
+  beecork watches    \u2014 View active watchers
 
 ${os === 'darwin' ? 'On macOS: beecork runs as a launchd service.\n  Check: launchctl list | grep beecork' : ''}${os === 'linux' ? 'On Linux: beecork runs as a systemd service.\n  Check: systemctl --user status beecork' : ''}
     `);
@@ -458,6 +511,19 @@ program
   .action(async () => {
     const { listCapabilities } = await import('./cli/capabilities.js');
     await listCapabilities();
+  });
+
+program
+  .command('knowledge [scope]')
+  .description('List stored knowledge (global, project, or all)')
+  .action(async (scope?: string) => {
+    const { getGlobalKnowledge, formatKnowledgeForContext } = await import('./knowledge/index.js');
+    const entries = getGlobalKnowledge();
+    if (entries.length === 0) {
+      console.log('No global knowledge stored yet.');
+      return;
+    }
+    console.log(formatKnowledgeForContext(entries));
   });
 
 program.parse();

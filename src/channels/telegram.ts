@@ -304,6 +304,18 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    if (text === '/knowledge') {
+      const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
+      const entries = getAllKnowledge();
+      if (entries.length === 0) {
+        await this.bot.sendMessage(chatId, 'No knowledge stored yet. Beecork learns from your conversations.');
+        return;
+      }
+      const formatted = formatKnowledgeForContext(entries);
+      await this.sendResponse(chatId, formatted.slice(0, 4000));
+      return;
+    }
+
     // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /register, /link, /users, /cost, /activity, /handoff, /machines)
     const { handleSharedCommand } = await import('./command-handler.js');
     const result = await handleSharedCommand({

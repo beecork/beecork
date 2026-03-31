@@ -223,12 +223,22 @@ export class TabManager {
       logger.warn(`Tab "${tab.name}" has approvalMode="${tabConfig.approvalMode}" — interactive approval not yet implemented, running in yolo mode`);
     }
 
-    // Inject relevant memories into the prompt
-    const memories = getRelevantMemories(tab.name);
+    // Inject knowledge from all three layers
+    const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
+    const knowledge = getAllKnowledge(tab.workingDir, tab.name);
+    const knowledgeContext = formatKnowledgeForContext(knowledge);
     let enrichedPrompt = prompt;
+    if (knowledgeContext) {
+      enrichedPrompt = `${knowledgeContext}\n\n${prompt}`;
+    }
+
+    // Also inject relevant memories as fallback (additive)
+    const memories = getRelevantMemories(tab.name);
     if (memories.length > 0) {
       const memoryContext = memories.map(m => `- ${m}`).join('\n');
-      enrichedPrompt = `[Context from memory:\n${memoryContext}\n]\n\n${prompt}`;
+      if (!knowledgeContext) {
+        enrichedPrompt = `[Context from memory:\n${memoryContext}\n]\n\n${prompt}`;
+      }
     }
 
     // Store user message

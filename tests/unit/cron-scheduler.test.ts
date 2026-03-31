@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { intervalToCron } from '../../src/cron/scheduler.js';
+import { intervalToCron } from '../../src/tasks/scheduler.js';
 
 describe('intervalToCron', () => {
   it('should convert minutes', () => {

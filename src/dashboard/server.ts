@@ -1,6 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { platform } from 'node:os';
 import Database from 'better-sqlite3';
 import { getDbPath } from '../util/paths.js';
@@ -150,8 +151,8 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      // POST: Create cron job
-      if (path === '/api/crons' && req.method === 'POST') {
+      // POST: Create task (supports both /api/tasks and /api/crons)
+      if ((path === '/api/tasks' || path === '/api/crons') && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
         let parsedCron: any;
@@ -162,17 +163,32 @@ export function startDashboardServer(port = 0): void {
         if (!validateTabName(effectiveTab)) { json(res, { error: 'Invalid tab name' }, 400); return; }
 
         const id = crypto.randomUUID();
-        withWriteDb(db => db.prepare('INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
+        withWriteDb(db => db.prepare('INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
           id, name, scheduleType || 'every', schedule, effectiveTab, message
         ));
         json(res, { success: true, id });
         return;
       }
 
-      // DELETE: Delete cron job
-      if (path.match(/^\/api\/crons\/[^/]+$/) && req.method === 'DELETE') {
-        const cronId = decodeURIComponent(path.split('/')[3]);
-        withWriteDb(db => db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(cronId));
+      // DELETE: Delete task (supports both /api/tasks and /api/crons)
+      if ((path.match(/^\/api\/tasks\/[^/]+$/) || path.match(/^\/api\/crons\/[^/]+$/)) && req.method === 'DELETE') {
+        const taskId = decodeURIComponent(path.split('/')[3]);
+        withWriteDb(db => db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId));
+        json(res, { success: true });
+        return;
+      }
+
+      // GET: List watchers
+      if (path === '/api/watchers' && req.method === 'GET') {
+        const watchers = getDashDb().prepare('SELECT * FROM watchers ORDER BY created_at').all();
+        json(res, watchers);
+        return;
+      }
+
+      // DELETE: Delete watcher
+      if (path.match(/^\/api\/watchers\/[^/]+$/) && req.method === 'DELETE') {
+        const watcherId = decodeURIComponent(path.split('/')[3]);
+        withWriteDb(db => db.prepare('DELETE FROM watchers WHERE id = ?').run(watcherId));
         json(res, { success: true });
         return;
       }
@@ -252,7 +268,7 @@ export function startDashboardServer(port = 0): void {
         const pid = getDaemonPid();
         const tabCount = (db.prepare('SELECT COUNT(*) as c FROM tabs').get() as { c: number }).c;
         const activeCount = (db.prepare("SELECT COUNT(*) as c FROM tabs WHERE status = 'running'").get() as { c: number }).c;
-        const cronCount = (db.prepare("SELECT COUNT(*) as c FROM cron_jobs WHERE enabled = 1").get() as { c: number }).c;
+        const cronCount = (db.prepare("SELECT COUNT(*) as c FROM tasks WHERE enabled = 1").get() as { c: number }).c;
         const memoryCount = (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
         json(res, { version: VERSION, daemonPid: pid, tabs: tabCount, activeTabs: activeCount, cronJobs: cronCount, memories: memoryCount });
         return;
@@ -307,8 +323,8 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
-      if (path === '/api/crons' && req.method === 'GET') {
-        const crons = db.prepare('SELECT * FROM cron_jobs ORDER BY created_at').all();
+      if ((path === '/api/tasks' || path === '/api/crons') && req.method === 'GET') {
+        const crons = db.prepare('SELECT * FROM tasks ORDER BY created_at').all();
         json(res, crons);
         return;
       }
@@ -325,6 +341,75 @@ export function startDashboardServer(port = 0): void {
           ORDER BY day
         `).all();
         json(res, costs);
+        return;
+      }
+
+      // GET /api/update/status — check versions for beecork, claude code, and other packages
+      if (path === '/api/update/status') {
+        const execAsync = promisify(exec);
+
+        async function checkPackage(name: string, installCmd?: string): Promise<Record<string, unknown>> {
+          const pkg: Record<string, unknown> = { name };
+          try {
+            const { stdout } = await execAsync(`${installCmd || name} --version`, { timeout: 10000 });
+            pkg.installed = stdout.trim().replace(/^v/, '');
+          } catch { pkg.installed = null; }
+          try {
+            const { stdout } = await execAsync(`npm view ${name} version`, { timeout: 10000 });
+            pkg.latest = stdout.trim();
+          } catch { pkg.latest = null; }
+          pkg.updateAvailable = !!(pkg.installed && pkg.latest && pkg.installed !== pkg.latest);
+          return pkg;
+        }
+
+        const packages = await Promise.all([
+          (async () => {
+            const p = await checkPackage('beecork');
+            p.installed = VERSION; // use our known version, more reliable
+            p.updateAvailable = !!(p.latest && p.installed !== p.latest);
+            return p;
+          })(),
+          (async () => {
+            const p: Record<string, unknown> = { name: '@anthropic-ai/claude-code' };
+            try {
+              const { stdout } = await execAsync('claude --version', { timeout: 10000 });
+              p.installed = stdout.trim().replace(/^.*?(\d+\.\d+\.\d+).*$/, '$1');
+            } catch { p.installed = null; }
+            try {
+              const { stdout } = await execAsync('npm view @anthropic-ai/claude-code version', { timeout: 10000 });
+              p.latest = stdout.trim();
+            } catch { p.latest = null; }
+            p.updateAvailable = !!(p.installed && p.latest && p.installed !== p.latest);
+            return p;
+          })(),
+        ]);
+
+        json(res, { packages });
+        return;
+      }
+
+      // POST /api/update/:package — update a specific package
+      if (path.match(/^\/api\/update\/[^/]+$/) && req.method === 'POST') {
+        const pkgName = decodeURIComponent(path.split('/')[3]);
+        const execAsync = promisify(exec);
+
+        const allowedPackages: Record<string, string> = {
+          'beecork': 'npm install -g beecork@latest',
+          '@anthropic-ai/claude-code': 'npm install -g @anthropic-ai/claude-code@latest',
+        };
+
+        const cmd = allowedPackages[pkgName];
+        if (!cmd) {
+          json(res, { error: `Package "${pkgName}" is not in the allowed update list.` }, 400);
+          return;
+        }
+
+        try {
+          const { stdout } = await execAsync(cmd, { timeout: 120000 });
+          json(res, { success: true, package: pkgName, output: stdout.trim() });
+        } catch (err: any) {
+          json(res, { error: err.message }, 500);
+        }
         return;
       }
 

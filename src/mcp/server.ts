@@ -20,6 +20,7 @@ function fail(text: string) { return { content: [{ type: 'text' as const, text }
 const BEECORK_HOME = process.env.BEECORK_HOME || path.join(os.homedir(), '.beecork');
 const DB_PATH = path.join(BEECORK_HOME, 'memory.db');
 const CRON_RELOAD_SIGNAL = path.join(BEECORK_HOME, '.cron-reload');
+const WATCHER_RELOAD_SIGNAL = path.join(BEECORK_HOME, '.watcher-reload');
 
 // Cached singleton connection (lives for the MCP server's lifetime)
 let cachedDb: Database.Database | null = null;
@@ -57,6 +58,10 @@ function signalCronReload(): void {
   fs.writeFileSync(CRON_RELOAD_SIGNAL, String(Date.now()));
 }
 
+function signalWatcherReload(): void {
+  fs.writeFileSync(WATCHER_RELOAD_SIGNAL, String(Date.now()));
+}
+
 import { VERSION } from '../version.js';
 import { getConfig, validateTabName } from '../config.js';
 
@@ -74,45 +79,110 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object' as const,
         properties: {
           content: { type: 'string', description: 'The fact or information to remember' },
-          category: { type: 'string', description: 'Optional category for organizing memories (e.g., "preference", "server", "decision")' },
+          scope: { type: 'string', enum: ['global', 'project', 'tab', 'auto'], description: 'Where to store: global (about the user), project (about this project), tab (about this conversation), or auto (Claude decides)' },
+          category: { type: 'string', description: 'For global scope: people, preferences, routines, or general' },
         },
         required: ['content'],
       },
     },
     {
-      name: 'beecork_cron_create',
+      name: 'beecork_task_create',
       description: 'Schedule a task that will run automatically. The task sends a message to a Beecork tab at the scheduled time.',
       inputSchema: {
         type: 'object' as const,
         properties: {
-          name: { type: 'string', description: 'Human-readable name for the job' },
+          name: { type: 'string', description: 'Human-readable name for the task' },
           scheduleType: {
             type: 'string',
             enum: ['at', 'every', 'cron'],
             description: '"at" = one-time ISO datetime, "every" = interval like "30m"/"2h"/"1d", "cron" = cron expression like "0 9 * * 1"',
           },
           schedule: { type: 'string', description: 'The schedule value (ISO datetime, interval, or cron expression)' },
-          message: { type: 'string', description: 'The prompt/message to send when the job fires' },
+          message: { type: 'string', description: 'The prompt/message to send when the task fires' },
           tabName: { type: 'string', description: 'Which tab to send the message to (default: "default")' },
         },
         required: ['name', 'scheduleType', 'schedule', 'message'],
       },
     },
     {
-      name: 'beecork_cron_list',
-      description: 'List all scheduled cron jobs.',
+      name: 'beecork_task_list',
+      description: 'List all scheduled tasks.',
       inputSchema: {
         type: 'object' as const,
         properties: {},
       },
     },
     {
-      name: 'beecork_cron_delete',
-      description: 'Delete a scheduled cron job by ID.',
+      name: 'beecork_task_delete',
+      description: 'Delete a scheduled task by ID.',
       inputSchema: {
         type: 'object' as const,
         properties: {
-          id: { type: 'string', description: 'The ID of the cron job to delete' },
+          id: { type: 'string', description: 'The ID of the task to delete' },
+        },
+        required: ['id'],
+      },
+    },
+    // Backward-compatible aliases
+    {
+      name: 'beecork_cron_create',
+      description: '[Alias for beecork_task_create] Schedule a task that will run automatically.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Human-readable name for the job' },
+          scheduleType: { type: 'string', enum: ['at', 'every', 'cron'] },
+          schedule: { type: 'string' },
+          message: { type: 'string' },
+          tabName: { type: 'string' },
+        },
+        required: ['name', 'scheduleType', 'schedule', 'message'],
+      },
+    },
+    {
+      name: 'beecork_cron_list',
+      description: '[Alias for beecork_task_list] List all scheduled tasks.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'beecork_cron_delete',
+      description: '[Alias for beecork_task_delete] Delete a scheduled task by ID.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
+    // Watcher tools
+    {
+      name: 'beecork_watch_create',
+      description: 'Create a watcher that periodically runs a check command and triggers an action when a condition is met.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Human-readable name for the watcher' },
+          description: { type: 'string', description: 'What to watch (natural language)' },
+          checkCommand: { type: 'string', description: 'Shell command to run for checking' },
+          condition: { type: 'string', description: 'When to trigger: "contains X", "not contains X", "> N", "< N", "any", "error"' },
+          action: { type: 'string', enum: ['notify', 'fix', 'delegate'], description: 'What to do when triggered (default: notify)' },
+          actionDetails: { type: 'string', description: 'For fix: command to run. For delegate: tab name + message.' },
+          schedule: { type: 'string', description: 'How often: "every 5m", "every 1h", or cron expression' },
+        },
+        required: ['name', 'checkCommand', 'condition', 'schedule'],
+      },
+    },
+    {
+      name: 'beecork_watch_list',
+      description: 'List all watchers with their status.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'beecork_watch_delete',
+      description: 'Delete a watcher by ID.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          id: { type: 'string', description: 'The ID of the watcher to delete' },
         },
         required: ['id'],
       },
@@ -352,6 +422,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
+      name: 'beecork_knowledge',
+      description: 'List all knowledge Beecork has about the current context (global + project + tab)',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          scope: { type: 'string', enum: ['global', 'project', 'tab', 'all'], description: 'Which layer to show (default: all)' },
+        },
+      },
+    },
+    {
       name: 'beecork_capabilities',
       description: 'List available and enabled capability packs (email, calendar, github, etc.)',
       inputSchema: { type: 'object' as const, properties: {} },
@@ -367,21 +447,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     switch (name) {
       case 'beecork_remember': {
-        const { content, category } = args as { content: string; category?: string };
+        const { content, scope, category } = args as { content: string; scope?: string; category?: string };
         if (!content || content.length > MAX_CONTENT_LENGTH) {
           return fail(`Content is required and must be under ${MAX_CONTENT_LENGTH} characters.`);
         }
+        if (scope && scope !== 'tab' && scope !== 'auto') {
+          const { addKnowledge } = await import('../knowledge/index.js');
+          // Determine tab info for project scope
+          const currentTab = db.prepare("SELECT working_dir FROM tabs ORDER BY last_activity_at DESC LIMIT 1").get() as { working_dir: string } | undefined;
+          addKnowledge(content, scope as any, { category, projectPath: currentTab?.working_dir, tabName: undefined });
+          return ok(`Remembered (${scope}): ${content.slice(0, 100)}`);
+        }
+        // Default: existing tab memory behavior
         const fullContent = category ? `[${category}] ${content}` : content;
         db.prepare('INSERT INTO memories (content, source) VALUES (?, ?)').run(fullContent, 'tool');
         return ok(`Remembered: "${fullContent}"`);
       }
 
+      case 'beecork_task_create':
       case 'beecork_cron_create': {
         const { name: jobName, scheduleType, schedule, message, tabName } = args as {
           name: string; scheduleType: string; schedule: string; message: string; tabName?: string;
         };
         if (!jobName || jobName.length > MAX_NAME_LENGTH) {
-          return fail(`Job name is required and must be under ${MAX_NAME_LENGTH} characters.`);
+          return fail(`Task name is required and must be under ${MAX_NAME_LENGTH} characters.`);
         }
         if (!VALID_SCHEDULE_TYPES.includes(scheduleType)) {
           return fail(`Invalid scheduleType "${scheduleType}". Must be one of: ${VALID_SCHEDULE_TYPES.join(', ')}`);
@@ -398,32 +487,75 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         db.prepare(
-          `INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at)
+          `INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at)
            VALUES (?, ?, ?, ?, ?, ?, 1, 'local', ?)`
         ).run(id, jobName, scheduleType, schedule, tab, message, new Date().toISOString());
         signalCronReload();
-        return ok(`Cron job created: "${jobName}" (${scheduleType}: ${schedule}) → tab:${tab}\nID: ${id}`);
+        return ok(`Task created: "${jobName}" (${scheduleType}: ${schedule}) -> tab:${tab}\nID: ${id}`);
       }
 
+      case 'beecork_task_list':
       case 'beecork_cron_list': {
-        const jobs = db.prepare('SELECT * FROM cron_jobs WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
+        const jobs = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
         if (jobs.length === 0) {
-          return ok('No cron jobs scheduled.');
+          return ok('No tasks scheduled.');
         }
         const lines = jobs.map(j =>
-          `- ${j.name} [${j.enabled ? 'enabled' : 'disabled'}] (${j.schedule_type}: ${j.schedule}) → tab:${j.tab_name} (ID: ${j.id})`
+          `- ${j.name} [${j.enabled ? 'enabled' : 'disabled'}] (${j.schedule_type}: ${j.schedule}) -> tab:${j.tab_name} (ID: ${j.id})`
         );
         return ok(lines.join('\n'));
       }
 
+      case 'beecork_task_delete':
       case 'beecork_cron_delete': {
         const { id } = args as { id: string };
-        const result = db.prepare('DELETE FROM cron_jobs WHERE id = ?').run(id);
+        const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
         if (result.changes === 0) {
-          return ok(`No cron job found with ID: ${id}`);
+          return ok(`No task found with ID: ${id}`);
         }
         signalCronReload();
-        return ok(`Deleted cron job: ${id}`);
+        return ok(`Deleted task: ${id}`);
+      }
+
+      case 'beecork_watch_create': {
+        const { name: watchName, description: watchDesc, checkCommand, condition, action, actionDetails, schedule: watchSchedule } = args as {
+          name: string; description?: string; checkCommand: string; condition: string;
+          action?: string; actionDetails?: string; schedule: string;
+        };
+        if (!watchName || watchName.length > MAX_NAME_LENGTH) {
+          return fail(`Watcher name is required and must be under ${MAX_NAME_LENGTH} characters.`);
+        }
+        if (!checkCommand) return fail('checkCommand is required.');
+        if (!condition) return fail('condition is required.');
+        if (!watchSchedule) return fail('schedule is required.');
+        const watchId = uuidv4();
+        db.prepare(
+          `INSERT INTO watchers (id, name, description, check_command, condition, action, action_details, schedule)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(watchId, watchName, watchDesc || null, checkCommand, condition, action || 'notify', actionDetails || null, watchSchedule);
+        signalWatcherReload();
+        return ok(`Watcher created: "${watchName}" (${watchSchedule})\nID: ${watchId}`);
+      }
+
+      case 'beecork_watch_list': {
+        const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<Record<string, unknown>>;
+        if (watchers.length === 0) {
+          return ok('No watchers configured.');
+        }
+        const watchLines = watchers.map(w =>
+          `- ${w.name} [${w.enabled ? 'enabled' : 'disabled'}] ${w.schedule} | action: ${w.action} | triggers: ${w.trigger_count} (ID: ${w.id})`
+        );
+        return ok(watchLines.join('\n'));
+      }
+
+      case 'beecork_watch_delete': {
+        const { id: watchDelId } = args as { id: string };
+        const watchDelResult = db.prepare('DELETE FROM watchers WHERE id = ?').run(watchDelId);
+        if (watchDelResult.changes === 0) {
+          return ok(`No watcher found with ID: ${watchDelId}`);
+        }
+        signalWatcherReload();
+        return ok(`Deleted watcher: ${watchDelId}`);
       }
 
       case 'beecork_tab_create': {
@@ -500,14 +632,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ).all(`%${query}%`, maxResults) as Array<{
           content: string; tab_name: string | null; source: string; created_at: string;
         }>;
-        if (memories.length === 0) {
-          return ok(`No memories found matching "${query}".`);
+        // Also search knowledge files
+        const { searchKnowledge } = await import('../knowledge/index.js');
+        const knowledgeResults = searchKnowledge(query);
+        // Merge and return
+        const allResults = [
+          ...knowledgeResults.map(k => k.content),
+          ...memories.map(m => m.content),
+        ];
+        if (allResults.length === 0) {
+          return ok(`No relevant knowledge found matching "${query}".`);
         }
-        const lines = memories.map(m => {
-          const scope = m.tab_name ? `tab:${m.tab_name}` : 'global';
-          return `- [${m.source}, ${scope}, ${m.created_at}] ${m.content}`;
-        });
-        return ok(lines.join('\n'));
+        return ok(allResults.join('\n---\n'));
       }
 
       case 'beecork_notify': {
@@ -523,12 +659,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'beecork_status': {
         const tabCount = (db.prepare('SELECT COUNT(*) as c FROM tabs').get() as { c: number }).c;
         const activeTabs = (db.prepare("SELECT COUNT(*) as c FROM tabs WHERE status = 'running'").get() as { c: number }).c;
-        const cronCount = (db.prepare('SELECT COUNT(*) as c FROM cron_jobs WHERE enabled = 1').get() as { c: number }).c;
+        const taskCount = (db.prepare('SELECT COUNT(*) as c FROM tasks WHERE enabled = 1').get() as { c: number }).c;
+        const watcherCount = (db.prepare('SELECT COUNT(*) as c FROM watchers WHERE enabled = 1').get() as { c: number }).c;
         const memoryCount = (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
 
         const lines = [
           `Tabs: ${tabCount} total, ${activeTabs} running`,
-          `Cron jobs: ${cronCount} active`,
+          `Tasks: ${taskCount} active`,
+          `Watchers: ${watcherCount} active`,
           `Memories: ${memoryCount} stored`,
         ];
         return ok(lines.join('\n'));
@@ -607,7 +745,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             data = db.prepare("SELECT m.role, m.content, m.cost_usd, m.created_at, t.name as tab FROM messages m JOIN tabs t ON t.id = m.tab_id WHERE m.created_at > ? ORDER BY m.created_at DESC LIMIT 500").all(since);
             break;
           case 'crons':
-            data = db.prepare("SELECT * FROM cron_jobs ORDER BY created_at").all();
+            data = db.prepare("SELECT * FROM tasks ORDER BY created_at").all();
             break;
           default:
             return fail('Invalid type. Use: costs, messages, or crons');
@@ -743,6 +881,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const lines = generators.map(g => `- ${g.name} (${g.id}): ${g.supportedTypes.join(', ')}`);
         return ok(lines.join('\n'));
+      }
+
+      case 'beecork_knowledge': {
+        const { scope: knowledgeScope } = (args || {}) as { scope?: string };
+        const { getGlobalKnowledge, getProjectKnowledge, getTabKnowledge, getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
+        let entries;
+        if (knowledgeScope === 'global') {
+          entries = getGlobalKnowledge();
+        } else if (knowledgeScope === 'project') {
+          const currentTab = db.prepare("SELECT working_dir FROM tabs ORDER BY last_activity_at DESC LIMIT 1").get() as { working_dir: string } | undefined;
+          entries = currentTab ? getProjectKnowledge(currentTab.working_dir) : [];
+        } else if (knowledgeScope === 'tab') {
+          const currentTab = db.prepare("SELECT name FROM tabs ORDER BY last_activity_at DESC LIMIT 1").get() as { name: string } | undefined;
+          entries = currentTab ? getTabKnowledge(currentTab.name) : [];
+        } else {
+          entries = getAllKnowledge();
+        }
+        if (entries.length === 0) {
+          return ok('No knowledge stored yet.');
+        }
+        return ok(formatKnowledgeForContext(entries));
       }
 
       case 'beecork_capabilities': {

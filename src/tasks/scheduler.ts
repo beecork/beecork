@@ -1,26 +1,30 @@
 import cron from 'node-cron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CronStore } from './store.js';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+import { TaskStore } from './store.js';
 import { getCronReloadSignalPath, getLogsDir } from '../util/paths.js';
 import { logger } from '../util/logger.js';
 import type { TabManager, NotifyCallback } from '../session/manager.js';
-import type { CronJob } from '../types.js';
+import type { Task } from '../types.js';
+
+export const execAsync = promisify(exec);
 
 interface Stoppable {
   stop: () => void;
 }
 
-export class CronScheduler {
+export class TaskScheduler {
   private scheduledJobs: Map<string, Stoppable> = new Map();
-  private store = new CronStore();
+  private store = new TaskStore();
 
   constructor(
     private tabManager: TabManager,
     private onNotify: NotifyCallback | null,
   ) {}
 
-  /** Load all cron jobs from store and schedule them */
+  /** Load all tasks from store and schedule them */
   loadAndSchedule(): void {
     // Cancel existing
     for (const [, task] of this.scheduledJobs) {
@@ -39,7 +43,7 @@ export class CronScheduler {
       if (job.scheduleType === 'at' && !job.lastRunAt) {
         const targetTime = new Date(job.schedule).getTime();
         if (targetTime <= Date.now()) {
-          logger.warn(`Cron: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`);
+          logger.warn(`Task: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`);
           missedFires++;
           this.fireJob(job);
           this.store.update(job.id, { enabled: false }); // Disable after one-time execution
@@ -51,7 +55,7 @@ export class CronScheduler {
       scheduled++;
     }
 
-    logger.info(`Cron: loaded ${scheduled} active jobs (${jobs.length} total)${missedFires > 0 ? `, fired ${missedFires} missed` : ''}`);
+    logger.info(`Tasks: loaded ${scheduled} active tasks (${jobs.length} total)${missedFires > 0 ? `, fired ${missedFires} missed` : ''}`);
   }
 
   /** Check for the reload signal file and reload if present */
@@ -59,12 +63,12 @@ export class CronScheduler {
     const signalPath = getCronReloadSignalPath();
     if (fs.existsSync(signalPath)) {
       try { fs.unlinkSync(signalPath); } catch { /* race condition, ok */ }
-      logger.info('Cron: reload signal detected, reloading schedules');
+      logger.info('Tasks: reload signal detected, reloading schedules');
       this.loadAndSchedule();
     }
   }
 
-  /** Stop all scheduled jobs */
+  /** Stop all scheduled tasks */
   stopAll(): void {
     for (const [, task] of this.scheduledJobs) {
       task.stop();
@@ -72,11 +76,11 @@ export class CronScheduler {
     this.scheduledJobs.clear();
   }
 
-  private scheduleJob(job: CronJob): void {
+  private scheduleJob(job: Task): void {
     switch (job.scheduleType) {
       case 'cron': {
         if (!cron.validate(job.schedule)) {
-          logger.error(`Cron: invalid expression for "${job.name}": ${job.schedule}`);
+          logger.error(`Task: invalid expression for "${job.name}": ${job.schedule}`);
           return;
         }
         const task = cron.schedule(job.schedule, () => this.fireJob(job));
@@ -88,7 +92,7 @@ export class CronScheduler {
         const cronExpr = intervalToCron(job.schedule);
         if (cronExpr) {
           if (!cron.validate(cronExpr)) {
-            logger.error(`Cron: invalid cron expression for "${job.name}": ${cronExpr}`);
+            logger.error(`Task: invalid cron expression for "${job.name}": ${cronExpr}`);
             return;
           }
           const task = cron.schedule(cronExpr, () => this.fireJob(job));
@@ -100,7 +104,7 @@ export class CronScheduler {
             const timer = setInterval(() => this.fireJob(job), totalMs);
             this.scheduledJobs.set(job.id, { stop: () => clearInterval(timer) });
           } else {
-            logger.error(`Cron: invalid interval for "${job.name}": ${job.schedule}`);
+            logger.error(`Task: invalid interval for "${job.name}": ${job.schedule}`);
           }
         }
         break;
@@ -110,7 +114,7 @@ export class CronScheduler {
         const targetTime = new Date(job.schedule).getTime();
         const delay = targetTime - Date.now();
         if (delay <= 0) {
-          logger.warn(`Cron: one-time job "${job.name}" is in the past, skipping`);
+          logger.warn(`Task: one-time task "${job.name}" is in the past, skipping`);
           return;
         }
         const timer = setTimeout(() => {
@@ -123,11 +127,11 @@ export class CronScheduler {
     }
   }
 
-  private async fireJob(job: CronJob): Promise<void> {
-    logger.info(`Cron firing: "${job.name}" (${job.payloadType || 'agentTurn'}) → tab:${job.tabName}`);
-    const logFile = path.join(getLogsDir(), `cron-${job.name}.log`);
+  private async fireJob(job: Task): Promise<void> {
+    logger.info(`Task firing: "${job.name}" (${job.payloadType || 'agentTurn'}) -> tab:${job.tabName}`);
+    const logFile = path.join(getLogsDir(), `task-${job.name}.log`);
 
-    // Handle systemEvent — internal Beecork actions, not Claude Code
+    // Handle systemEvent -- internal Beecork actions, not Claude Code
     if (job.payloadType === 'systemEvent') {
       try {
         await this.handleSystemEvent(job);
@@ -152,35 +156,35 @@ export class CronScheduler {
       // Log result
       fs.appendFileSync(logFile, `[${new Date().toISOString()}] SUCCESS: ${firstLine}\n`);
 
-      // Notify (separate try/catch — notification failure shouldn't be reported as job failure)
+      // Notify (separate try/catch -- notification failure shouldn't be reported as job failure)
       try {
         if (this.onNotify) {
           if (result.error) {
-            await this.onNotify(`❌ [${job.name}] Failed — ${firstLine}`);
+            await this.onNotify(`[${job.name}] Failed -- ${firstLine}`);
           } else {
-            await this.onNotify(`✅ [${job.name}] Done — ${firstLine}`);
+            await this.onNotify(`[${job.name}] Done -- ${firstLine}`);
           }
         }
       } catch (notifyErr) {
-        logger.warn(`Cron job "${job.name}" notification failed:`, notifyErr);
+        logger.warn(`Task "${job.name}" notification failed:`, notifyErr);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      logger.error(`Cron job "${job.name}" failed:`, err);
+      logger.error(`Task "${job.name}" failed:`, err);
       fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
 
       try {
-        await this.onNotify?.(`❌ [${job.name}] Failed — ${errMsg}`);
+        await this.onNotify?.(`[${job.name}] Failed -- ${errMsg}`);
       } catch { /* notification best-effort */ }
     }
   }
 
-  private async handleSystemEvent(job: CronJob): Promise<void> {
+  private async handleSystemEvent(job: Task): Promise<void> {
     switch (job.message) {
       case 'health_check':
-        logger.info('System event: health check — daemon alive');
+        logger.info('System event: health check -- daemon alive');
         if (this.onNotify) {
-          await this.onNotify('🟢 Beecork health check: all systems operational');
+          await this.onNotify('Beecork health check: all systems operational');
         }
         break;
       case 'memory_compaction':
@@ -191,6 +195,9 @@ export class CronScheduler {
     }
   }
 }
+
+/** @deprecated Use TaskScheduler */
+export { TaskScheduler as CronScheduler };
 
 /** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to milliseconds */
 export function intervalToMs(interval: string): number | null {
@@ -230,6 +237,6 @@ export function intervalToCron(interval: string): string | null {
   // Weekly intervals
   if (mins === 0 && hours === 0 && days === 0 && weeks > 0) return `0 0 * * 0`;
 
-  // Combined or large intervals — return null, handled by setInterval in scheduleJob
+  // Combined or large intervals -- return null, handled by setInterval in scheduleJob
   return null;
 }

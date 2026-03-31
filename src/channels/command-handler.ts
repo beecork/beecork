@@ -113,6 +113,32 @@ export async function handleSharedCommand(
     return { handled: true, response: `${users.length} user(s):\n${list}` };
   }
 
+  // /watches
+  if (text === '/watches' || text.startsWith('/watches@')) {
+    const { getDb } = await import('../db/index.js');
+    const db = getDb();
+    const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<Record<string, unknown>>;
+    if (watchers.length === 0) return { handled: true, response: 'No watchers configured.' };
+    const watchList = watchers.map((w: any) => {
+      const status = w.enabled ? 'active' : 'disabled';
+      return `[${status}] ${w.name} -- ${w.schedule} (triggers: ${w.trigger_count})`;
+    }).join('\n');
+    return { handled: true, response: `Watchers:\n${watchList}` };
+  }
+
+  // /tasks
+  if (text === '/tasks' || text.startsWith('/tasks@')) {
+    const { getDb } = await import('../db/index.js');
+    const db = getDb();
+    const tasks = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
+    if (tasks.length === 0) return { handled: true, response: 'No tasks scheduled.' };
+    const taskList = tasks.map((t: any) => {
+      const status = t.enabled ? 'enabled' : 'disabled';
+      return `[${status}] ${t.name} (${t.schedule_type}: ${t.schedule}) -> tab:${t.tab_name}`;
+    }).join('\n');
+    return { handled: true, response: `Tasks:\n${taskList}` };
+  }
+
   // /cost
   if (text === '/cost' || text.startsWith('/cost ')) {
     const { getCostSummary, formatCostSummary } = await import('../observability/analytics.js');

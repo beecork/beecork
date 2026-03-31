@@ -39,7 +39,7 @@ export function getActivitySummary(hours: number = 24): ActivitySummary {
 
   const messagesReceived = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('user', sinceDate) as any).c;
   const messagesFromAssistant = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('assistant', sinceDate) as any).c;
-  const cronJobsFired = (db.prepare('SELECT COUNT(*) as c FROM cron_jobs WHERE last_run_at > ?').get(sinceDate) as any).c;
+  const cronJobsFired = (db.prepare('SELECT COUNT(*) as c FROM tasks WHERE last_run_at > ?').get(sinceDate) as any).c;
   const memoriesCreated = (db.prepare('SELECT COUNT(*) as c FROM memories WHERE created_at > ?').get(sinceDate) as any).c;
   const totalCost = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > ?').get(sinceDate) as any).total;
   const activeTabsCount = (db.prepare('SELECT COUNT(DISTINCT tab_id) as c FROM messages WHERE created_at > ?').get(sinceDate) as any).c;

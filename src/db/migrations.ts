@@ -203,6 +203,30 @@ const MIGRATIONS: Migration[] = [
     description: 'Add index on messages.created_at for date-range cost queries',
     up: 'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)',
   },
+  {
+    version: 18,
+    description: 'Rename cron_jobs table to tasks',
+    up: 'ALTER TABLE cron_jobs RENAME TO tasks',
+  },
+  {
+    version: 19,
+    description: 'Add watchers table',
+    up: `CREATE TABLE IF NOT EXISTS watchers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      check_command TEXT NOT NULL,
+      condition TEXT NOT NULL,
+      action TEXT NOT NULL DEFAULT 'notify',
+      action_details TEXT,
+      schedule TEXT NOT NULL,
+      last_check_at TEXT,
+      last_triggered_at TEXT,
+      trigger_count INTEGER DEFAULT 0,
+      enabled INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

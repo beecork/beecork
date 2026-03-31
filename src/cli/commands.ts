@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn, execSync } from 'node:child_process';
 import { getDb, closeDb } from '../db/index.js';
 import { getConfig } from '../config.js';
-import { CronStore } from '../cron/store.js';
+import { TaskStore } from '../tasks/store.js';
 import { getDaemonPid, timeAgo } from './helpers.js';
 import { startService, stopService } from '../service/install.js';
 import { getPidPath, getLogsDir } from '../util/paths.js';
@@ -93,10 +93,10 @@ export async function showStatus(): Promise<void> {
       console.log(`  ${tab.name.padEnd(20)} ${tab.status.padEnd(12)} last active: ${ago}${pidInfo}`);
     }
 
-    const store = new CronStore();
+    const store = new TaskStore();
     const jobs = store.list();
     const activeJobs = jobs.filter(j => j.enabled);
-    console.log(`\nCron jobs: ${activeJobs.length} active (${jobs.length} total)`);
+    console.log(`\nTasks: ${activeJobs.length} active (${jobs.length} total)`);
 
     if (activeJobs.length > 0) {
       for (const job of activeJobs.slice(0, 5)) {
@@ -146,32 +146,64 @@ export async function tailLogs(tabName?: string): Promise<void> {
 }
 
 export async function listCrons(): Promise<void> {
-  requireDb(); // Ensure DB exists before CronStore tries to access it
-  const store = new CronStore();
+  requireDb();
+  const store = new TaskStore();
   const jobs = store.list();
 
   if (jobs.length === 0) {
-    console.log('No cron jobs.');
+    console.log('No tasks.');
     return;
   }
 
-  console.log(`\nCron jobs (${jobs.length}):\n`);
+  console.log(`\nTasks (${jobs.length}):\n`);
   for (const job of jobs) {
     const status = job.enabled ? 'enabled' : 'disabled';
     const lastRun = job.lastRunAt ? timeAgo(job.lastRunAt) : 'never';
     console.log(`  ${job.name.padEnd(20)} [${status}] ${job.scheduleType}:${job.schedule}`);
-    console.log(`    → tab:${job.tabName} | last: ${lastRun} | ID: ${job.id}`);
+    console.log(`    -> tab:${job.tabName} | last: ${lastRun} | ID: ${job.id}`);
   }
   console.log('');
 }
 
 export async function deleteCron(id: string): Promise<void> {
-  requireDb(); // Ensure DB exists before CronStore tries to access it
-  const store = new CronStore();
+  requireDb();
+  const store = new TaskStore();
   if (store.delete(id)) {
-    console.log(`Deleted cron job: ${id}`);
+    console.log(`Deleted task: ${id}`);
   } else {
-    console.log(`No cron job found with ID: ${id}`);
+    console.log(`No task found with ID: ${id}`);
+  }
+}
+
+export async function listWatchers(): Promise<void> {
+  const db = requireDb();
+  const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<Record<string, unknown>>;
+  closeDb();
+
+  if (watchers.length === 0) {
+    console.log('No watchers.');
+    return;
+  }
+
+  console.log(`\nWatchers (${watchers.length}):\n`);
+  for (const w of watchers) {
+    const status = w.enabled ? 'enabled' : 'disabled';
+    const lastCheck = w.last_check_at ? timeAgo(w.last_check_at as string) : 'never';
+    console.log(`  ${(w.name as string).padEnd(20)} [${status}] ${w.schedule}`);
+    console.log(`    condition: ${w.condition} | action: ${w.action} | triggers: ${w.trigger_count} | last: ${lastCheck} | ID: ${w.id}`);
+  }
+  console.log('');
+}
+
+export async function deleteWatcher(id: string): Promise<void> {
+  const db = requireDb();
+  const result = db.prepare('DELETE FROM watchers WHERE id = ?').run(id);
+  closeDb();
+
+  if (result.changes > 0) {
+    console.log(`Deleted watcher: ${id}`);
+  } else {
+    console.log(`No watcher found with ID: ${id}`);
   }
 }
 

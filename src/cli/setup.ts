@@ -495,7 +495,8 @@ const BEECORK_CLAUDE_MD = `${BEECORK_MARKER_START}
 You have Beecork MCP tools available when running inside Beecork:
 
 **Memory:** beecork_remember, beecork_recall — store and search long-term memory
-**Scheduling:** beecork_cron_create/list/delete — schedule recurring tasks
+**Scheduling:** beecork_task_create/list/delete — schedule recurring tasks (aliases: beecork_cron_*)
+**Watchers:** beecork_watch_create/list/delete — monitor conditions and auto-respond
 **Tabs:** beecork_tab_create/list, beecork_send_message — manage virtual tabs
 **Communication:** beecork_notify, beecork_send_media — notify user, send files
 **Delegation:** beecork_delegate, beecork_delegation_status — delegate tasks to other tabs

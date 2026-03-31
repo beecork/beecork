@@ -93,8 +93,10 @@ export function getDashboardHtml(token: string): string {
     <div class="flex gap-1">
       <button onclick="showPanel('tabs')" data-panel="tabs" class="nav-btn px-4 py-2 text-sm border-b-2 border-honey-500 text-white">Tabs</button>
       <button onclick="showPanel('memories')" data-panel="memories" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Memories</button>
-      <button onclick="showPanel('crons')" data-panel="crons" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Cron Jobs</button>
+      <button onclick="showPanel('crons')" data-panel="crons" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Tasks</button>
+      <button onclick="showPanel('watchers')" data-panel="watchers" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Watchers</button>
       <button onclick="showPanel('costs')" data-panel="costs" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Costs</button>
+      <button onclick="showPanel('update')" data-panel="update" class="nav-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-white">Update</button>
     </div>
   </nav>
 
@@ -158,14 +160,24 @@ export function getDashboardHtml(token: string): string {
       </div>
     </div>
 
-    <!-- Cron Panel -->
+    <!-- Tasks Panel -->
     <div id="panel-crons" class="panel hidden h-full overflow-y-auto p-4">
       <div class="panel-card overflow-hidden">
         <div class="px-4 py-3 border-b border-bee-700 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-gray-300">Cron Jobs</h2>
+          <h2 class="text-sm font-semibold text-gray-300">Tasks</h2>
           <button onclick="showCreateCronModal()" class="btn-ghost px-2 py-1 text-xs">+ Create</button>
         </div>
         <div id="cron-list" class="max-h-[calc(100vh-240px)] overflow-y-auto"></div>
+      </div>
+    </div>
+
+    <!-- Watchers Panel -->
+    <div id="panel-watchers" class="panel hidden h-full overflow-y-auto p-4">
+      <div class="panel-card overflow-hidden">
+        <div class="px-4 py-3 border-b border-bee-700 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-300">Watchers</h2>
+        </div>
+        <div id="watcher-list" class="max-h-[calc(100vh-240px)] overflow-y-auto"></div>
       </div>
     </div>
 
@@ -177,6 +189,15 @@ export function getDashboardHtml(token: string): string {
           <span id="total-cost" class="text-sm font-mono text-honey-400"></span>
         </div>
         <div id="cost-chart" class="p-6"></div>
+      </div>
+    </div>
+  </div>
+
+    <!-- Update Panel -->
+    <div id="panel-update" class="panel hidden h-full overflow-y-auto p-4">
+      <div class="max-w-lg space-y-3">
+        <div id="update-packages" class="space-y-3 text-sm text-gray-400">Checking for updates...</div>
+        <div id="update-log" class="hidden bg-bee-900 border border-bee-700 rounded p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto"></div>
       </div>
     </div>
   </div>
@@ -266,7 +287,9 @@ export function getDashboardHtml(token: string): string {
 
     if (name === 'memories') loadMemories();
     if (name === 'crons') loadCrons();
+    if (name === 'watchers') loadWatchers();
     if (name === 'costs') loadCosts();
+    if (name === 'update') loadUpdateStatus();
   }
 
   // --- Status ---
@@ -515,13 +538,13 @@ export function getDashboardHtml(token: string): string {
     loadMemories();
   }
 
-  // --- Crons ---
+  // --- Tasks (formerly Crons) ---
   async function loadCrons() {
-    const crons = await api('/api/crons');
+    const crons = await api('/api/tasks');
     const list = document.getElementById('cron-list');
 
     if (crons.length === 0) {
-      list.innerHTML = '<p class="text-gray-600 text-sm text-center py-8">No cron jobs</p>';
+      list.innerHTML = '<p class="text-gray-600 text-sm text-center py-8">No tasks</p>';
       return;
     }
 
@@ -547,15 +570,15 @@ export function getDashboardHtml(token: string): string {
   }
 
   async function deleteCron(id) {
-    if (!confirm('Delete this cron job?')) return;
-    await api('/api/crons/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (!confirm('Delete this task?')) return;
+    await api('/api/tasks/' + encodeURIComponent(id), { method: 'DELETE' });
     loadCrons();
   }
 
   function showCreateCronModal() {
     document.getElementById('modal').innerHTML = '<div class="modal-overlay" onclick="closeModal(event)">' +
       '<div class="modal-content" onclick="event.stopPropagation()">' +
-        '<h3 class="text-base font-semibold text-white mb-4">Create Cron Job</h3>' +
+        '<h3 class="text-base font-semibold text-white mb-4">Create Task</h3>' +
         '<div class="space-y-3">' +
           '<div><label class="text-xs text-gray-400 mb-1 block">Name *</label>' +
             '<input id="modal-cron-name" class="input-field w-full px-3 py-2 text-sm" placeholder="daily-report"></div>' +
@@ -587,9 +610,47 @@ export function getDashboardHtml(token: string): string {
     const tabName = document.getElementById('modal-cron-tab').value.trim() || 'default';
     const message = document.getElementById('modal-cron-msg').value.trim();
     if (!name || !schedule || !message) return;
-    await api('/api/crons', { method: 'POST', body: JSON.stringify({ name, scheduleType, schedule, tabName, message }) });
+    await api('/api/tasks', { method: 'POST', body: JSON.stringify({ name, scheduleType, schedule, tabName, message }) });
     closeModal();
     loadCrons();
+  }
+
+  // --- Watchers ---
+  async function loadWatchers() {
+    const watchers = await api('/api/watchers');
+    const list = document.getElementById('watcher-list');
+
+    if (watchers.length === 0) {
+      list.innerHTML = '<p class="text-gray-600 text-sm text-center py-8">No watchers configured</p>';
+      return;
+    }
+
+    list.innerHTML = watchers.map(w => {
+      const enabled = w.enabled === 1;
+      return '<div class="px-4 py-3 border-b border-bee-700 group hover:bg-bee-750">' +
+        '<div class="flex items-center justify-between">' +
+          '<div class="flex items-center gap-2">' +
+            '<span class="status-dot ' + (enabled ? 'status-running' : 'status-idle') + '"></span>' +
+            '<span class="text-sm font-medium text-white">' + esc(w.name) + '</span>' +
+          '</div>' +
+          '<div class="flex items-center gap-2">' +
+            '<span class="text-xs font-mono text-gray-400">' + esc(w.schedule) + '</span>' +
+            '<span class="text-xs text-gray-500">action: ' + esc(w.action) + '</span>' +
+            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" onclick="deleteWatcher(\\'' + esc(w.id) + '\\')">x</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="flex items-center justify-between mt-1 pl-5">' +
+          '<span class="text-xs text-gray-500">' + esc(w.condition) + ' &middot; triggers: ' + w.trigger_count + '</span>' +
+          '<span class="text-xs text-gray-700">last check: ' + timeAgo(w.last_check_at) + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function deleteWatcher(id) {
+    if (!confirm('Delete this watcher?')) return;
+    await api('/api/watchers/' + encodeURIComponent(id), { method: 'DELETE' });
+    loadWatchers();
   }
 
   // --- Costs ---
@@ -619,6 +680,65 @@ export function getDashboardHtml(token: string): string {
           '</div>';
         }).join('') +
       '</div>';
+  }
+
+  // --- Update ---
+  const PACKAGE_LABELS = {
+    'beecork': 'Beecork',
+    '@anthropic-ai/claude-code': 'Claude Code',
+  };
+
+  async function loadUpdateStatus() {
+    const el = document.getElementById('update-packages');
+    try {
+      const data = await api('/api/update/status');
+      el.innerHTML = data.packages.map(function(p) {
+        const label = PACKAGE_LABELS[p.name] || p.name;
+        const installed = p.installed || 'not installed';
+        const latest = p.latest || '?';
+        const badge = p.updateAvailable
+          ? '<span class="text-honey-400 text-xs ml-2">update available</span>'
+          : '<span class="text-green-400 text-xs ml-2">up to date</span>';
+        const btn = p.updateAvailable
+          ? ' <button onclick="doUpdate(\\''+esc(p.name)+'\\')" class="update-pkg-btn bg-honey-600 hover:bg-honey-500 text-black font-semibold px-3 py-1 rounded text-xs ml-2">Update</button>'
+          : '';
+        return '<div class="panel-card p-3 flex items-center justify-between">' +
+          '<div>' +
+            '<div class="text-white font-medium">' + esc(label) + badge + '</div>' +
+            '<div class="text-xs text-gray-500 font-mono mt-1">' + esc(installed) + (p.updateAvailable ? ' → ' + esc(latest) : '') + '</div>' +
+          '</div>' +
+          '<div>' + btn + '</div>' +
+        '</div>';
+      }).join('');
+    } catch {
+      el.innerHTML = '<span class="text-red-400">Failed to check for updates</span>';
+    }
+  }
+
+  async function doUpdate(pkgName) {
+    const log = document.getElementById('update-log');
+    const btns = document.querySelectorAll('.update-pkg-btn');
+    btns.forEach(function(b) { b.disabled = true; b.textContent = 'Updating...'; });
+    log.classList.remove('hidden');
+    log.textContent = 'Updating ' + pkgName + '...\\n';
+
+    try {
+      const result = await api('/api/update/' + encodeURIComponent(pkgName), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (result.success) {
+        log.textContent += 'Done!\\n\\nRestart daemon to use the new version:\\n  beecork stop && beecork start';
+        loadUpdateStatus();
+      } else {
+        log.textContent += 'Error: ' + (result.error || 'Unknown error');
+        btns.forEach(function(b) { b.disabled = false; b.textContent = 'Update'; });
+      }
+    } catch (err) {
+      log.textContent += 'Failed: ' + err.message;
+      btns.forEach(function(b) { b.disabled = false; b.textContent = 'Update'; });
+    }
   }
 
   // --- Modal helpers ---

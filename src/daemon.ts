@@ -4,7 +4,8 @@ import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
 import { ChannelRegistry, TelegramChannel, WhatsAppChannel } from './channels/index.js';
-import { CronScheduler } from './cron/scheduler.js';
+import { TaskScheduler } from './tasks/scheduler.js';
+import { WatcherScheduler } from './watchers/scheduler.js';
 import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
 import { execSync } from 'node:child_process';
@@ -15,7 +16,8 @@ import { VERSION } from './version.js';
 
 let tabManager: TabManager;
 let channelRegistry: ChannelRegistry;
-let cronScheduler: CronScheduler;
+let taskScheduler: TaskScheduler;
+let watcherScheduler: WatcherScheduler;
 let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
 let shutdownFn: (() => Promise<void>) | null = null;
@@ -167,16 +169,22 @@ async function main(): Promise<void> {
     pipeBrain.setNotifyCallback(broadcastNotify);
   }
 
-  // 9. Start cron scheduler
-  cronScheduler = new CronScheduler(tabManager, broadcastNotify);
-  cronScheduler.loadAndSchedule();
+  // 9. Start task scheduler
+  taskScheduler = new TaskScheduler(tabManager, broadcastNotify);
+  taskScheduler.loadAndSchedule();
+
+  // 9b. Start watcher scheduler
+  watcherScheduler = new WatcherScheduler();
+  watcherScheduler.onNotify = broadcastNotify;
+  watcherScheduler.loadAndSchedule();
 
   // 10. Start IPC polling
   let lastMediaCleanup = 0;
   let lastAnomalyCheck = 0;
   pollInterval = setInterval(() => {
     try {
-      cronScheduler.checkForReload();
+      taskScheduler.checkForReload();
+      watcherScheduler.checkForReload();
       tabManager.processPendingMessages();
       // Media cleanup every 60 seconds
       if (Date.now() - lastMediaCleanup > 60000) {
@@ -206,7 +214,8 @@ async function main(): Promise<void> {
     clearInterval(pollInterval);
     tabManager.stopAll();
     channelRegistry.stop();
-    cronScheduler.stopAll();
+    taskScheduler.stopAll();
+    watcherScheduler.stopAll();
     closeDb();
 
     const pidPath = getPidPath();
@@ -237,9 +246,9 @@ async function main(): Promise<void> {
   // Send detailed startup notification (non-critical — don't crash if it fails)
   try {
     const tabs = tabManager.listTabs();
-    const cronJobs = new (await import('./cron/store.js')).CronStore().list().filter(j => j.enabled);
+    const tasks = new (await import('./tasks/store.js')).TaskStore().list().filter(j => j.enabled);
     await broadcastNotify(
-      `🟢 Beecork started — ${cronJobs.length} cron job${cronJobs.length !== 1 ? 's' : ''}, ${tabs.length} tab${tabs.length !== 1 ? 's' : ''}`
+      `Beecork started -- ${tasks.length} task${tasks.length !== 1 ? 's' : ''}, ${tabs.length} tab${tabs.length !== 1 ? 's' : ''}`
     );
   } catch (err) {
     logger.warn('Failed to send startup notification:', err);

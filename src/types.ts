@@ -199,25 +199,34 @@ export interface StreamUsage {
 
 export type StreamEvent = StreamInit | StreamAssistant | StreamResult;
 
-// ─── Cron ───
+// ─── Tasks (formerly Cron) ───
 
-export type CronScheduleType = 'at' | 'every' | 'cron';
+export type TaskScheduleType = 'at' | 'every' | 'cron';
 
-export type CronPayloadType = 'agentTurn' | 'systemEvent';
+export type TaskPayloadType = 'agentTurn' | 'systemEvent';
 
-export interface CronJob {
+export interface Task {
   id: string;
   name: string;
-  scheduleType: CronScheduleType;
+  scheduleType: TaskScheduleType;
   schedule: string;
   tabName: string;
   message: string;
-  payloadType: CronPayloadType;
+  payloadType: TaskPayloadType;
   enabled: boolean;
   createdAt: string;
   lastRunAt: string | null;
   nextRunAt: string | null;
 }
+
+/** @deprecated Use TaskScheduleType */
+export type CronScheduleType = TaskScheduleType;
+
+/** @deprecated Use TaskPayloadType */
+export type CronPayloadType = TaskPayloadType;
+
+/** @deprecated Use Task */
+export type CronJob = Task;
 
 // ─── Memory ───
 
