@@ -273,13 +273,10 @@ export async function setupWizard(): Promise<void> {
         if (key) mediaGenerators.push({ provider: 'kling', apiKey: key });
       }
 
-      console.log('\nAudio: 1) Suno (music)  2) ElevenLabs (sound effects)');
-      const audChoice = await ask(rl, 'Choose audio provider (1/2 or Enter to skip)');
+      console.log('\nAudio: 1) ElevenLabs (sound effects)');
+      const audChoice = await ask(rl, 'Choose audio provider (1 or Enter to skip)');
       if (audChoice === '1') {
-        const key = await ask(rl, '  Suno API key');
-        if (key) mediaGenerators.push({ provider: 'suno', apiKey: key });
-      } else if (audChoice === '2') {
-        const key = await ask(rl, '  ElevenLabs API key');
+        const key = await ask(rl, '  ElevenLabs API key (xi-...)');
         if (key) mediaGenerators.push({ provider: 'elevenlabs-sfx', apiKey: key });
       }
 

@@ -18,7 +18,6 @@ const VIDEO_PROVIDERS = [
 ];
 
 const AUDIO_PROVIDERS = [
-  { id: 'suno', name: 'Suno AI (Music)', keyHint: 'Suno API key' },
   { id: 'elevenlabs-sfx', name: 'ElevenLabs (Sound Effects)', keyHint: 'ElevenLabs API key (xi-...)' },
 ];
 
