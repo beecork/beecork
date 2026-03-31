@@ -27,6 +27,7 @@ export class WhatsAppChannel implements Channel {
   private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000];
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
+  private sttWarmedUp = false;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -168,13 +169,21 @@ export class WhatsAppChannel implements Channel {
           .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
           .map(r => r.value!);
 
+        // Warm up STT connection on first voice message
+        if (this.sttProvider && !this.sttWarmedUp) {
+          this.sttProvider.warmup?.();
+          this.sttWarmedUp = true;
+        }
+
         // Transcribe voice messages if STT is configured
         if (this.sttProvider) {
           for (const att of media) {
             if (att.type === 'voice' && att.filePath) {
+              const voiceStartTime = Date.now();
               try {
                 const transcription = await this.sttProvider.transcribe(att.filePath);
                 att.caption = `[Transcribed from voice message]: ${transcription}`;
+                logger.info(`[whatsapp] Voice transcription: ${Date.now() - voiceStartTime}ms`);
               } catch (err) {
                 logger.warn('Voice transcription failed, passing file path instead:', err);
               }

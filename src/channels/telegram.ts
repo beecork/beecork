@@ -42,6 +42,7 @@ export class TelegramChannel implements Channel {
   private botUsername: string | null = null;
   private mutedGroups = new Set<number>();
   private welcomeSent = new Set<number>();
+  private sttWarmedUp = false;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -209,6 +210,9 @@ export class TelegramChannel implements Channel {
         }
       }
 
+      // Track voice pipeline timing
+      const voicePipelineStart = msg.voice ? Date.now() : null;
+
       // Download media if present (in parallel)
       const downloadTasks: Array<Promise<MediaAttachment | null>> = [];
       if (msg.photo) {
@@ -253,13 +257,21 @@ export class TelegramChannel implements Channel {
         .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
         .map(r => r.value!);
 
+      // Warm up STT connection on first voice message
+      if (this.sttProvider && !this.sttWarmedUp) {
+        this.sttProvider.warmup?.();
+        this.sttWarmedUp = true;
+      }
+
       // Transcribe voice messages if STT is configured
       if (this.sttProvider) {
         for (const m of media) {
           if (m.type === 'voice' && m.filePath) {
+            const voiceStartTime = Date.now();
             try {
               const transcription = await this.sttProvider.transcribe(m.filePath);
               m.caption = `[Transcribed from voice message]: ${transcription}`;
+              logger.info(`[telegram] Voice transcription: ${Date.now() - voiceStartTime}ms`);
             } catch (err) {
               logger.warn('Voice transcription failed, passing file path instead:', err);
             }
@@ -284,6 +296,9 @@ export class TelegramChannel implements Channel {
         logger.info(`[telegram] Message received from ${msg.from?.id}, sending typing`);
 
         await this.handleMessage(chatId, text, msg.message_id, media, isGroup);
+        if (voicePipelineStart) {
+          logger.info(`[telegram] Voice-to-response total: ${Date.now() - voicePipelineStart}ms`);
+        }
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
         await this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.');
@@ -301,6 +316,22 @@ export class TelegramChannel implements Channel {
     if (text === '/unmute' && isGroup) {
       this.mutedGroups.delete(chatId);
       await this.bot.sendMessage(chatId, 'Beecork unmuted in this group.');
+      return;
+    }
+
+    if (text === '/history' || text.startsWith('/history ')) {
+      const dateArg = text.slice(9).trim();
+      const { getTimeline, formatTimeline } = await import('../timeline/index.js');
+      let date: string;
+      if (dateArg === 'yesterday') {
+        date = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      } else if (dateArg) {
+        date = dateArg;
+      } else {
+        date = new Date().toISOString().slice(0, 10);
+      }
+      const events = getTimeline({ date, limit: 30 });
+      await this.sendResponse(chatId, formatTimeline(events));
       return;
     }
 

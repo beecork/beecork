@@ -21,6 +21,7 @@ export class DiscordChannel implements Channel {
   private allowedUserIds: Set<string>;
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
+  private sttWarmedUp = false;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -77,6 +78,12 @@ export class DiscordChannel implements Channel {
       const text = message.content
         .replace(/<@!?\d+>/g, '') // Remove mentions
         .trim();
+
+      // Warm up STT connection on first message with attachments
+      if (this.sttProvider && !this.sttWarmedUp && message.attachments.size > 0) {
+        this.sttProvider.warmup?.();
+        this.sttWarmedUp = true;
+      }
 
       // Download attachments
       const media: MediaAttachment[] = [];

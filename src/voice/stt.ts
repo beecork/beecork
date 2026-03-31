@@ -3,11 +3,22 @@ import { logger } from '../util/logger.js';
 
 export interface STTProvider {
   transcribe(filePath: string): Promise<string>;
+  warmup?(): Promise<void>;
 }
 
 /** OpenAI Whisper API provider */
 export class WhisperAPIProvider implements STTProvider {
   constructor(private apiKey: string) {}
+
+  async warmup(): Promise<void> {
+    try {
+      // Make a lightweight request to warm up the HTTPS connection
+      await fetch('https://api.openai.com/v1/models', {
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch { /* non-critical */ }
+  }
 
   async transcribe(filePath: string): Promise<string> {
     const formData = new FormData();

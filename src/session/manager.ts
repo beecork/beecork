@@ -7,6 +7,7 @@ import { getDb } from '../db/index.js';
 import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
 import { extractMemories, getRelevantMemories } from '../memory/extractor.js';
+import { logActivity } from '../timeline/index.js';
 import type {
   BeecorkConfig,
   Tab,
@@ -203,6 +204,8 @@ export class TabManager {
   private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number): Promise<SendResult> {
     const db = getDb();
 
+    logActivity('task_started', 'Processing message', { tabName: tab.name, details: prompt.slice(0, 500) });
+
     // Budget check before spawning
     if (this.config.claudeCode.maxBudgetUsd) {
       const tabSpend = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE tab_id = ?').get(tab.id) as { total: number }).total;
@@ -368,6 +371,8 @@ export class TabManager {
           db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
             .run('idle', new Date().toISOString(), tab.name);
 
+          logActivity('task_completed', 'Message processed', { tabName: tab.name, durationMs: result.durationMs, costUsd: result.costUsd, details: result.text.slice(0, 500) });
+
           // Context window compaction: if checkpoint was triggered, restart with summary
           const currentDepth = compactionDepth ?? 0;
           if (checkpointTriggered && !result.error && result.text && currentDepth < 2) {
@@ -435,6 +440,7 @@ export class TabManager {
           this.subprocesses.delete(tab.name);
           this.circuitBreakers.delete(tab.name);
           this.updateTabStatus(tab.name, 'error');
+          logActivity('task_failed', 'Message failed', { tabName: tab.name, details: err instanceof Error ? err.message : String(err) });
           reject(err);
           this.processNextInQueue(tab.name);
         },

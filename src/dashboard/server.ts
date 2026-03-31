@@ -262,6 +262,15 @@ export function startDashboardServer(port = 0): void {
         return;
       }
 
+      if (path === '/api/timeline') {
+        const { getTimeline } = await import('../timeline/index.js');
+        const date = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const events = getTimeline({ date, limit });
+        json(res, { events });
+        return;
+      }
+
       const db = getDashDb();
 
       if (path === '/api/status') {

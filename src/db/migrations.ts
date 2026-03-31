@@ -227,6 +227,21 @@ const MIGRATIONS: Migration[] = [
       created_at TEXT DEFAULT (datetime('now'))
     )`,
   },
+  {
+    version: 20,
+    description: 'Add activity_log table for timeline',
+    up: `CREATE TABLE IF NOT EXISTS activity_log (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      project_name TEXT,
+      tab_name TEXT,
+      summary TEXT NOT NULL,
+      details TEXT,
+      duration_ms INTEGER,
+      cost_usd REAL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

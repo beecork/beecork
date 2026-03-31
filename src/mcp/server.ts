@@ -436,6 +436,40 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'List available and enabled capability packs (email, calendar, github, etc.)',
       inputSchema: { type: 'object' as const, properties: {} },
     },
+    {
+      name: 'beecork_history',
+      description: 'Show activity timeline — what Beecork has been doing',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          date: { type: 'string', description: 'Date filter (YYYY-MM-DD). Default: today' },
+          tabName: { type: 'string', description: 'Filter by tab name' },
+          limit: { type: 'number', description: 'Max events (default 50)' },
+        },
+      },
+    },
+    {
+      name: 'beecork_replay',
+      description: 'Re-run a past task by its event ID',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          eventId: { type: 'string', description: 'Activity event ID to replay' },
+        },
+        required: ['eventId'],
+      },
+    },
+    {
+      name: 'beecork_store_search',
+      description: 'Search the Beecork store for community packages (capabilities, media generators, channels)',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+        },
+        required: ['query'],
+      },
+    },
   ],
 }));
 
@@ -912,6 +946,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return `${status} | ${p.id} — ${p.name}: ${p.description}`;
         });
         return ok(capLines.join('\n'));
+      }
+
+      case 'beecork_history': {
+        const { date, tabName, limit } = (args || {}) as any;
+        const { getTimeline, formatTimeline } = await import('../timeline/index.js');
+        const events = getTimeline({ date: date || new Date().toISOString().slice(0, 10), tabName, limit });
+        return ok(formatTimeline(events));
+      }
+
+      case 'beecork_replay': {
+        const { eventId } = args as { eventId: string };
+        const { getReplayInfo } = await import('../timeline/index.js');
+        const info = getReplayInfo(eventId);
+        if (!info) return fail('Event not found or not replayable.');
+        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(info.tabName, info.message, 'replay');
+        return ok(`Replaying in tab "${info.tabName}": ${info.message.slice(0, 200)}`);
+      }
+
+      case 'beecork_store_search': {
+        const { query } = args as { query: string };
+        try {
+          const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=beecork+${encodeURIComponent(query)}&size=10`, { signal: AbortSignal.timeout(10000) });
+          if (!response.ok) return fail('npm registry search failed');
+          const data = await response.json() as any;
+          const packages = data.objects?.filter((o: any) => o.package.name.startsWith('beecork-')) || [];
+          if (packages.length === 0) return ok(`No beecork packages found for "${query}". You can create one with: beecork channel create <name> or beecork media create <name>`);
+          const lines = packages.map((o: any) => `${o.package.name}@${o.package.version} — ${o.package.description || 'No description'}`);
+          return ok(`${packages.length} package(s):\n${lines.join('\n')}\n\nInstall: npm install -g <package-name>`);
+        } catch {
+          return fail('Failed to search npm registry');
+        }
       }
 
       default:

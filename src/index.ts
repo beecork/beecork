@@ -514,6 +514,23 @@ program
   });
 
 program
+  .command('history [date]')
+  .description('Show activity timeline (default: today, or "yesterday", or YYYY-MM-DD)')
+  .action(async (dateArg?: string) => {
+    const { getTimeline, formatTimeline } = await import('./timeline/index.js');
+    let date: string;
+    if (dateArg === 'yesterday') {
+      date = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    } else if (dateArg) {
+      date = dateArg;
+    } else {
+      date = new Date().toISOString().slice(0, 10);
+    }
+    const events = getTimeline({ date });
+    console.log(formatTimeline(events));
+  });
+
+program
   .command('knowledge [scope]')
   .description('List stored knowledge (global, project, or all)')
   .action(async (scope?: string) => {
@@ -524,6 +541,34 @@ program
       return;
     }
     console.log(formatKnowledgeForContext(entries));
+  });
+
+const storeCmd = program
+  .command('store')
+  .description('Browse and install community extensions');
+
+storeCmd
+  .command('search <query>')
+  .description('Search for beecork packages on npm')
+  .action(async (query: string) => {
+    const { storeSearch } = await import('./cli/store.js');
+    await storeSearch(query);
+  });
+
+storeCmd
+  .command('install <package>')
+  .description('Install a community package')
+  .action(async (pkg: string) => {
+    const { storeInstall } = await import('./cli/store.js');
+    storeInstall(pkg);
+  });
+
+storeCmd
+  .command('info <package>')
+  .description('Show package details')
+  .action(async (pkg: string) => {
+    const { storeInfo } = await import('./cli/store.js');
+    await storeInfo(pkg);
   });
 
 program.parse();

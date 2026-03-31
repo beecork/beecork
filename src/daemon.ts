@@ -13,6 +13,7 @@ import { logger } from './util/logger.js';
 import { cleanupMedia } from './media/store.js';
 import { createNotificationProvider, type NotificationProvider } from './notifications/index.js';
 import { VERSION } from './version.js';
+import { logActivity } from './timeline/index.js';
 
 let tabManager: TabManager;
 let channelRegistry: ChannelRegistry;
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
     const pidPath = getPidPath();
     if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
 
+    logActivity('system_event', 'Beecork daemon stopped');
     logger.info('Beecork daemon stopped.');
     logger.close();
     process.exit(0);
@@ -242,6 +244,7 @@ async function main(): Promise<void> {
   });
 
   logger.info(`Beecork daemon ready (home: ${getBeecorkHome()})`);
+  logActivity('system_event', 'Beecork daemon started');
 
   // Send detailed startup notification (non-critical — don't crash if it fails)
   try {
