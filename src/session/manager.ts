@@ -8,6 +8,7 @@ import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
 import { extractMemories, getRelevantMemories } from '../memory/extractor.js';
 import { logActivity } from '../timeline/index.js';
+import { getAllKnowledge, formatKnowledgeForContext } from '../knowledge/index.js';
 import type {
   BeecorkConfig,
   Tab,
@@ -227,7 +228,6 @@ export class TabManager {
     }
 
     // Inject knowledge from all three layers
-    const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
     const knowledge = getAllKnowledge(tab.workingDir, tab.name);
     const knowledgeContext = formatKnowledgeForContext(knowledge);
     let enrichedPrompt = prompt;

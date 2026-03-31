@@ -242,6 +242,11 @@ const MIGRATIONS: Migration[] = [
       created_at TEXT DEFAULT (datetime('now'))
     )`,
   },
+  {
+    version: 21,
+    description: 'Add index on activity_log.created_at',
+    up: 'CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

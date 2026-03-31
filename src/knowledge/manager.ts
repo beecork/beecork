@@ -13,18 +13,28 @@ function ensureGlobalDir(): void {
   fs.mkdirSync(GLOBAL_KNOWLEDGE_DIR, { recursive: true });
 }
 
-/** Read a knowledge file, return content or empty string */
-function readKnowledgeFile(filePath: string): string {
+const knowledgeCache = new Map<string, { content: string; mtime: number }>();
+
+/** Read a knowledge file with mtime-based caching, return content or empty string */
+function readKnowledgeCached(filePath: string): string {
   try {
-    if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf-8');
-  } catch {}
-  return '';
+    if (!fs.existsSync(filePath)) return '';
+    const stat = fs.statSync(filePath);
+    const cached = knowledgeCache.get(filePath);
+    if (cached && cached.mtime === stat.mtimeMs) return cached.content;
+    const content = fs.readFileSync(filePath, 'utf-8');
+    knowledgeCache.set(filePath, { content, mtime: stat.mtimeMs });
+    return content;
+  } catch (err) {
+    logger.warn(`Failed to read knowledge file ${filePath}:`, err);
+    return '';
+  }
 }
 
 /** Append to a knowledge file */
 function appendToFile(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const existing = readKnowledgeFile(filePath);
+  const existing = readKnowledgeCached(filePath);
   const separator = existing.endsWith('\n') || existing === '' ? '' : '\n';
   fs.writeFileSync(filePath, existing + separator + content + '\n');
 }
@@ -36,7 +46,7 @@ export function getGlobalKnowledge(): KnowledgeEntry[] {
   const entries: KnowledgeEntry[] = [];
   for (const category of GLOBAL_CATEGORIES) {
     const filePath = path.join(GLOBAL_KNOWLEDGE_DIR, `${category}.md`);
-    const content = readKnowledgeFile(filePath);
+    const content = readKnowledgeCached(filePath);
     if (content.trim()) {
       entries.push({ content, scope: 'global', source: `${category}.md`, category });
     }
@@ -56,7 +66,7 @@ export function addGlobalKnowledge(content: string, category: string = 'general'
 
 export function getProjectKnowledge(projectPath: string): KnowledgeEntry[] {
   const filePath = path.join(projectPath, '.beecork', 'knowledge.md');
-  const content = readKnowledgeFile(filePath);
+  const content = readKnowledgeCached(filePath);
   if (!content.trim()) return [];
   return [{ content, scope: 'project', source: filePath }];
 }

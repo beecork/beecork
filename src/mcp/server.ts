@@ -65,6 +65,29 @@ function signalWatcherReload(): void {
 import { VERSION } from '../version.js';
 import { getConfig, validateTabName } from '../config.js';
 
+async function handleMediaGeneration(db: Database.Database, mediaType: string, args: Record<string, unknown>): Promise<ReturnType<typeof ok>> {
+  const { prompt, style, duration, provider } = args as { prompt: string; style?: string; duration?: number; provider?: string };
+  if (!prompt) return fail('Missing prompt');
+
+  const generators = await getGenerators();
+
+  const gen = provider
+    ? generators.find(g => g.id === provider)
+    : generators.find(g => g.supportedTypes.includes(mediaType as any));
+
+  if (!gen) return fail(`No ${mediaType} generator configured. Run: beecork media`);
+
+  try {
+    const result = await gen.generate(mediaType as any, prompt, { style, duration });
+    db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+      'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: prompt.slice(0, 200) }), 'media'
+    );
+    return ok(`Generated ${mediaType}: ${result.filePath}`);
+  } catch (err: any) {
+    return fail(`${mediaType} generation failed: ${err.message}`);
+  }
+}
+
 const server = new Server(
   { name: 'beecork', version: VERSION },
   { capabilities: { tools: {} } }
@@ -861,52 +884,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return closed ? ok(`Tab "${tabName}" permanently closed.`) : fail(`Tab "${tabName}" not found.`);
       }
 
-      case 'beecork_generate_image': {
-        const { prompt, style, provider } = args as { prompt: string; style?: string; provider?: string };
-        if (!prompt) return fail('Prompt is required.');
-        const generators = await getGenerators();
-        const gen = provider
-          ? generators.find(g => g.id === provider && g.supportedTypes.includes('image'))
-          : generators.find(g => g.supportedTypes.includes('image'));
-        if (!gen) return fail('No image generation provider configured. Add a mediaGenerators entry to config.');
-        const result = await gen.generate('image', prompt, { style });
-        // Queue the generated media for sending
-        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
-          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated image: ${prompt.slice(0, 100)}` }), 'media'
-        );
-        return ok(`Image generated: ${result.filePath} (${result.mimeType})`);
-      }
-
-      case 'beecork_generate_video': {
-        const { prompt, duration, provider } = args as { prompt: string; duration?: number; provider?: string };
-        if (!prompt) return fail('Prompt is required.');
-        const generators = await getGenerators();
-        const gen = provider
-          ? generators.find(g => g.id === provider && g.supportedTypes.includes('video'))
-          : generators.find(g => g.supportedTypes.includes('video'));
-        if (!gen) return fail('No video generation provider configured. Add a mediaGenerators entry to config.');
-        const result = await gen.generate('video', prompt, { duration });
-        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
-          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated video: ${prompt.slice(0, 100)}` }), 'media'
-        );
-        return ok(`Video generated: ${result.filePath} (${result.mimeType}, ${result.durationMs ? result.durationMs / 1000 + 's' : 'unknown duration'})`);
-      }
-
-      case 'beecork_generate_audio': {
-        const { prompt, type: audioType, style, provider } = args as { prompt: string; type?: string; style?: string; provider?: string };
-        if (!prompt) return fail('Prompt is required.');
-        const mediaType = audioType === 'music' ? 'music' as const : 'audio' as const;
-        const generators = await getGenerators();
-        const gen = provider
-          ? generators.find(g => g.id === provider && g.supportedTypes.includes(mediaType))
-          : generators.find(g => g.supportedTypes.includes(mediaType));
-        if (!gen) return fail(`No ${mediaType} generation provider configured. Add a mediaGenerators entry to config.`);
-        const result = await gen.generate(mediaType, prompt, { style });
-        db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
-          'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: `Generated ${mediaType}: ${prompt.slice(0, 100)}` }), 'media'
-        );
-        return ok(`Audio generated: ${result.filePath} (${result.mimeType})`);
-      }
+      case 'beecork_generate_image': return handleMediaGeneration(db, 'image', args || {});
+      case 'beecork_generate_video': return handleMediaGeneration(db, 'video', args || {});
+      case 'beecork_generate_audio': return handleMediaGeneration(db, 'audio', args || {});
 
       case 'beecork_media_providers': {
         const generators = await getGenerators();

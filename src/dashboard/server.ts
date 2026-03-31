@@ -243,7 +243,7 @@ export function startDashboardServer(port = 0): void {
 
       if (path === '/api/computer-use' && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
         let parsedCU: any;
         try { parsedCU = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { enabled } = parsedCU;
@@ -439,7 +439,7 @@ export function startDashboardServer(port = 0): void {
       if (path.match(/^\/api\/capabilities\/[^/]+\/enable$/) && req.method === 'POST') {
         const packId = path.split('/')[3];
         let body = '';
-        for await (const chunk of req) body += chunk;
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
         const { apiKey } = JSON.parse(body);
         const { enablePack } = await import('../capabilities/index.js');
         try {

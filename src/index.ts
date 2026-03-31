@@ -532,12 +532,20 @@ program
 
 program
   .command('knowledge [scope]')
-  .description('List stored knowledge (global, project, or all)')
+  .description('List stored knowledge (global, project <path>, or all)')
   .action(async (scope?: string) => {
-    const { getGlobalKnowledge, formatKnowledgeForContext } = await import('./knowledge/index.js');
-    const entries = getGlobalKnowledge();
+    const { getGlobalKnowledge, getProjectKnowledge, getAllKnowledge, formatKnowledgeForContext } = await import('./knowledge/index.js');
+    let entries;
+    if (scope === 'global') {
+      entries = getGlobalKnowledge();
+    } else if (scope?.startsWith('project')) {
+      const projectPath = scope.split(' ').slice(1).join(' ') || process.cwd();
+      entries = getProjectKnowledge(projectPath);
+    } else {
+      entries = getAllKnowledge();
+    }
     if (entries.length === 0) {
-      console.log('No global knowledge stored yet.');
+      console.log('No knowledge stored yet.');
       return;
     }
     console.log(formatKnowledgeForContext(entries));
