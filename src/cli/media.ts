@@ -6,9 +6,10 @@ function ask(rl: readline.Interface, question: string, defaultValue?: string): P
 }
 
 const IMAGE_PROVIDERS = [
+  { id: 'nano-banana', name: 'Google Nano Banana', keyHint: 'Google AI API key (from ai.google.dev)' },
   { id: 'dall-e', name: 'DALL-E (OpenAI)', keyHint: 'OpenAI API key (sk-...)' },
   { id: 'stable-diffusion', name: 'Stable Diffusion (Stability AI)', keyHint: 'Stability AI API key' },
-  { id: 'imagen', name: 'Google Imagen', keyHint: 'Google AI API key (from ai.google.dev)' },
+  { id: 'recraft', name: 'Recraft (Images + SVG Vectors)', keyHint: 'Recraft API key' },
 ];
 
 const VIDEO_PROVIDERS = [
@@ -18,7 +19,9 @@ const VIDEO_PROVIDERS = [
 ];
 
 const AUDIO_PROVIDERS = [
-  { id: 'elevenlabs-sfx', name: 'ElevenLabs (Sound Effects)', keyHint: 'ElevenLabs API key (xi-...)' },
+  { id: 'elevenlabs-music', name: 'ElevenLabs Music', keyHint: 'ElevenLabs API key (xi-...)' },
+  { id: 'lyria', name: 'Google Lyria (Music)', keyHint: 'Google AI API key (from ai.google.dev)' },
+  { id: 'elevenlabs-sfx', name: 'ElevenLabs Sound Effects', keyHint: 'ElevenLabs API key (xi-...)' },
 ];
 
 export async function mediaSetup(): Promise<void> {

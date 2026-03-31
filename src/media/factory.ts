@@ -6,7 +6,10 @@ import { RunwayGenerator } from './generators/runway.js';
 import { VeoGenerator } from './generators/veo.js';
 import { KlingGenerator } from './generators/kling.js';
 import { ElevenLabsSfxGenerator } from './generators/elevenlabs-sfx.js';
-import { ImagenGenerator } from './generators/imagen.js';
+import { NanoBananaGenerator } from './generators/nano-banana.js';
+import { ElevenLabsMusicGenerator } from './generators/elevenlabs-music.js';
+import { LyriaGenerator } from './generators/lyria.js';
+import { RecraftGenerator } from './generators/recraft.js';
 
 export function createMediaGenerator(config: { provider: string; apiKey?: string; model?: string }): MediaGenerator | null {
   if (!config.apiKey) {
@@ -20,7 +23,10 @@ export function createMediaGenerator(config: { provider: string; apiKey?: string
     case 'veo': return new VeoGenerator(config.apiKey);
     case 'kling': return new KlingGenerator(config.apiKey);
     case 'elevenlabs-sfx': return new ElevenLabsSfxGenerator(config.apiKey);
-    case 'imagen': return new ImagenGenerator(config.apiKey, config.model);
+    case 'nano-banana': return new NanoBananaGenerator(config.apiKey, config.model);
+    case 'elevenlabs-music': return new ElevenLabsMusicGenerator(config.apiKey);
+    case 'lyria': return new LyriaGenerator(config.apiKey, config.model);
+    case 'recraft': return new RecraftGenerator(config.apiKey);
     default:
       logger.warn(`Unknown media generator: ${config.provider}`);
       return null;

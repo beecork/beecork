@@ -247,17 +247,20 @@ export async function setupWizard(): Promise<void> {
     if (addMedia.toLowerCase() === 'y') {
       const mediaGenerators: Array<{ provider: string; apiKey: string; model?: string }> = [];
 
-      console.log('\nImage: 1) DALL-E (OpenAI)  2) Stable Diffusion  3) Google Imagen');
-      const imgChoice = await ask(rl, 'Choose image provider (1/2/3 or Enter to skip)');
+      console.log('\nImage: 1) Nano Banana (Google)  2) DALL-E (OpenAI)  3) Stable Diffusion  4) Recraft (Vectors)');
+      const imgChoice = await ask(rl, 'Choose image provider (1/2/3/4 or Enter to skip)');
       if (imgChoice === '1') {
+        const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
+        if (key) mediaGenerators.push({ provider: 'nano-banana', apiKey: key });
+      } else if (imgChoice === '2') {
         const key = await ask(rl, '  OpenAI API key');
         if (key) mediaGenerators.push({ provider: 'dall-e', apiKey: key });
-      } else if (imgChoice === '2') {
+      } else if (imgChoice === '3') {
         const key = await ask(rl, '  Stability AI API key');
         if (key) mediaGenerators.push({ provider: 'stable-diffusion', apiKey: key });
-      } else if (imgChoice === '3') {
-        const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
-        if (key) mediaGenerators.push({ provider: 'imagen', apiKey: key });
+      } else if (imgChoice === '4') {
+        const key = await ask(rl, '  Recraft API key');
+        if (key) mediaGenerators.push({ provider: 'recraft', apiKey: key });
       }
 
       console.log('\nVideo: 1) Runway  2) Veo  3) Kling');
@@ -273,9 +276,15 @@ export async function setupWizard(): Promise<void> {
         if (key) mediaGenerators.push({ provider: 'kling', apiKey: key });
       }
 
-      console.log('\nAudio: 1) ElevenLabs (sound effects)');
-      const audChoice = await ask(rl, 'Choose audio provider (1 or Enter to skip)');
+      console.log('\nAudio/Music: 1) ElevenLabs Music  2) Google Lyria  3) ElevenLabs SFX');
+      const audChoice = await ask(rl, 'Choose audio provider (1/2/3 or Enter to skip)');
       if (audChoice === '1') {
+        const key = await ask(rl, '  ElevenLabs API key (xi-...)');
+        if (key) mediaGenerators.push({ provider: 'elevenlabs-music', apiKey: key });
+      } else if (audChoice === '2') {
+        const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
+        if (key) mediaGenerators.push({ provider: 'lyria', apiKey: key });
+      } else if (audChoice === '3') {
         const key = await ask(rl, '  ElevenLabs API key (xi-...)');
         if (key) mediaGenerators.push({ provider: 'elevenlabs-sfx', apiKey: key });
       }
