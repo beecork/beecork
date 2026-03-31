@@ -17,8 +17,11 @@ export function ensureMediaDir(): string {
 export function saveMedia(buffer: Buffer, extension: string, originalName?: string): string {
   ensureMediaDir();
   const timestamp = Date.now();
-  const name = originalName
-    ? `${timestamp}-${originalName}`
+  const safeName = originalName
+    ? originalName.replace(/[\/\\]/g, '_').replace(/\.\./g, '_')
+    : undefined;
+  const name = safeName
+    ? `${timestamp}-${safeName}`
     : `${timestamp}.${extension}`;
   const filePath = path.join(MEDIA_DIR, name);
   fs.writeFileSync(filePath, buffer);

@@ -36,7 +36,6 @@ export class TelegramChannel implements Channel {
   private bot: TelegramBot;
   private ctx: ChannelContext;
   private activeChatIds: Set<number> = new Set();
-  private messageHandler: InboundMessageHandler | null = null;
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
   private botUserId: number | null = null;
@@ -61,10 +60,7 @@ export class TelegramChannel implements Channel {
   async start(): Promise<void> {
     // Clear pending updates from old sessions, then start polling
     try {
-      await fetch(
-        `https://api.telegram.org/bot${this.ctx.config.telegram.token}/deleteWebhook?drop_pending_updates=true`,
-        { signal: AbortSignal.timeout(10000) },
-      );
+      await (this.bot as any).deleteWebHook({ drop_pending_updates: true });
     } catch (err) {
       logger.error('Failed to clear pending updates, starting anyway:', err);
     }
@@ -127,8 +123,8 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  onMessage(handler: InboundMessageHandler): void {
-    this.messageHandler = handler;
+  onMessage(_handler: InboundMessageHandler): void {
+    // Messages are handled directly in setupHandlers()
   }
 
   // ─── Private ───
@@ -296,6 +292,7 @@ export class TelegramChannel implements Channel {
   }
 
   private async handleCommand(chatId: number, text: string, userId: number | undefined, messageId: number, isGroup = false): Promise<void> {
+    // Telegram-only group commands
     if (text === '/mute' && isGroup) {
       this.mutedGroups.add(chatId);
       await this.bot.sendMessage(chatId, 'Beecork muted in this group. Use /unmute to re-enable.');
@@ -307,229 +304,23 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    if (text === '/tabs' || text.startsWith('/tabs@')) {
-      const tabs = this.ctx.tabManager.listTabs();
-      const formatted = formatTabStatus(tabs);
-      await this.bot.sendMessage(chatId, formatted);
+    // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /register, /link, /users, /cost, /activity, /handoff, /machines)
+    const { handleSharedCommand } = await import('./command-handler.js');
+    const result = await handleSharedCommand({
+      userId: String(userId || 'default'),
+      text,
+      isAdmin: this.isAdmin(userId),
+      channelId: 'telegram',
+    }, this.ctx.tabManager);
+
+    if (result.handled) {
+      if (result.response) await this.bot.sendMessage(chatId, result.response);
       return;
     }
 
-    if (text.startsWith('/stop ')) {
-      if (!this.isAdmin(userId)) {
-        await this.bot.sendMessage(chatId, 'Only admin can stop tabs.');
-        return;
-      }
-      const tabName = text.slice(6).trim();
-      this.ctx.tabManager.stopTab(tabName);
-      await this.bot.sendMessage(chatId, `Stopped tab: ${tabName}`);
-      return;
-    }
-
+    // /tab with valid name — falls through from shared handler, treat as message
     if (text.startsWith('/tab ')) {
-      const rest = text.slice(5);
-
-      // Check for --set-prompt flag: /tab <name> --set-prompt "..."
-      const setPromptMatch = rest.match(/^(\S+)\s+--set-prompt\s+"([^"]+)"/);
-      if (setPromptMatch) {
-        const tabName = setPromptMatch[1];
-        const systemPrompt = setPromptMatch[2];
-        const { getDb } = await import('../db/index.js');
-        const db = getDb();
-        db.prepare('UPDATE tabs SET system_prompt = ? WHERE name = ?').run(systemPrompt, tabName);
-        await this.bot.sendMessage(chatId, `System prompt updated for tab "${tabName}"`);
-        return;
-      }
-
-      const spaceIdx = rest.indexOf(' ');
-      if (spaceIdx === -1) {
-        await this.bot.sendMessage(chatId, `Usage: /tab <name> <message>`);
-        return;
-      }
-      const tabName = rest.slice(0, spaceIdx);
-      const validationError = validateTabName(tabName);
-      if (validationError) {
-        await this.bot.sendMessage(chatId, `Invalid tab name: ${validationError}`);
-        return;
-      }
       await this.handleMessage(chatId, text, messageId);
-      return;
-    }
-
-    if (text === '/register' || text.startsWith('/register ')) {
-      const { resolveUser, registerUser, hasAdmin } = await import('../users/index.js');
-      const existing = resolveUser('telegram', String(userId));
-      if (existing) {
-        await this.bot.sendMessage(chatId, `You're already registered as "${existing.name}" (${existing.role}).`);
-        return;
-      }
-      // First user becomes admin, rest need approval
-      const name = text.slice(10).trim() || `user-${userId}`;
-      const role = hasAdmin() ? 'user' : 'admin';
-      const user = registerUser(name, 'telegram', String(userId), role);
-      await this.bot.sendMessage(chatId, `Registered as "${user.name}" (${user.role}).${role === 'admin' ? ' You are the admin.' : ''}`);
-      return;
-    }
-
-    if (text.startsWith('/link ')) {
-      // /link discord:123456789
-      const { resolveUser, linkIdentity } = await import('../users/index.js');
-      const user = resolveUser('telegram', String(userId));
-      if (!user) {
-        await this.bot.sendMessage(chatId, 'Register first: /register');
-        return;
-      }
-      const parts = text.slice(6).trim().split(':');
-      if (parts.length !== 2) {
-        await this.bot.sendMessage(chatId, 'Usage: /link channel:peerId (e.g., /link discord:123456789)');
-        return;
-      }
-      const success = linkIdentity(user.id, parts[0], parts[1]);
-      await this.bot.sendMessage(chatId, success ? `Linked ${parts[0]} identity.` : 'Failed to link — already linked or invalid.');
-      return;
-    }
-
-    if (text === '/users') {
-      if (!this.isAdmin(userId)) {
-        await this.bot.sendMessage(chatId, 'Admin only.');
-        return;
-      }
-      const { listUsers } = await import('../users/index.js');
-      const users = listUsers();
-      if (users.length === 0) {
-        await this.bot.sendMessage(chatId, 'No registered users.');
-        return;
-      }
-      const list = users.map(u => `• ${u.name} [${u.role}] — ${u.id.slice(0, 8)}`).join('\n');
-      await this.bot.sendMessage(chatId, `${users.length} user(s):\n${list}`);
-      return;
-    }
-
-    if (text === '/cost' || text.startsWith('/cost ')) {
-      const { getCostSummary, formatCostSummary } = await import('../observability/analytics.js');
-      const summary = getCostSummary();
-      await this.bot.sendMessage(chatId, formatCostSummary(summary));
-      return;
-    }
-
-    if (text === '/activity' || text.startsWith('/activity ')) {
-      const hoursStr = text.slice(10).trim();
-      const hours = parseInt(hoursStr) || 24;
-      const { getActivitySummary, formatActivitySummary } = await import('../observability/analytics.js');
-      const summary = getActivitySummary(hours);
-      await this.bot.sendMessage(chatId, formatActivitySummary(summary));
-      return;
-    }
-
-    if (text.startsWith('/handoff')) {
-      const tabName = text.slice(9).trim() || 'default';
-      const { exportTab, formatHandoffInfo } = await import('../cli/handoff.js');
-      const info = exportTab(tabName);
-      if (!info) {
-        await this.bot.sendMessage(chatId, `Tab "${tabName}" not found.`);
-        return;
-      }
-      await this.bot.sendMessage(chatId, formatHandoffInfo(info));
-      return;
-    }
-
-    if (text === '/machines' || text.startsWith('/machines@')) {
-      const { listMachines } = await import('../machines/index.js');
-      const machines = listMachines();
-      if (machines.length === 0) {
-        await this.bot.sendMessage(chatId, 'No machines registered.');
-        return;
-      }
-      const list = machines.map(m => {
-        const primary = m.isPrimary ? ' \u2B50' : '';
-        const remote = m.host ? ` (${m.sshUser}@${m.host})` : ' (local)';
-        const paths = m.projectPaths.slice(0, 3).join(', ');
-        return `\u2022 ${m.name}${primary}${remote}\n  Projects: ${paths}`;
-      }).join('\n\n');
-      await this.bot.sendMessage(chatId, `\uD83D\uDDA5 ${machines.length} machine(s):\n\n${list}`);
-      return;
-    }
-
-    // /projects — list all projects
-    if (text === '/projects' || text.startsWith('/projects@')) {
-      const { listProjects } = await import('../projects/index.js');
-      const projects = listProjects();
-      if (projects.length === 0) {
-        await this.bot.sendMessage(chatId, 'No projects found. Create one with /newproject <name>');
-        return;
-      }
-      const userProjects = projects.filter((p: any) => p.type === 'user-project');
-      const categories = projects.filter((p: any) => p.type === 'category');
-      let msg2 = '📦 Projects:\n';
-      if (userProjects.length > 0) {
-        msg2 += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
-      }
-      if (categories.length > 0) {
-        msg2 += '\n\n📁 Categories:\n';
-        msg2 += categories.map((p: any) => `  • ${p.name}`).join('\n');
-      }
-      await this.bot.sendMessage(chatId, msg2);
-      return;
-    }
-
-    // /project <name> — switch to a project
-    if (text.startsWith('/project ') && !text.startsWith('/projects')) {
-      const name = text.slice(9).trim();
-      const { getProject, setUserContext } = await import('../projects/index.js');
-      const project = getProject(name);
-      if (!project) {
-        await this.bot.sendMessage(chatId, `Project "${name}" not found. Use /projects to list or /newproject to create.`);
-        return;
-      }
-      setUserContext(String(userId || 'default'), project.name, project.name);
-      await this.bot.sendMessage(chatId, `Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.`);
-      return;
-    }
-
-    // /newproject <name> [path] — create a new project
-    if (text.startsWith('/newproject ')) {
-      const parts = text.slice(12).trim().split(/\s+/);
-      const name = parts[0];
-      const customPath = parts[1] || undefined;
-      if (!name) {
-        await this.bot.sendMessage(chatId, 'Usage: /newproject <name> [path]');
-        return;
-      }
-      const { createProject, setUserContext } = await import('../projects/index.js');
-      const project = createProject(name, customPath);
-      setUserContext(String(userId || 'default'), project.name, project.name);
-      await this.bot.sendMessage(chatId, `✓ Project "${name}" created at ${project.path}\nSwitched to this project.`);
-      return;
-    }
-
-    // /close <tab> — permanently close a tab
-    if (text.startsWith('/close ')) {
-      const tabNameToClose = text.slice(7).trim();
-      if (!tabNameToClose) {
-        await this.bot.sendMessage(chatId, 'Usage: /close <tabname>');
-        return;
-      }
-      const { closeTab } = await import('../projects/index.js');
-      const closed = closeTab(tabNameToClose);
-      if (closed) {
-        await this.bot.sendMessage(chatId, `Tab "${tabNameToClose}" permanently closed. History deleted.`);
-      } else {
-        await this.bot.sendMessage(chatId, `Tab "${tabNameToClose}" not found.`);
-      }
-      return;
-    }
-
-    // /fresh <project> — start a new tab in a project
-    if (text.startsWith('/fresh ')) {
-      const projectName = text.slice(7).trim();
-      const { getProject, setUserContext } = await import('../projects/index.js');
-      const project = getProject(projectName);
-      if (!project) {
-        await this.bot.sendMessage(chatId, `Project "${projectName}" not found.`);
-        return;
-      }
-      const freshTabName = `${projectName}-${Date.now().toString(36).slice(-4)}`;
-      setUserContext(String(userId || 'default'), project.name, freshTabName);
-      await this.bot.sendMessage(chatId, `Fresh start in "${projectName}" (tab: ${freshTabName})\nSend your message now.`);
       return;
     }
 
@@ -549,32 +340,15 @@ export class TelegramChannel implements Channel {
       }
     }
 
-    // Smart project routing (if no explicit /tab command)
-    let effectiveTabName = tabName;
-    let projectPath: string | undefined;
-
-    if (tabName === 'default' && !text.startsWith('/tab ')) {
-      try {
-        const { routeMessage, setUserContext } = await import('../projects/index.js');
-        const decision = routeMessage(rawPrompt, {
-          userId: String(chatId),
-        });
-
-        if (decision.needsConfirmation) {
-          const { listProjects } = await import('../projects/index.js');
-          const projects = listProjects().filter((p: any) => p.type === 'user-project');
-          const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
-          await this.bot.sendMessage(chatId, `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`);
-          return;
-        }
-
-        effectiveTabName = decision.tabName;
-        projectPath = decision.project.path;
-        setUserContext(String(chatId), decision.project.name, decision.tabName);
-      } catch (err) {
-        logger.warn('Project routing failed, using default:', err);
-      }
+    // Smart project routing (shared across all channels)
+    const { resolveProjectRoute } = await import('./command-handler.js');
+    const route = await resolveProjectRoute(rawPrompt, tabName, text, String(chatId));
+    if (route.confirmationMessage) {
+      await this.bot.sendMessage(chatId, route.confirmationMessage);
+      return;
     }
+    let effectiveTabName = route.effectiveTabName;
+    let projectPath = route.projectPath;
 
     // Build prompt with media references
     const prompt = buildMediaPrompt(media, rawPrompt);

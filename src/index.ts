@@ -138,7 +138,7 @@ program
 
     const { getConfig, saveConfig } = await import('./config.js');
     const config = getConfig();
-    (config as any).discord = { token, allowedUserIds: userId ? [userId] : [] };
+    config.discord = { token, allowedUserIds: userId ? [userId] : [] };
     saveConfig(config);
     console.log('\n✓ Discord configured. Restart daemon: beecork stop && beecork start\n');
     rl.close();
@@ -163,7 +163,7 @@ program
     const { getConfig, saveConfig } = await import('./config.js');
     const { getBeecorkHome } = await import('./util/paths.js');
     const config = getConfig();
-    (config as any).whatsapp = {
+    config.whatsapp = {
       enabled: true,
       mode: 'baileys',
       sessionPath: `${getBeecorkHome()}/whatsapp-session`,
@@ -193,13 +193,39 @@ program
 
     const { getConfig, saveConfig } = await import('./config.js');
     const config = getConfig();
-    (config as any).webhook = { enabled: true, port: parseInt(port), authToken: token };
+    config.webhook = { enabled: true, port: parseInt(port), authToken: token };
     saveConfig(config);
     console.log(`\n✓ Webhook enabled on port ${port}`);
     console.log(`  Auth token: ${token}`);
     console.log(`  Example: curl -X POST http://localhost:${port}/webhook/default -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"prompt":"hello"}'`);
     console.log('\n  Restart daemon: beecork stop && beecork start\n');
     rl.close();
+  });
+
+program
+  .command('computer-use')
+  .description('Enable or disable computer use (mouse/keyboard/screen control)')
+  .argument('[action]', 'enable or disable', 'toggle')
+  .action(async (action: string) => {
+    const { getConfig, saveConfig } = await import('./config.js');
+    const config = getConfig();
+    if (action === 'enable') {
+      config.claudeCode.computerUse = true;
+    } else if (action === 'disable') {
+      config.claudeCode.computerUse = false;
+    } else {
+      config.claudeCode.computerUse = !config.claudeCode.computerUse;
+    }
+    saveConfig(config);
+    const status = config.claudeCode.computerUse ? 'ENABLED' : 'DISABLED';
+    console.log(`\nComputer use: ${status}`);
+    if (config.claudeCode.computerUse) {
+      console.log('\nClaude can now control your mouse, keyboard, and screen.');
+      console.log('Make sure you have granted permissions:');
+      console.log('  macOS: System Settings → Privacy → Screen Recording + Accessibility');
+      console.log('  Guide: https://support.beecork.com/computer-use');
+    }
+    console.log('\nRestart daemon to apply: beecork stop && beecork start\n');
   });
 
 program
@@ -397,7 +423,7 @@ mediaCmd
   .description('List configured media providers')
   .action(async () => {
     const { mediaList } = await import('./cli/media.js');
-    mediaList();
+    await mediaList();
   });
 
 // Also make `beecork media` (no subcommand) run setup

@@ -110,20 +110,3 @@ export function formatActivitySummary(summary: ActivitySummary): string {
   ].join('\n');
 }
 
-export function generateDailyDigest(): string {
-  const activity = getActivitySummary(24);
-  const costs = getCostSummary();
-  const anomaly = checkAnomalies();
-
-  const lines = [
-    '📋 Daily Beecork Digest',
-    '',
-    formatActivitySummary(activity),
-    '',
-    formatCostSummary(costs),
-  ];
-
-  if (anomaly) lines.push('', anomaly);
-
-  return lines.join('\n');
-}

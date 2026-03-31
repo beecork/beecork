@@ -34,10 +34,10 @@ describe('ContextMonitor', () => {
     expect(monitor.usageRatio).toBeCloseTo(0.6);
   });
 
-  it('should count output tokens toward threshold', () => {
-    // 40K input + 40K output = 80K = 80% of 100K window → triggers warn
-    expect(monitor.recordUsage(makeUsage(40000, 40000))).toBe('warn');
-    expect(monitor.tokenCount).toBe(80000);
+  it('should only count input tokens (not output) toward threshold', () => {
+    // 40K input + 40K output = only 40K counted (input_tokens only)
+    expect(monitor.recordUsage(makeUsage(40000, 40000))).toBe('ok');
+    expect(monitor.tokenCount).toBe(40000);
   });
 
   it('should reset state', () => {

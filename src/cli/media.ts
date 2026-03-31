@@ -28,7 +28,7 @@ export async function mediaSetup(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const { getConfig, saveConfig } = await import('../config.js');
   const config = getConfig();
-  const generators: Array<{ provider: string; apiKey: string; model?: string }> = (config as any).mediaGenerators || [];
+  const generators: Array<{ provider: string; apiKey?: string; model?: string }> = config.mediaGenerators || [];
 
   console.log('\nMedia Generation Setup\n');
   console.log('Configure AI providers for generating images, videos, and audio.');
@@ -100,24 +100,24 @@ export async function mediaSetup(): Promise<void> {
     }
   }
 
-  (config as any).mediaGenerators = generators;
+  config.mediaGenerators = generators;
   saveConfig(config);
   console.log(`\n✓ ${generators.length} media provider(s) configured.`);
   console.log('Restart daemon to activate: beecork stop && beecork start\n');
   rl.close();
 }
 
-export function mediaList(): void {
-  const { getConfig } = require('../config.js');
+export async function mediaList(): Promise<void> {
+  const { getConfig } = await import('../config.js');
   const config = getConfig();
-  const generators = (config as any).mediaGenerators || [];
+  const generators = config.mediaGenerators || [];
   if (generators.length === 0) {
     console.log('No media generators configured. Run: beecork media');
     return;
   }
   console.log(`\n${generators.length} media provider(s):\n`);
   for (const g of generators) {
-    console.log(`  ${g.provider}${g.model ? ` (${g.model})` : ''} — API key: ${g.apiKey.slice(0, 8)}...`);
+    console.log(`  ${g.provider}${g.model ? ` (${g.model})` : ''} — API key: ${g.apiKey?.slice(0, 8) ?? '(none)'}...`);
   }
   console.log('');
 }

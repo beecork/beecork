@@ -541,10 +541,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (config.whatsapp?.enabled) {
           channels.push({ id: 'whatsapp', name: 'WhatsApp', streaming: false, media: true });
         }
-        if ((config as any).webhook?.enabled) {
+        if (config.webhook?.enabled) {
           channels.push({ id: 'webhook', name: 'Webhook', streaming: false, media: false });
         }
-        if ((config as any).discord?.token) {
+        if (config.discord?.token) {
           channels.push({ id: 'discord', name: 'Discord', streaming: false, media: true });
         }
         return ok(JSON.stringify(channels, null, 2));
@@ -676,7 +676,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!prompt) return fail('Prompt is required.');
         const config = getConfig();
         const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const generators = initMediaGenerators(config.mediaGenerators);
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes('image'))
           : generators.find(g => g.supportedTypes.includes('image'));
@@ -694,7 +694,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!prompt) return fail('Prompt is required.');
         const config = getConfig();
         const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const generators = initMediaGenerators(config.mediaGenerators);
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes('video'))
           : generators.find(g => g.supportedTypes.includes('video'));
@@ -712,7 +712,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const mediaType = audioType === 'music' ? 'music' as const : 'audio' as const;
         const config = getConfig();
         const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const generators = initMediaGenerators(config.mediaGenerators);
         const gen = provider
           ? generators.find(g => g.id === provider && g.supportedTypes.includes(mediaType))
           : generators.find(g => g.supportedTypes.includes(mediaType));
@@ -727,7 +727,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'beecork_media_providers': {
         const config = getConfig();
         const { initMediaGenerators } = await import('../media/index.js');
-        const generators = initMediaGenerators((config as any).mediaGenerators);
+        const generators = initMediaGenerators(config.mediaGenerators);
         if (generators.length === 0) {
           return ok('No media generators configured. Add mediaGenerators to config.json.');
         }

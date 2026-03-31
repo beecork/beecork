@@ -133,5 +133,13 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
       ...raw.pipe,
     },
     deployment: raw.deployment ?? DEFAULT_CONFIG.deployment,
+    // Preserve optional config sections (no defaults needed)
+    whatsapp: raw.whatsapp,
+    discord: raw.discord,
+    webhook: raw.webhook,
+    voice: raw.voice,
+    groups: raw.groups,
+    notifications: raw.notifications,
+    mediaGenerators: raw.mediaGenerators,
   };
 }

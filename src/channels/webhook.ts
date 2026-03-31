@@ -2,6 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { logger } from '../util/logger.js';
 import { parseTabMessage } from '../util/text.js';
+import { validateTabName } from '../config.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 export interface WebhookConfig {
@@ -20,8 +21,6 @@ export class WebhookChannel implements Channel {
 
   private server: http.Server | null = null;
   private ctx: ChannelContext;
-  private handler: InboundMessageHandler | null = null;
-  private pendingResponses = new Map<string, { resolve: (text: string) => void; timer: NodeJS.Timeout }>();
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -60,14 +59,17 @@ export class WebhookChannel implements Channel {
 
       const tabName = decodeURIComponent(match[1]);
 
-      // Auth check
-      if (!this.authenticate(req, config)) {
-        res.writeHead(401);
-        res.end(JSON.stringify({ error: 'Unauthorized' }));
-        return;
+      // Validate tab name
+      if (tabName !== 'default') {
+        const tabError = validateTabName(tabName);
+        if (tabError) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: tabError }));
+          return;
+        }
       }
 
-      // Read body
+      // Read body first (needed for both JSON parsing and HMAC verification)
       let body = '';
       for await (const chunk of req) {
         body += chunk;
@@ -76,6 +78,13 @@ export class WebhookChannel implements Channel {
           res.end(JSON.stringify({ error: 'Payload too large' }));
           return;
         }
+      }
+
+      // Auth check (after body read, so HMAC can verify body)
+      if (!this.authenticate(req, config, body)) {
+        res.writeHead(401);
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
       }
 
       let payload: { prompt?: string; message?: string; sync?: boolean };
@@ -133,39 +142,26 @@ export class WebhookChannel implements Channel {
       this.server.close();
       this.server = null;
     }
-    // Clean up pending responses
-    for (const [, pending] of this.pendingResponses) {
-      clearTimeout(pending.timer);
-    }
-    this.pendingResponses.clear();
     logger.info('Webhook channel stopped');
   }
 
-  onMessage(handler: InboundMessageHandler): void {
-    this.handler = handler;
+  onMessage(_handler: InboundMessageHandler): void {
+    // Webhooks handle messages directly in the HTTP handler
   }
 
-  async sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void> {
+  async sendMessage(_peerId: string, _text: string, _options?: SendOptions): Promise<void> {
     // Webhooks are request-response — responses are sent in the HTTP handler
-    // This is used for sync mode responses
-    const pending = this.pendingResponses.get(peerId);
-    if (pending) {
-      clearTimeout(pending.timer);
-      pending.resolve(text);
-      this.pendingResponses.delete(peerId);
-    }
   }
 
-  async sendNotification(message: string, urgent?: boolean): Promise<void> {
+  async sendNotification(_message: string, _urgent?: boolean): Promise<void> {
     // Webhook channel doesn't have persistent connections to send notifications to
-    // Notifications go through other channels
   }
 
-  async setTyping(peerId: string, active: boolean): Promise<void> {
+  async setTyping(_peerId: string, _active: boolean): Promise<void> {
     // No typing indicators for webhooks
   }
 
-  private authenticate(req: http.IncomingMessage, config: WebhookConfig): boolean {
+  private authenticate(req: http.IncomingMessage, config: WebhookConfig, body: string): boolean {
     // No auth configured = allow all (localhost only)
     if (!config.authToken && !config.hmacSecret) return true;
 
@@ -179,9 +175,12 @@ export class WebhookChannel implements Channel {
     if (config.hmacSecret) {
       const signature = req.headers['x-hub-signature-256'] as string;
       if (signature) {
-        // Body needs to be read first for HMAC — simplified here
-        // Full HMAC validation would require buffering the body first
-        return true; // TODO: implement full HMAC verification
+        const expected = 'sha256=' + crypto.createHmac('sha256', config.hmacSecret).update(body).digest('hex');
+        try {
+          return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+        } catch {
+          return false; // Length mismatch or encoding error
+        }
       }
     }
 

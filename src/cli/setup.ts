@@ -121,7 +121,15 @@ export async function setupWizard(): Promise<void> {
     // 4. Default working directory
     const defaultDir = await ask(rl, 'Default working directory', os.homedir());
 
-    // 5. Anthropic API key (optional - enables intelligent pipe)
+    // 5. Computer use (optional)
+    console.log('\n  Computer use (optional): Allow Claude to control your mouse, keyboard,');
+    console.log('  and screen. This lets Beecork use any app on your computer — browsers,');
+    console.log('  spreadsheets, design tools, internal dashboards. Powerful but requires');
+    console.log('  granting screen recording and accessibility permissions.');
+    console.log('  Guide: https://support.beecork.com/computer-use\n');
+    const enableComputerUse = await ask(rl, 'Enable computer use? (y/n)', 'n');
+
+    // 6. Anthropic API key (optional - enables intelligent pipe)
     console.log('\n  Intelligent routing (optional): Beecork can route messages to the right');
     console.log('  project automatically and track goal completion. Requires an Anthropic API key.');
     const apiKey = await ask(rl, 'Anthropic API key (press Enter to skip)');
@@ -147,6 +155,7 @@ export async function setupWizard(): Promise<void> {
       claudeCode: {
         bin: claudeBin,
         defaultFlags: ['--dangerously-skip-permissions'],
+        computerUse: enableComputerUse.toLowerCase() === 'y',
       },
       tabs: {
         default: {
@@ -192,7 +201,7 @@ export async function setupWizard(): Promise<void> {
       const discordToken = await ask(rl, 'Discord bot token (or press Enter to skip)');
       if (discordToken) {
         const discordUserId = await ask(rl, 'Your Discord user ID (right-click your name → Copy User ID)');
-        (config as any).discord = {
+        config.discord = {
           token: discordToken,
           allowedUserIds: discordUserId ? [discordUserId] : [],
         };
@@ -214,7 +223,7 @@ export async function setupWizard(): Promise<void> {
 
       const waNumber = await ask(rl, 'Your WhatsApp phone number (e.g., 14155551234)');
       if (waNumber) {
-        (config as any).whatsapp = {
+        config.whatsapp = {
           enabled: true,
           mode: 'baileys',
           sessionPath: `${getBeecorkHome()}/whatsapp-session`,
@@ -229,7 +238,7 @@ export async function setupWizard(): Promise<void> {
       const webhookPort = await ask(rl, 'Webhook port', '8374');
       const webhookToken = await ask(rl, 'Webhook auth token (press Enter to auto-generate)');
       const whToken = webhookToken || crypto.randomBytes(24).toString('base64url');
-      (config as any).webhook = {
+      config.webhook = {
         enabled: true,
         port: parseInt(webhookPort),
         authToken: whToken,
@@ -290,7 +299,7 @@ export async function setupWizard(): Promise<void> {
       }
 
       if (mediaGenerators.length > 0) {
-        (config as any).mediaGenerators = mediaGenerators;
+        config.mediaGenerators = mediaGenerators;
         console.log(`\n  ✓ ${mediaGenerators.length} media provider(s) configured`);
       }
     }

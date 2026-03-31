@@ -22,8 +22,9 @@ export class ContextMonitor {
 
   /** Record token usage from a StreamAssistant or StreamResult event. Returns action needed. */
   recordUsage(usage: StreamUsage): ContextAction {
-    this.cumulativeTokens += usage.input_tokens + usage.output_tokens +
-      usage.cache_creation_input_tokens + usage.cache_read_input_tokens;
+    // Only count input_tokens — this already includes cached tokens.
+    // output_tokens don't consume context window; cache subtypes are part of input_tokens.
+    this.cumulativeTokens += usage.input_tokens;
 
     const ratio = this.cumulativeTokens / this.contextWindow;
 

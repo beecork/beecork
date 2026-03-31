@@ -10,6 +10,7 @@ export interface ClaudeCodeConfig {
   bin: string;
   defaultFlags: string[];
   maxBudgetUsd?: number;
+  computerUse?: boolean;
 }
 
 export interface MemoryConfig {

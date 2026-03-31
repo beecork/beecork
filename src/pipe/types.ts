@@ -2,12 +2,13 @@ export interface Project {
   id: string;
   name: string;
   path: string;
-  description: string;
-  languages: string[];
-  lastUsed: string | null;
-  tabName: string | null;
-  discoveredVia: 'scan' | 'conversation' | 'user';
+  type: string;
+  lastUsedAt: string;
   createdAt: string;
+  /** Populated at scan time, not persisted in DB */
+  description?: string;
+  /** Populated at scan time, not persisted in DB */
+  languages?: string[];
 }
 
 export interface RouteDecision {

@@ -1,5 +1,6 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { logger } from '../util/logger.js';
+import { validateTabName } from '../config.js';
 import type { Machine } from './registry.js';
 
 /**
@@ -12,12 +13,22 @@ export async function forwardToMachine(machine: Machine, tabName: string, messag
     return false;
   }
 
-  try {
-    // Use the remote beecork CLI to send the message
-    const escapedMessage = message.replace(/'/g, "'\\''");
-    const cmd = `ssh ${machine.sshUser}@${machine.host} 'beecork send "${tabName}" '"'"'${escapedMessage}'"'"''`;
+  // Validate inputs to prevent injection via execFileSync args
+  if (tabName !== 'default') {
+    const tabError = validateTabName(tabName);
+    if (tabError) {
+      logger.error(`Invalid tab name for forwarding: ${tabError}`);
+      return false;
+    }
+  }
 
-    execSync(cmd, { timeout: 30000, encoding: 'utf-8' });
+  try {
+    // Use execFileSync with array args to prevent shell injection
+    execFileSync('ssh', [
+      `${machine.sshUser}@${machine.host}`,
+      'beecork', 'send', tabName, message,
+    ], { timeout: 30000, encoding: 'utf-8' });
+
     logger.info(`Message forwarded to ${machine.name} (${machine.host}), tab: ${tabName}`);
     return true;
   } catch (err) {

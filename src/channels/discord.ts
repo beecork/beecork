@@ -19,7 +19,6 @@ export class DiscordChannel implements Channel {
 
   private client: any = null; // Discord.js Client
   private ctx: ChannelContext;
-  private handler: InboundMessageHandler | null = null;
   private allowedUserIds: Set<string>;
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
@@ -62,10 +61,10 @@ export class DiscordChannel implements Channel {
       const isDM = !message.guild;
       const isMentioned = message.mentions.has(this.client.user);
 
-      // In DMs: allow if user is in allowlist (or allowlist is empty = allow all)
+      // In DMs: only allow users in the allowlist
       // In servers: only respond if @mentioned
       if (isDM) {
-        if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(message.author.id)) return;
+        if (!this.allowedUserIds.has(message.author.id)) return;
       } else {
         if (!isMentioned) return;
       }
@@ -120,143 +119,45 @@ export class DiscordChannel implements Channel {
         const { tabName, prompt } = parseTabMessage(text || '');
         if (!prompt && media.length === 0) return;
 
-        // Handle commands
-        if (text.startsWith('/tabs')) {
-          const tabs = this.ctx.tabManager.listTabs();
-          if (tabs.length === 0) {
-            await message.reply('No tabs.');
-          } else {
-            const list = tabs.map(t => `• **${t.name}** [${t.status}]`).join('\n');
-            await message.reply(list);
-          }
-          return;
-        }
-
-        if (text.startsWith('/stop ')) {
-          const name = text.slice(6).trim();
-          this.ctx.tabManager.stopTab(name);
-          await message.reply(`Stopped tab: ${name}`);
-          return;
-        }
-
-        // /projects — list all projects
-        if (text === '/projects') {
-          const { listProjects } = await import('../projects/index.js');
-          const projects = listProjects();
-          if (projects.length === 0) {
-            await message.reply('No projects found. Create one with /newproject <name>');
+        // Shared command handler
+        if (text.startsWith('/')) {
+          const { handleSharedCommand } = await import('./command-handler.js');
+          const cmdResult = await handleSharedCommand({
+            userId: message.author.id,
+            text,
+            isAdmin: false, // Discord has no admin concept currently
+            channelId: 'discord',
+          }, this.ctx.tabManager);
+          if (cmdResult.handled) {
+            if (cmdResult.response) await message.reply(cmdResult.response);
             return;
           }
-          const userProjects = projects.filter((p: any) => p.type === 'user-project');
-          const categories = projects.filter((p: any) => p.type === 'category');
-          let msg2 = '📦 **Projects:**\n';
-          if (userProjects.length > 0) {
-            msg2 += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
-          }
-          if (categories.length > 0) {
-            msg2 += '\n\n📁 **Categories:**\n';
-            msg2 += categories.map((p: any) => `  • ${p.name}`).join('\n');
-          }
-          await message.reply(msg2);
-          return;
-        }
-
-        // /project <name> — switch to a project
-        if (text.startsWith('/project ') && !text.startsWith('/projects')) {
-          const pname = text.slice(9).trim();
-          const { getProject, setUserContext } = await import('../projects/index.js');
-          const project = getProject(pname);
-          if (!project) {
-            await message.reply(`Project "${pname}" not found. Use /projects to list or /newproject to create.`);
-            return;
-          }
-          setUserContext(message.author.id, project.name, project.name);
-          await message.reply(`Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.`);
-          return;
-        }
-
-        // /newproject <name> [path] — create a new project
-        if (text.startsWith('/newproject ')) {
-          const parts = text.slice(12).trim().split(/\s+/);
-          const pname = parts[0];
-          const customPath = parts[1] || undefined;
-          if (!pname) {
-            await message.reply('Usage: /newproject <name> [path]');
-            return;
-          }
-          const { createProject, setUserContext } = await import('../projects/index.js');
-          const project = createProject(pname, customPath);
-          setUserContext(message.author.id, project.name, project.name);
-          await message.reply(`✓ Project "${pname}" created at ${project.path}\nSwitched to this project.`);
-          return;
-        }
-
-        // /close <tab> — permanently close a tab
-        if (text.startsWith('/close ')) {
-          const tabToClose = text.slice(7).trim();
-          if (!tabToClose) {
-            await message.reply('Usage: /close <tabname>');
-            return;
-          }
-          const { closeTab } = await import('../projects/index.js');
-          const closed = closeTab(tabToClose);
-          if (closed) {
-            await message.reply(`Tab "${tabToClose}" permanently closed. History deleted.`);
-          } else {
-            await message.reply(`Tab "${tabToClose}" not found.`);
-          }
-          return;
-        }
-
-        // /fresh <project> — start a new tab in a project
-        if (text.startsWith('/fresh ')) {
-          const projectName = text.slice(7).trim();
-          const { getProject, setUserContext } = await import('../projects/index.js');
-          const project = getProject(projectName);
-          if (!project) {
-            await message.reply(`Project "${projectName}" not found.`);
-            return;
-          }
-          const freshTab = `${projectName}-${Date.now().toString(36).slice(-4)}`;
-          setUserContext(message.author.id, project.name, freshTab);
-          await message.reply(`Fresh start in "${projectName}" (tab: ${freshTab})\nSend your message now.`);
-          return;
         }
 
         // Build prompt with media
         const fullPrompt = buildMediaPrompt(media, prompt || '');
 
-        // Smart project routing (if no explicit /tab command)
+        // Use thread name as tab if in a thread (sanitize to valid tab name)
         let effectiveTab = tabName;
         let projectPath: string | undefined;
 
-        // Use thread name as tab if in a thread
         if (message.channel.isThread?.()) {
-          effectiveTab = message.channel.name || tabName;
+          const threadName = (message.channel.name || '')
+            .replace(/[^a-zA-Z0-9-]/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 32);
+          if (threadName) effectiveTab = threadName;
         }
 
-        if (effectiveTab === 'default' && !text.startsWith('/tab ')) {
-          try {
-            const { routeMessage, setUserContext } = await import('../projects/index.js');
-            const decision = routeMessage(prompt || '', {
-              userId: message.author.id,
-            });
-
-            if (decision.needsConfirmation) {
-              const { listProjects } = await import('../projects/index.js');
-              const projects = listProjects().filter((p: any) => p.type === 'user-project');
-              const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
-              await message.reply(`Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`);
-              return;
-            }
-
-            effectiveTab = decision.tabName;
-            projectPath = decision.project.path;
-            setUserContext(message.author.id, decision.project.name, decision.tabName);
-          } catch (err) {
-            logger.warn('Project routing failed, using default:', err);
-          }
+        // Smart project routing (shared across all channels)
+        const { resolveProjectRoute } = await import('./command-handler.js');
+        const route = await resolveProjectRoute(prompt || '', effectiveTab, text, message.author.id);
+        if (route.confirmationMessage) {
+          await message.reply(route.confirmationMessage);
+          return;
         }
+        effectiveTab = route.effectiveTabName;
+        projectPath = route.projectPath;
 
         // Typing indicator refresh
         const typingInterval = setInterval(() => {
@@ -319,8 +220,8 @@ export class DiscordChannel implements Channel {
     logger.info('Discord bot stopped');
   }
 
-  onMessage(handler: InboundMessageHandler): void {
-    this.handler = handler;
+  onMessage(_handler: InboundMessageHandler): void {
+    // Messages are handled directly in start()
   }
 
   async sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void> {

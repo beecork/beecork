@@ -70,4 +70,6 @@ export interface ChannelContext {
   config: BeecorkConfig;
   tabManager: TabManager;
   pipeBrain: PipeBrain | null;
+  /** Broadcast notification to all channels + notification providers */
+  notifyCallback?: (message: string) => Promise<void>;
 }

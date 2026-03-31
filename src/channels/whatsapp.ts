@@ -25,7 +25,6 @@ export class WhatsAppChannel implements Channel {
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
   private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000];
-  private messageHandler: InboundMessageHandler | null = null;
   private sttProvider: STTProvider | null = null;
   private ttsProvider: TTSProvider | null = null;
 
@@ -64,6 +63,8 @@ export class WhatsAppChannel implements Channel {
             this.reconnectAttempts++;
             if (this.reconnectAttempts > this.maxReconnectAttempts) {
               logger.error(`WhatsApp reconnect failed after ${this.maxReconnectAttempts} attempts, giving up`);
+              this.ctx.notifyCallback?.('⚠️ WhatsApp disconnected after 10 reconnection attempts. Restart daemon to reconnect.')
+                .catch(err => logger.error('Failed to send WhatsApp disconnect notification:', err));
               return;
             }
             const delayIdx = Math.min(this.reconnectAttempts - 1, this.backoffDelays.length - 1);
@@ -184,87 +185,21 @@ export class WhatsAppChannel implements Channel {
         if (!text && media.length === 0) return;
 
         try {
-          // Handle project commands
-          if (text === '/projects') {
-            const { listProjects } = await import('../projects/index.js');
-            const projects = listProjects();
-            if (projects.length === 0) {
-              await sock.sendMessage(sender, { text: 'No projects found. Create one with /newproject <name>' });
-              return;
-            }
-            const userProjects = projects.filter((p: any) => p.type === 'user-project');
-            const categories = projects.filter((p: any) => p.type === 'category');
-            let msg2 = '📦 Projects:\n';
-            if (userProjects.length > 0) {
-              msg2 += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
-            }
-            if (categories.length > 0) {
-              msg2 += '\n\n📁 Categories:\n';
-              msg2 += categories.map((p: any) => `  • ${p.name}`).join('\n');
-            }
-            await sock.sendMessage(sender, { text: msg2 });
-            return;
-          }
+          const waUserId = sender.replace('@s.whatsapp.net', '');
 
-          if (text.startsWith('/project ') && !text.startsWith('/projects')) {
-            const pname = text.slice(9).trim();
-            const { getProject, setUserContext } = await import('../projects/index.js');
-            const project = getProject(pname);
-            if (!project) {
-              await sock.sendMessage(sender, { text: `Project "${pname}" not found. Use /projects to list or /newproject to create.` });
+          // Shared command handler (covers /tabs, /stop, /projects, /project, /newproject, /close, /fresh, etc.)
+          if (text.startsWith('/')) {
+            const { handleSharedCommand } = await import('./command-handler.js');
+            const cmdResult = await handleSharedCommand({
+              userId: waUserId,
+              text,
+              isAdmin: false,
+              channelId: 'whatsapp',
+            }, this.ctx.tabManager);
+            if (cmdResult.handled) {
+              if (cmdResult.response) await sock.sendMessage(sender, { text: cmdResult.response });
               return;
             }
-            const waNumber = sender.replace('@s.whatsapp.net', '');
-            setUserContext(waNumber, project.name, project.name);
-            await sock.sendMessage(sender, { text: `Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.` });
-            return;
-          }
-
-          if (text.startsWith('/newproject ')) {
-            const parts = text.slice(12).trim().split(/\s+/);
-            const pname = parts[0];
-            const customPath = parts[1] || undefined;
-            if (!pname) {
-              await sock.sendMessage(sender, { text: 'Usage: /newproject <name> [path]' });
-              return;
-            }
-            const { createProject, setUserContext } = await import('../projects/index.js');
-            const project = createProject(pname, customPath);
-            const waNumber = sender.replace('@s.whatsapp.net', '');
-            setUserContext(waNumber, project.name, project.name);
-            await sock.sendMessage(sender, { text: `✓ Project "${pname}" created at ${project.path}\nSwitched to this project.` });
-            return;
-          }
-
-          if (text.startsWith('/close ')) {
-            const tabToClose = text.slice(7).trim();
-            if (!tabToClose) {
-              await sock.sendMessage(sender, { text: 'Usage: /close <tabname>' });
-              return;
-            }
-            const { closeTab } = await import('../projects/index.js');
-            const closed = closeTab(tabToClose);
-            if (closed) {
-              await sock.sendMessage(sender, { text: `Tab "${tabToClose}" permanently closed. History deleted.` });
-            } else {
-              await sock.sendMessage(sender, { text: `Tab "${tabToClose}" not found.` });
-            }
-            return;
-          }
-
-          if (text.startsWith('/fresh ')) {
-            const projectName = text.slice(7).trim();
-            const { getProject, setUserContext } = await import('../projects/index.js');
-            const project = getProject(projectName);
-            if (!project) {
-              await sock.sendMessage(sender, { text: `Project "${projectName}" not found.` });
-              return;
-            }
-            const freshTab = `${projectName}-${Date.now().toString(36).slice(-4)}`;
-            const waNumber = sender.replace('@s.whatsapp.net', '');
-            setUserContext(waNumber, project.name, freshTab);
-            await sock.sendMessage(sender, { text: `Fresh start in "${projectName}" (tab: ${freshTab})\nSend your message now.` });
-            return;
           }
 
           const { tabName, prompt: rawPrompt } = parseTabMessage(text);
@@ -273,33 +208,15 @@ export class WhatsAppChannel implements Channel {
           // Build prompt with media references
           const prompt = buildMediaPrompt(media, rawPrompt);
 
-          // Smart project routing (if no explicit /tab command)
-          let effectiveTabName = tabName;
-          let projectPath: string | undefined;
-
-          if (tabName === 'default' && !text.startsWith('/tab ')) {
-            try {
-              const { routeMessage, setUserContext } = await import('../projects/index.js');
-              const waNumber = sender.replace('@s.whatsapp.net', '');
-              const decision = routeMessage(rawPrompt, {
-                userId: waNumber,
-              });
-
-              if (decision.needsConfirmation) {
-                const { listProjects } = await import('../projects/index.js');
-                const projects = listProjects().filter((p: any) => p.type === 'user-project');
-                const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
-                await sock.sendMessage(sender, { text: `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.` });
-                return;
-              }
-
-              effectiveTabName = decision.tabName;
-              projectPath = decision.project.path;
-              setUserContext(waNumber, decision.project.name, decision.tabName);
-            } catch (err) {
-              logger.warn('Project routing failed, using default:', err);
-            }
+          // Smart project routing (shared across all channels)
+          const { resolveProjectRoute } = await import('./command-handler.js');
+          const route = await resolveProjectRoute(rawPrompt, tabName, text, waUserId);
+          if (route.confirmationMessage) {
+            await sock.sendMessage(sender, { text: route.confirmationMessage });
+            return;
           }
+          let effectiveTabName = route.effectiveTabName;
+          let projectPath = route.projectPath;
 
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 
@@ -384,8 +301,8 @@ export class WhatsAppChannel implements Channel {
     await sock.sendPresenceUpdate(status, peerId).catch(() => {});
   }
 
-  onMessage(handler: InboundMessageHandler): void {
-    this.messageHandler = handler;
+  onMessage(_handler: InboundMessageHandler): void {
+    // Messages are handled directly in start()
   }
 
   // ─── Private ───

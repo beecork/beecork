@@ -41,10 +41,10 @@ export class CronStore {
 
   add(job: CronJob): void {
     const db = getDb();
-    db.prepare(`INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at, last_run_at, next_run_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO cron_jobs (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, user_id, created_at, last_run_at, next_run_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       job.id, job.name, job.scheduleType, job.schedule, job.tabName, job.message,
-      job.enabled ? 1 : 0, 'local', job.createdAt, job.lastRunAt, job.nextRunAt,
+      job.payloadType || 'agentTurn', job.enabled ? 1 : 0, 'local', job.createdAt, job.lastRunAt, job.nextRunAt,
     );
   }
 

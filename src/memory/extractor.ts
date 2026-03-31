@@ -77,6 +77,46 @@ export function getRelevantMemories(tabName: string): string[] {
 }
 
 async function runExtractionSession(config: BeecorkConfig, prompt: string): Promise<string[]> {
+  // Prefer direct API call (cheaper, faster) when API key is available
+  if (config.pipe?.anthropicApiKey) {
+    return runExtractionViaApi(config.pipe.anthropicApiKey, config.pipe.routingModel, prompt);
+  }
+  // Fallback: spawn Claude Code subprocess
+  return runExtractionViaSubprocess(config, prompt);
+}
+
+function parseFactsFromText(text: string): string[] {
+  const jsonMatch = text.match(/\[[\s\S]*?\]/);
+  if (jsonMatch) {
+    const facts = JSON.parse(jsonMatch[0]) as string[];
+    if (Array.isArray(facts) && facts.every(f => typeof f === 'string')) {
+      return facts.slice(0, 5);
+    }
+  }
+  return [];
+}
+
+async function runExtractionViaApi(apiKey: string, model: string, prompt: string): Promise<string[]> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey });
+
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 500,
+      system: 'Extract 0-5 key facts from this session transcript worth remembering across sessions. Output ONLY a JSON array of strings. If nothing is worth remembering, output [].',
+      messages: [{ role: 'user', content: prompt }],
+    }, { timeout: 15000 });
+
+    const text = response.content.find(b => b.type === 'text')?.text ?? '[]';
+    return parseFactsFromText(text);
+  } catch (err) {
+    logger.warn('API-based memory extraction failed, falling back to subprocess:', err);
+    return [];
+  }
+}
+
+async function runExtractionViaSubprocess(config: BeecorkConfig, prompt: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     let resolved = false;
     const safeResolve = (val: string[]) => { if (!resolved) { resolved = true; resolve(val); } };
@@ -102,7 +142,7 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
     proc.stdout!.on('data', (chunk: Buffer) => {
       stdoutBuffer += chunk.toString();
       const lines = stdoutBuffer.split('\n');
-      stdoutBuffer = lines.pop() || ''; // Keep incomplete last line in buffer
+      stdoutBuffer = lines.pop() || '';
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
@@ -117,15 +157,7 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
     proc.on('exit', () => {
       clearTimeout(timer);
       try {
-        const jsonMatch = output.match(/\[[\s\S]*?\]/);
-        if (jsonMatch) {
-          const facts = JSON.parse(jsonMatch[0]) as string[];
-          if (Array.isArray(facts) && facts.every(f => typeof f === 'string')) {
-            safeResolve(facts.slice(0, 5));
-            return;
-          }
-        }
-        safeResolve([]);
+        safeResolve(parseFactsFromText(output));
       } catch {
         safeResolve([]);
       }
@@ -133,7 +165,6 @@ async function runExtractionSession(config: BeecorkConfig, prompt: string): Prom
 
     proc.on('error', safeReject);
 
-    // Timeout after 30s
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       safeResolve([]);

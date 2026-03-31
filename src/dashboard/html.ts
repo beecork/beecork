@@ -185,7 +185,7 @@ export function getDashboardHtml(token: string): string {
   <div id="modal" class="hidden"></div>
 
 <script>
-  const API_TOKEN = '${token}';
+  const API_TOKEN = ${JSON.stringify(token)};
 
   // State
   let selectedTab = null;

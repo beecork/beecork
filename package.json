@@ -15,7 +15,7 @@
     "dev:daemon": "tsx src/daemon.ts",
     "test": "vitest",
     "lint": "eslint src/",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

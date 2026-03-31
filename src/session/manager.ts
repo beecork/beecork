@@ -108,7 +108,7 @@ export class TabManager {
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean; projectPath?: string }): Promise<SendResult> {
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean; projectPath?: string; _compactionDepth?: number }): Promise<SendResult> {
     const tab = this.ensureTab(tabName, options?.projectPath);
 
     // If a subprocess is already running on this tab, queue the message
@@ -126,7 +126,7 @@ export class TabManager {
       });
     }
 
-    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction, options?.onToolUse);
+    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction, options?.onToolUse, options?._compactionDepth);
   }
 
   /** Get all tabs from the database */
@@ -200,7 +200,7 @@ export class TabManager {
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void): Promise<SendResult> {
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number): Promise<SendResult> {
     const db = getDb();
 
     // Budget check before spawning
@@ -359,13 +359,14 @@ export class TabManager {
             .run('idle', new Date().toISOString(), tab.name);
 
           // Context window compaction: if checkpoint was triggered, restart with summary
-          if (checkpointTriggered && !result.error && result.text) {
-            logger.info(`[${tab.name}] Compacting context — requesting summary then restarting session`);
+          const currentDepth = compactionDepth ?? 0;
+          if (checkpointTriggered && !result.error && result.text && currentDepth < 2) {
+            logger.info(`[${tab.name}] Compacting context (depth ${currentDepth + 1}/2) — requesting summary then restarting session`);
             this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`).catch(err => logger.warn('Notify failed:', err));
 
             // Ask Claude for a structured summary
             const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
-            this.sendMessage(tab.name, summaryPrompt).then(summaryResult => {
+            this.sendMessage(tab.name, summaryPrompt, { _compactionDepth: currentDepth + 1 }).then(summaryResult => {
               // Store summary as checkpoint memory
               db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)')
                 .run(`[checkpoint] ${summaryResult.text}`, tab.name, 'auto');
@@ -377,7 +378,7 @@ export class TabManager {
 
               // Continue with original goal using the summary as context
               const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
-              this.sendMessage(tab.name, continuationPrompt, { onTextChunk }).then(resolve).catch(reject);
+              this.sendMessage(tab.name, continuationPrompt, { onTextChunk, _compactionDepth: currentDepth + 1 }).then(resolve).catch(reject);
             }).catch(err => {
               logger.error(`[${tab.name}] Compaction failed:`, err);
               resolve(result); // Fall back to returning the original result

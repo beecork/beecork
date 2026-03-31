@@ -1,3 +1,4 @@
+/** Reserved for future approval mode implementation. Not currently wired into the runtime. */
 export type ToolRisk = 'safe' | 'dangerous';
 
 const SAFE_TOOLS = new Set([

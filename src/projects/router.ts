@@ -111,6 +111,15 @@ export function routeMessage(message: string, context?: RoutingContext): RouteDe
 /** Update current context for a user */
 export function setUserContext(userId: string, projectName: string, tabName: string): void {
   userContext.set(userId, { projectName, tabName, updatedAt: Date.now() });
+  // Evict oldest entry when map grows too large
+  if (userContext.size > 1000) {
+    let oldestKey = '';
+    let oldestTime = Infinity;
+    for (const [key, val] of userContext) {
+      if (val.updatedAt < oldestTime) { oldestTime = val.updatedAt; oldestKey = key; }
+    }
+    if (oldestKey) userContext.delete(oldestKey);
+  }
 }
 
 /** Find a project explicitly mentioned by name in the message */
@@ -182,7 +191,7 @@ function recordRouting(message: string, projectName: string): void {
   db.prepare(`
     INSERT INTO routing_preferences (pattern, project_name)
     VALUES (?, ?)
-    ON CONFLICT DO NOTHING
+    ON CONFLICT(pattern, project_name) DO UPDATE SET hit_count = hit_count + 1
   `).run(pattern, projectName);
 }
 
@@ -190,14 +199,17 @@ function recordRouting(message: string, projectName: string): void {
 function checkLearnedRouting(message: string): { projectName: string; confidence: number } | null {
   const db = getDb();
   const words = message.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (words.length === 0) return null;
 
-  for (const word of words) {
-    const match = db.prepare(
-      'SELECT project_name, confidence, hit_count FROM routing_preferences WHERE pattern LIKE ? ORDER BY hit_count DESC LIMIT 1'
-    ).get(`%${word}%`) as any;
+  // Fetch all preferences in a single query and match in JS
+  const allPrefs = db.prepare(
+    'SELECT pattern, project_name, confidence, hit_count FROM routing_preferences WHERE hit_count >= 3 ORDER BY hit_count DESC'
+  ).all() as Array<{ pattern: string; project_name: string; confidence: number; hit_count: number }>;
 
-    if (match && match.hit_count >= 3) { // Only trust patterns seen 3+ times
-      return { projectName: match.project_name, confidence: Math.min(match.confidence, 0.9) };
+  for (const pref of allPrefs) {
+    const patternLower = pref.pattern.toLowerCase();
+    if (words.some(word => patternLower.includes(word) || word.includes(patternLower))) {
+      return { projectName: pref.project_name, confidence: Math.min(pref.confidence, 0.9) };
     }
   }
 

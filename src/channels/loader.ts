@@ -50,7 +50,8 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
             continue;
           }
 
-          // Dynamic import
+          // Dynamic import — community channels run with full daemon access
+          logger.warn(`Loading community channel from ${dir} — ensure you trust this package`);
           const module = await import(entryPath);
           const ChannelClass = module.default || module[Object.keys(module)[0]];
 

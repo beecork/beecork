@@ -7,34 +7,29 @@ export class PipeMemoryStore {
 
   getProjects(): Project[] {
     const db = getDb();
-    const rows = db.prepare('SELECT * FROM projects ORDER BY last_used DESC NULLS LAST').all() as Array<Record<string, unknown>>;
+    const rows = db.prepare('SELECT * FROM projects ORDER BY last_used_at DESC NULLS LAST').all() as Array<Record<string, unknown>>;
     return rows.map(r => ({
       id: r.id as string,
       name: r.name as string,
       path: r.path as string,
-      description: (r.description as string) || '',
-      languages: JSON.parse((r.languages as string) || '[]'),
-      lastUsed: r.last_used as string | null,
-      tabName: r.tab_name as string | null,
-      discoveredVia: (r.discovered_via as Project['discoveredVia']) || 'scan',
+      type: (r.type as string) || 'user-project',
+      lastUsedAt: r.last_used_at as string,
       createdAt: r.created_at as string,
     }));
   }
 
   upsertProject(project: Project): void {
     const db = getDb();
-    db.prepare(`INSERT INTO projects (id, name, path, description, languages, last_used, tab_name, discovered_via)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        name=excluded.name, description=excluded.description, languages=excluded.languages,
-        last_used=excluded.last_used, tab_name=excluded.tab_name, updated_at=datetime('now')
-    `).run(project.id || uuidv4(), project.name, project.path, project.description,
-      JSON.stringify(project.languages), project.lastUsed, project.tabName, project.discoveredVia);
+    db.prepare(`INSERT INTO projects (id, name, path, type)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        path=excluded.path, type=excluded.type, last_used_at=datetime('now')
+    `).run(project.id || uuidv4(), project.name, project.path, project.type || 'user-project');
   }
 
   updateProjectLastUsed(path: string): void {
     const db = getDb();
-    db.prepare('UPDATE projects SET last_used = datetime("now") WHERE path = ?').run(path);
+    db.prepare('UPDATE projects SET last_used_at = datetime("now") WHERE path = ?').run(path);
   }
 
   // ─── Routing History ───

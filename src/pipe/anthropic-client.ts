@@ -16,7 +16,7 @@ export class PipeAnthropicClient {
   /** Route a message to the right project/tab (Haiku — fast, cheap) */
   async route(message: string, projects: Project[], recentRouting: string[]): Promise<RouteDecision> {
     const projectList = projects.map(p =>
-      `- ${p.name}: ${p.path} (${p.languages.join(', ')}) — ${p.description || 'no description'}`
+      `- ${p.name}: ${p.path}${p.languages?.length ? ` (${p.languages.join(', ')})` : ''}${p.description ? ` — ${p.description}` : ''}`
     ).join('\n');
 
     const response = await this.complete(

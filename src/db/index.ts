@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { getDbPath, ensureBeecorkDirs } from '../util/paths.js';
 import { runMigrations } from './migrations.js';
+import { logger } from '../util/logger.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tabs (
@@ -66,9 +67,11 @@ export function getDb(): Database.Database {
     try {
       db?.pragma('wal_checkpoint(PASSIVE)');
       // Prune old routing/permission history (keep last 1000 entries)
-      db?.exec('DELETE FROM routing_history WHERE id NOT IN (SELECT id FROM routing_history ORDER BY created_at DESC LIMIT 1000)');
-      db?.exec('DELETE FROM permission_history WHERE id NOT IN (SELECT id FROM permission_history ORDER BY created_at DESC LIMIT 1000)');
-    } catch {}
+      db?.exec('DELETE FROM routing_history WHERE created_at < (SELECT created_at FROM routing_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
+      db?.exec('DELETE FROM permission_history WHERE created_at < (SELECT created_at FROM permission_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
+    } catch (err) {
+      logger.warn('WAL checkpoint/cleanup error:', err);
+    }
   }, 30 * 60 * 1000); // every 30 minutes
 
   return db;

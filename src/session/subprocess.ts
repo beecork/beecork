@@ -35,6 +35,7 @@ export interface SubprocessCallbacks {
 export class ClaudeSubprocess {
   private proc: ChildProcess | null = null;
   private buffer: string = '';
+  private killTimer: ReturnType<typeof setTimeout> | null = null;
   readonly sessionId: string;
 
   constructor(
@@ -96,6 +97,7 @@ export class ClaudeSubprocess {
 
     this.proc.on('exit', (code) => {
       this.proc = null;
+      if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
       logger.info(`[${this.tabName}] Claude subprocess exited (code: ${code})`);
       callbacks.onExit(code);
     });
@@ -106,7 +108,7 @@ export class ClaudeSubprocess {
     logger.info(`[${this.tabName}] Killing subprocess (PID: ${this.proc.pid})`);
     this.proc.kill('SIGTERM');
     const proc = this.proc;
-    setTimeout(() => {
+    this.killTimer = setTimeout(() => {
       try { proc.kill('SIGKILL'); } catch { /* already dead */ }
     }, 5000);
   }
@@ -146,6 +148,10 @@ export class ClaudeSubprocess {
       args.push('--resume', this.sessionId);
     } else {
       args.push('--session-id', this.sessionId);
+    }
+
+    if (this.config.claudeCode.computerUse) {
+      args.push('--computer-use');
     }
 
     if (this.config.claudeCode.maxBudgetUsd) {

@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 
   // Start channels via registry
   channelRegistry = new ChannelRegistry();
-  const channelCtx = { config, tabManager, pipeBrain };
+  const channelCtx = { config, tabManager, pipeBrain, notifyCallback: broadcastNotify };
 
   if (config.telegram?.token) {
     channelRegistry.register(new TelegramChannel(channelCtx));
@@ -113,12 +113,12 @@ async function main(): Promise<void> {
     channelRegistry.register(new WhatsAppChannel(channelCtx));
   }
 
-  if ((config as any).webhook?.enabled) {
+  if (config.webhook?.enabled) {
     const { WebhookChannel } = await import('./channels/webhook.js');
     channelRegistry.register(new WebhookChannel(channelCtx));
   }
 
-  if ((config as any).discord?.token) {
+  if (config.discord?.token) {
     const { DiscordChannel } = await import('./channels/discord.js');
     channelRegistry.register(new DiscordChannel(channelCtx));
   }
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   // Initialize media generators
   try {
     const { initMediaGenerators } = await import('./media/index.js');
-    const generators = initMediaGenerators((config as any).mediaGenerators);
+    const generators = initMediaGenerators(config.mediaGenerators);
     if (generators.length > 0) {
       logger.info(`${generators.length} media generator(s) initialized`);
     }
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
   cronScheduler = new CronScheduler(tabManager, broadcastNotify);
   cronScheduler.loadAndSchedule();
 
-  // 9. Start IPC polling
+  // 10. Start IPC polling
   let lastMediaCleanup = 0;
   let lastAnomalyCheck = 0;
   pollInterval = setInterval(() => {
@@ -196,12 +196,12 @@ async function main(): Promise<void> {
     }
   }, 5000);
 
-  // 10. Handle shutdown
+  // 11. Handle shutdown
   const shutdown = async () => {
     logger.info('Beecork daemon shutting down...');
 
-    // Send shutdown notification before stopping
-    try { await broadcastNotify('🔴 Beecork stopping'); } catch { /* ok */ }
+    // Send shutdown notification before stopping (with timeout to prevent hanging)
+    try { await Promise.race([broadcastNotify('🔴 Beecork stopping'), new Promise(r => setTimeout(r, 5000))]); } catch { /* ok */ }
 
     clearInterval(pollInterval);
     tabManager.stopAll();
@@ -306,5 +306,6 @@ async function recoverCrashedTabs(): Promise<void> {
 
 main().catch(err => {
   logger.error('Fatal error:', err);
+  closeDb();
   process.exit(1);
 });

@@ -87,11 +87,10 @@ function analyzeProject(dirPath: string): Project {
     id: uuidv4(),
     name,
     path: dirPath,
+    type: 'user-project',
+    lastUsedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
     description,
     languages,
-    lastUsed: null,
-    tabName: null,
-    discoveredVia: 'scan',
-    createdAt: new Date().toISOString(),
   };
 }

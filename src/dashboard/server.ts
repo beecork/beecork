@@ -1,12 +1,13 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 import Database from 'better-sqlite3';
 import { getDbPath } from '../util/paths.js';
 import { getDashboardHtml } from './html.js';
 import { VERSION } from '../version.js';
 import { getDaemonPid } from '../cli/helpers.js';
+import { validateTabName } from '../config.js';
 
 let cachedDashDb: Database.Database | null = null;
 function getDashDb(): Database.Database {
@@ -33,7 +34,7 @@ function json(res: http.ServerResponse, data: unknown, status = 200): void {
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? 'open' : 'xdg-open';
-  exec(`${cmd} ${url}`);
+  execFile(cmd, [url]);
 }
 
 export function startDashboardServer(port = 0): void {
@@ -53,7 +54,12 @@ export function startDashboardServer(port = 0): void {
         res.end();
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      if (token !== authToken) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Referrer-Policy': 'no-referrer' });
       res.end(getDashboardHtml(authToken));
       return;
     }
@@ -99,11 +105,14 @@ export function startDashboardServer(port = 0): void {
       // POST: Send message to tab
       if (path.match(/^\/api\/tabs\/[^/]+\/send$/) && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
-        const { message } = JSON.parse(body);
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
+        let parsed: any;
+        try { parsed = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { message } = parsed;
         if (!message) { json(res, { error: 'Missing message' }, 400); return; }
 
         const tabName = decodeURIComponent(path.split('/')[3]);
+        if (!validateTabName(tabName)) { json(res, { error: 'Invalid tab name' }, 400); return; }
         withWriteDb(db => db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'user'));
         json(res, { success: true, tab: tabName });
         return;
@@ -112,9 +121,12 @@ export function startDashboardServer(port = 0): void {
       // POST: Create tab
       if (path === '/api/tabs' && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
-        const { name, workingDir, systemPrompt } = JSON.parse(body);
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
+        let parsedTab: any;
+        try { parsedTab = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { name, workingDir, systemPrompt } = parsedTab;
         if (!name) { json(res, { error: 'Missing tab name' }, 400); return; }
+        if (!validateTabName(name)) { json(res, { error: 'Invalid tab name' }, 400); return; }
 
         const id = crypto.randomUUID();
         withWriteDb(db => db.prepare('INSERT OR IGNORE INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)').run(
@@ -141,8 +153,10 @@ export function startDashboardServer(port = 0): void {
       // POST: Create cron job
       if (path === '/api/crons' && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
-        const { name, scheduleType, schedule, tabName, message } = JSON.parse(body);
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
+        let parsedCron: any;
+        try { parsedCron = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { name, scheduleType, schedule, tabName, message } = parsedCron;
         if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
 
         const id = crypto.randomUUID();
@@ -164,8 +178,10 @@ export function startDashboardServer(port = 0): void {
       // POST: Create memory
       if (path === '/api/memories' && req.method === 'POST') {
         let body = '';
-        for await (const chunk of req) body += chunk;
-        const { content, tabName } = JSON.parse(body);
+        for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
+        let parsedMemory: any;
+        try { parsedMemory = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { content, tabName } = parsedMemory;
         if (!content) { json(res, { error: 'Missing content' }, 400); return; }
 
         withWriteDb(db => db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(content, tabName || null, 'tool'));
@@ -184,7 +200,7 @@ export function startDashboardServer(port = 0): void {
       if (path === '/api/media/config') {
         const { getConfig } = await import('../config.js');
         const config = getConfig();
-        const generators = (config as any).mediaGenerators || [];
+        const generators = config.mediaGenerators || [];
         const info = generators.map((g: any) => ({
           provider: g.provider,
           model: g.model,
@@ -199,11 +215,30 @@ export function startDashboardServer(port = 0): void {
         const config = getConfig();
         const channels = {
           telegram: { configured: !!config.telegram?.token, botUsername: null as string | null },
-          discord: { configured: !!(config as any).discord?.token },
-          whatsapp: { configured: !!(config as any).whatsapp?.enabled },
-          webhook: { configured: !!(config as any).webhook?.enabled, port: (config as any).webhook?.port },
+          discord: { configured: !!config.discord?.token },
+          whatsapp: { configured: !!config.whatsapp?.enabled },
+          webhook: { configured: !!config.webhook?.enabled, port: config.webhook?.port },
         };
         json(res, channels);
+        return;
+      }
+
+      if (path === '/api/computer-use') {
+        const { getConfig } = await import('../config.js');
+        const config = getConfig();
+        json(res, { enabled: !!config.claudeCode.computerUse });
+        return;
+      }
+
+      if (path === '/api/computer-use' && req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const { enabled } = JSON.parse(body);
+        const { getConfig, saveConfig } = await import('../config.js');
+        const config = getConfig();
+        config.claudeCode.computerUse = !!enabled;
+        saveConfig(config);
+        json(res, { enabled: !!enabled, message: 'Restart daemon to apply.' });
         return;
       }
 
@@ -292,7 +327,8 @@ export function startDashboardServer(port = 0): void {
       // 404
       json(res, { error: 'Not found' }, 404);
     } catch (err) {
-      json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
+      console.error('Dashboard error:', err);
+      json(res, { error: 'Internal server error' }, 500);
     }
   });
 

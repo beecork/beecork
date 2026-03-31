@@ -192,6 +192,17 @@ const MIGRATIONS: Migration[] = [
     description: 'Add project_id to tabs',
     up: 'ALTER TABLE tabs ADD COLUMN project_id TEXT DEFAULT NULL',
   },
+  {
+    version: 16,
+    description: 'Add payload_type to cron_jobs + routing pattern index',
+    up: `ALTER TABLE cron_jobs ADD COLUMN payload_type TEXT DEFAULT 'agentTurn';
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_pattern ON routing_preferences(pattern, project_name);`,
+  },
+  {
+    version: 17,
+    description: 'Add index on messages.created_at for date-range cost queries',
+    up: 'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
@@ -220,18 +231,33 @@ export function runMigrations(db: Database.Database): void {
     }
 
     logger.info(`DB migration v${migration.version}: ${migration.description}`);
-    try {
-      db.exec(migration.up);
-      db.prepare('UPDATE schema_version SET version = ?').run(migration.version);
-    } catch (err) {
-      // Column might already exist from a previous partial migration
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('duplicate column name')) {
-        logger.info(`Migration v${migration.version}: columns already exist, skipping`);
-        db.prepare('UPDATE schema_version SET version = ?').run(migration.version);
-      } else {
+
+    // Split multi-statement migrations and apply each safely
+    // (handles partial failures from previous runs where some statements succeeded)
+    const statements = migration.up.split(';').map(s => s.trim()).filter(s => s.length > 0);
+
+    for (const stmt of statements) {
+      try {
+        // For ALTER TABLE ADD COLUMN, check if column already exists first
+        const alterMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
+        if (alterMatch) {
+          const columns = db.pragma(`table_info(${alterMatch[1]})`) as Array<{ name: string }>;
+          if (columns.some(c => c.name === alterMatch[2])) {
+            logger.debug(`Migration v${migration.version}: column ${alterMatch[1]}.${alterMatch[2]} already exists, skipping`);
+            continue;
+          }
+        }
+        db.exec(stmt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('already exists')) {
+          logger.debug(`Migration v${migration.version}: object already exists, skipping statement`);
+          continue;
+        }
         throw err;
       }
     }
+
+    db.prepare('UPDATE schema_version SET version = ?').run(migration.version);
   }
 }
