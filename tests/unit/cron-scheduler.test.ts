@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { intervalToCron } from '../../src/tasks/scheduler.js';
+import { intervalToCron, intervalToMs } from '../../src/tasks/scheduler.js';
 
 describe('intervalToCron', () => {
   it('should convert minutes', () => {
@@ -35,5 +35,39 @@ describe('intervalToCron', () => {
 
   it('should return null for zero interval', () => {
     expect(intervalToCron('0m')).toBeNull();
+  });
+});
+
+describe('intervalToMs', () => {
+  it('should convert minutes to milliseconds', () => {
+    expect(intervalToMs('30m')).toBe(30 * 60 * 1000);
+    expect(intervalToMs('5m')).toBe(5 * 60 * 1000);
+  });
+
+  it('should convert hours to milliseconds', () => {
+    expect(intervalToMs('2h')).toBe(2 * 60 * 60 * 1000);
+  });
+
+  it('should convert combined intervals', () => {
+    expect(intervalToMs('1h30m')).toBe((60 + 30) * 60 * 1000);
+    expect(intervalToMs('2h15m')).toBe((120 + 15) * 60 * 1000);
+  });
+
+  it('should convert weeks', () => {
+    expect(intervalToMs('1w')).toBe(7 * 24 * 60 * 60 * 1000);
+  });
+
+  it('should convert days', () => {
+    expect(intervalToMs('1d')).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('should return null for invalid input', () => {
+    expect(intervalToMs('')).toBeNull();
+    expect(intervalToMs('invalid')).toBeNull();
+    expect(intervalToMs('abc')).toBeNull();
+  });
+
+  it('should return null for zero interval', () => {
+    expect(intervalToMs('0m')).toBeNull();
   });
 });

@@ -50,8 +50,26 @@
     "claude",
     "claude-code",
     "telegram",
+    "whatsapp",
+    "discord",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "ai-agent",
     "automation",
-    "cron"
+    "cron",
+    "cli",
+    "chatbot",
+    "scheduling"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beecork/beecork.git"
+  },
+  "homepage": "https://beecork.com",
+  "bugs": {
+    "url": "https://github.com/beecork/beecork/issues"
+  },
+  "author": "Beecork <hello@beecork.com>",
   "license": "MIT"
 }

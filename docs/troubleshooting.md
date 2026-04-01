@@ -34,9 +34,9 @@ beecork logs
 
 Check for stale PID file:
 ```bash
-cat ~/.beecork/daemon.pid
+cat ~/.beecork/beecork.pid
 # If the PID doesn't match a running process:
-rm ~/.beecork/daemon.pid
+rm ~/.beecork/beecork.pid
 beecork start
 ```
 

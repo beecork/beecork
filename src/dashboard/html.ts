@@ -336,10 +336,10 @@ export function getDashboardHtml(token: string): string {
       return '<div class="tab-item px-3 py-2.5 cursor-pointer' + isActive + '" data-tab-name="' + esc(t.name) + '" role="button" tabindex="0" onclick="selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')" onkeydown="if(event.key===\\'Enter\\')selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')">' +
         '<div class="flex items-center justify-between">' +
           '<div class="flex items-center gap-2 min-w-0">' +
-            '<span class="status-dot tab-status-dot status-' + t.status + '"></span>' +
+            '<span class="status-dot tab-status-dot status-' + esc(t.status) + '"></span>' +
             '<span class="text-sm font-medium text-gray-200 truncate">' + esc(t.name) + '</span>' +
           '</div>' +
-          '<span class="text-xs tab-status-label text-gray-500 shrink-0">' + t.status + '</span>' +
+          '<span class="text-xs tab-status-label text-gray-500 shrink-0">' + esc(t.status) + '</span>' +
         '</div>' +
         '<div class="flex items-center justify-between mt-0.5 pl-5">' +
           '<span class="text-xs text-gray-600">' + t.message_count + ' msgs' + (cost ? ' &middot; ' + cost : '') + '</span>' +
@@ -490,7 +490,7 @@ export function getDashboardHtml(token: string): string {
     }
 
     list.innerHTML = data.memories.map(m => {
-      const scope = m.tab_name ? 'tab:' + m.tab_name : 'global';
+      const scope = m.tab_name ? 'tab:' + esc(m.tab_name) : 'global';
       return '<div class="px-4 py-3 border-b border-bee-700 group hover:bg-bee-750">' +
         '<div class="flex items-center justify-between mb-1">' +
           '<div class="flex items-center gap-2">' +

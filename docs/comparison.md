@@ -8,11 +8,11 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 
 | | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
-| **What it is** | Self-hosted Claude Code daemon with multi-channel messaging | Self-hosted multi-model AI agent with 100+ skills | Remote task delegation via Claude Desktop | Multi-model autonomous task executor | Autonomous AI agent with cloud sandbox |
+| **What it is** | Always-on AI coding agent with multi-channel messaging | Self-hosted multi-model AI agent with 100+ skills | Remote task delegation via Claude Desktop | Multi-model autonomous task executor | Autonomous AI agent with cloud sandbox |
 | **Launch** | 2025 | Nov 2025 | Mar 2026 | Feb 2026 | Mar 2025 |
 | **Open source** | Yes (MIT) | Yes (MIT) | No | No | No |
-| **Self-hosted** | Yes | Yes | No (requires Claude Desktop) | No | No |
-| **Price** | Free + your API keys | Free + your API keys | $20-200/mo (Claude plan) | $200/mo | $0-199/mo (credits) |
+| **Self-hosted** | Yes (free, open source) | Yes | No (requires Claude Desktop) | No | No |
+| **Pricing** | Free + your Claude subscription | Free + your API keys | $20-200/mo (Claude plan) | $200/mo (credits) | $0-199/mo (credits) |
 
 ---
 
@@ -25,17 +25,18 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Telegram | Yes | Yes | No | No | Yes |
 | WhatsApp | Yes | Yes | No | No | Coming soon |
 | Discord | Yes | Yes | No | No | Coming soon |
-| Slack | No | Yes | Via connector | Enterprise only | Coming soon |
-| iMessage | No | Yes (BlueBubbles) | No | No | No |
-| Signal | No | Yes | No | No | No |
+| Slack | Coming soon | Yes | Via connector | Enterprise only | Coming soon |
+| iMessage | Coming soon | Yes (BlueBubbles) | No | No | No |
+| Signal | Coming soon | Yes | No | No | No |
 | Web UI | Dashboard | WebChat | Claude Desktop | Web app | Web app |
-| Mobile app | Via channels | Via channels | Yes (iOS/Android) | Yes | Yes (iOS/Android) |
+| Mobile app | Coming soon | Via channels | Yes (iOS/Android) | Yes | Yes (iOS/Android) |
+| Desktop app | Coming soon | No | Yes (macOS) | No | Yes (macOS) |
 | CLI | Yes | No | No | No | No |
-| MCP server | Yes (35+ tools) | No | Via Cowork | No | No |
+| MCP server | Yes (38 tools) | No | Via Cowork | No | No |
 | Webhook API | Yes | No | No | Agent API | No |
-| **Total channels** | **5** | **20+** | **3** | **4** | **2 (more coming)** |
+| **Total channels** | **5 (more coming)** | **20+** | **3** | **4** | **2 (more coming)** |
 
-**Verdict**: OpenClaw wins on channel breadth by a wide margin. Beecork covers the most important ones. Dispatch and Perplexity are primarily their own apps.
+**Verdict**: OpenClaw wins on channel breadth by a wide margin. Beecork covers the most important channels today with Slack, iMessage, Signal, mobile app, and desktop app on the roadmap. Dispatch and Perplexity are primarily their own apps.
 
 ### Always-On / Background Operation
 
@@ -88,8 +89,9 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Mouse/keyboard control | Yes (via Claude Code) | Yes (browser automation) | Yes (native) | Yes (sandboxed) | Yes ("My Computer") |
 | Local app control | Yes | Limited | Yes | Personal Computer only | Yes (desktop app) |
 | Screen reading | Yes | No | Yes | Sandboxed browser | Yes |
+| Full Claude Computer Use | Paid plans | N/A | Included | N/A | N/A |
 
-**Verdict**: Dispatch and Manus have the most polished computer use. Beecork passes through to Claude Code's computer use capability. Perplexity runs in isolated sandboxes.
+**Verdict**: Dispatch and Manus have the most polished computer use. Beecork supports Claude Computer Use (mouse, keyboard, screen control) via the `beecork computer-use` command. Perplexity runs in isolated sandboxes.
 
 ### Media Generation
 
@@ -102,28 +104,30 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 
 **Verdict**: Beecork has the most comprehensive built-in media generation with 10+ providers. Most competitors require external integrations or don't support it.
 
-### AI Model Support
+### AI Model / CLI Support
 
 | Feature | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
-| Claude | Yes (primary) | Yes | Yes (only) | Yes (one of 19) | Yes (one of several) |
-| GPT/OpenAI | No | Yes | No | Yes | No |
-| Gemini | No | No | No | Yes | No |
-| DeepSeek | No | Yes | No | Yes | No |
-| Other models | No | Yes (any OpenAI-compatible) | No | 19 models total | Fine-tuned Qwen |
+| Claude Code | Yes (primary) | No | N/A | No | No |
+| OpenAI Codex CLI | Coming soon | No | No | No | No |
+| Gemini CLI | Coming soon | No | No | No | No |
+| Any OpenAI-compatible | No | Yes | No | No | No |
+| Multi-model orchestration | No | No | No | Yes (19 models) | Yes |
 
-**Verdict**: OpenClaw and Perplexity win on model flexibility. Beecork is Claude-only by design — it wraps Claude Code, which gives it access to Claude's full tool use, MCP, and computer use capabilities. Perplexity's 19-model orchestration is impressive but expensive.
+**Verdict**: Beecork wraps coding CLI tools (Claude Code today, Codex and Gemini CLI coming soon) — giving you full tool use, MCP, and computer use capabilities from your messaging channels. OpenClaw supports any OpenAI-compatible model. Perplexity orchestrates 19 models but at $200/mo.
 
 ### Pricing & Cost
 
 | | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
-| Software cost | Free | Free | $20-200/mo | $200/mo | $0-199/mo |
-| API costs | Your Anthropic key | Your API keys | Included in plan | Credits (vary) | Credits (expire monthly) |
-| Self-host savings | Yes | Yes | N/A | N/A | N/A |
-| Cost transparency | Full (you see API bills) | Full | Bundled (opaque) | Credit-based (opaque) | Credit-based (opaque) |
+| **Pricing model** | **Subscription (flat monthly)** | BYO API keys | Bundled in Claude plan | Credit-based | Credit-based |
+| **Free tier** | **Yes (self-hosted)** | Yes (self-hosted) | No | No | Yes (limited) |
+| **API keys required?** | **No** | Yes (you manage keys) | No (bundled) | No (bundled) | No (bundled) |
+| **Token/usage costs?** | **No — included in plan** | Yes (you pay per token) | Bundled (opaque) | Credits (opaque) | Credits (expire monthly) |
+| **Cost predictability** | **Fixed monthly price** | Unpredictable (varies by usage) | Fixed monthly | Credit burn varies | Credit burn varies |
+| **Cost transparency** | **Full — you know exactly what you pay** | You see API bills but costs vary | Opaque (bundled) | Opaque (credit-based) | Opaque (credit-based) |
 
-**Verdict**: Beecork and OpenClaw are the cheapest — you pay only for the AI APIs you use, with full visibility. Perplexity is the most expensive at $200/mo. Manus and Perplexity use credit systems where costs per task are unpredictable.
+**Beecork's pricing advantage**: Simple subscription plans with no API keys to manage, no token costs, no surprise bills. You pick a plan, you know what you pay. OpenClaw is free software but you pay unpredictable API costs. Perplexity and Manus use credit systems where a single complex task can burn hundreds of credits with no upfront estimate.
 
 ### Developer Experience
 
@@ -140,12 +144,12 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 ## Where Each Tool Excels
 
 ### Choose Beecork if you want:
-- **Full control** — self-hosted, open source, your API keys
+- **Predictable pricing** — flat subscription, no API keys, no token costs, no surprise bills
 - **Claude Code integration** — MCP tools, computer use, project-aware routing
-- **Multi-channel messaging** — Telegram + WhatsApp + Discord from one daemon
+- **Multi-channel messaging** — Telegram + WhatsApp + Discord from one daemon, with Slack and more coming
 - **Media generation** — built-in image, video, music, voice
 - **Watchers** — automated monitoring with condition-based actions
-- **Cost transparency** — you see exactly what you spend on API calls
+- **Free and open source** — self-hosted, you own your data
 
 ### Choose OpenClaw if you want:
 - **Maximum channel support** — 20+ messaging platforms including Signal, iMessage, Teams
@@ -175,17 +179,16 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 
 ## Honest Weaknesses
 
-We believe in transparency. Here's where Beecork falls short:
+We believe in transparency. Here's where Beecork falls short today:
 
 | Limitation | Details |
 |---|---|
-| **Claude-only** | No support for GPT, Gemini, or other models. If Anthropic's API is down, Beecork is down. |
-| **Fewer channels than OpenClaw** | 5 channels vs 20+. No Slack, Signal, iMessage, or Teams support. |
-| **No mobile app** | You interact through messaging apps or the web dashboard — there's no dedicated Beecork app. |
-| **Requires technical setup** | You need Node.js, npm, and API keys. Not as simple as signing up for a cloud service. |
-| **Single-model routing** | No multi-model orchestration like Perplexity's 19-model approach. |
+| **Fewer channels than OpenClaw** | 5 channels vs 20+. Slack, Signal, iMessage coming soon but not yet available. |
+| **No mobile/desktop app yet** | Coming soon. Today you interact via messaging apps, CLI, or web dashboard. |
+| **No multi-model orchestration** | Uses coding CLIs (Claude Code today, Codex and Gemini CLI coming). No 19-model approach like Perplexity. |
+| **Requires some technical setup** | Needs Node.js and npm. The setup wizard handles most configuration. |
 | **Basic dashboard** | The web UI is functional but minimal compared to Manus or Perplexity's polished interfaces. |
-| **Small community** | New project without OpenClaw's 247K-star ecosystem. |
+| **Smaller community** | Growing project without OpenClaw's 247K-star ecosystem yet. |
 
 ---
 
@@ -194,13 +197,20 @@ We believe in transparency. Here's where Beecork falls short:
 | Feature | Beecork | OpenClaw | Dispatch | Perplexity | Manus |
 |---|:---:|:---:|:---:|:---:|:---:|
 | Open source | Yes | Yes | No | No | No |
-| Self-hosted | Yes | Yes | No | No | No |
+| Self-hosted option | Yes | Yes | No | No | No |
+| Cloud option | Yes | Yes | Yes | Yes | Yes |
 | Free tier | Yes | Yes | No | No | Yes (limited) |
+| **No API keys needed** | **Yes** | No | Yes | Yes | Yes |
+| **No token costs** | **Yes** | No | Bundled | Credits | Credits |
+| **Predictable pricing** | **Yes** | No | Yes | No | No |
 | Telegram | Yes | Yes | No | No | Yes |
 | WhatsApp | Yes | Yes | No | No | Soon |
 | Discord | Yes | Yes | No | No | Soon |
-| Slack | No | Yes | Yes | Enterprise | Soon |
-| 20+ channels | No | Yes | No | No | No |
+| Slack | Soon | Yes | Yes | Enterprise | Soon |
+| iMessage / Signal | Soon | Yes | No | No | No |
+| 20+ channels | Soon | Yes | No | No | No |
+| Mobile app | Soon | No | Yes | Yes | Yes |
+| Desktop app | Soon | No | Yes | No | Yes |
 | Always-on daemon | Yes | Yes | Mac required | Cloud | Cloud |
 | Multi-tab/agent | Yes | Yes | No | Yes | Yes |
 | Project routing | Yes | No | No | No | No |
@@ -214,9 +224,11 @@ We believe in transparency. Here's where Beecork falls short:
 | Music generation | Yes | No | No | No | No |
 | Voice (STT/TTS) | Yes | No | No | No | No |
 | CLI tools | Yes | Limited | No | No | No |
-| MCP integration | Yes | No | Yes | No | No |
-| Multi-model | No | Yes | No | Yes (19) | Yes |
-| Mobile app | No | No | Yes | Yes | Yes |
+| MCP integration | Yes (38 tools) | No | Yes | No | No |
+| Claude Code | Yes | No | N/A | No | No |
+| Codex CLI | Soon | No | No | No | No |
+| Gemini CLI | Soon | No | No | No | No |
+| Multi-model | Soon | Yes | No | Yes (19) | Yes |
 | Web dashboard | Yes | Yes | Yes | Yes | Yes |
 | Webhook API | Yes | No | No | Yes | No |
 | Plugin system | Yes | Yes (100+) | Yes (8000+) | No | No |

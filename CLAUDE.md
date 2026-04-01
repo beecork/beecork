@@ -26,7 +26,7 @@ Publish after any code changes that affect runtime behavior (bug fixes, new feat
 
 ## Project Structure
 
-- `src/` — TypeScript source (34 files, ~4,400 lines)
+- `src/` — TypeScript source (~102 files)
 - `dist/` — Compiled JS (built via `npm run build`)
 - `tests/unit/` — Vitest unit tests
 - `templates/CLAUDE.md` — Template injected into `~/.claude/CLAUDE.md` during setup

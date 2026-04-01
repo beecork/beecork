@@ -31,7 +31,8 @@ export function getTimeline(options?: { date?: string; tabName?: string; limit?:
   }
   if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
   query += ' ORDER BY created_at DESC';
-  query += ` LIMIT ${options?.limit || 50}`;
+  query += ' LIMIT ?';
+  params.push(options?.limit || 50);
 
   return (db.prepare(query).all(...params) as ActivityRow[]).map(rowToEvent);
 }

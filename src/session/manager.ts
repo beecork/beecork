@@ -182,7 +182,7 @@ export class TabManager {
     }
 
     const pending = db.prepare(
-      'SELECT * FROM pending_messages WHERE processed = 0 ORDER BY created_at ASC'
+      'SELECT * FROM pending_messages WHERE processed = 0 ORDER BY created_at ASC LIMIT 50'
     ).all() as Array<{ id: number; tab_name: string; message: string; type?: string }>;
 
     if (pending.length === 0) return;
