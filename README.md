@@ -98,9 +98,10 @@ Run `beecork --help` for the full list of commands.
 | Setup | Best For |
 |-------|----------|
 | **Local machine** | Tasks that need local files, Xcode projects, local apps |
-| **VPS ($5/mo)** | Always-on — web scraping, monitoring, API calls, server management |
+| **VPS** | Always-on — web scraping, monitoring, API calls, server management. Requires a full OS environment (Node.js, Claude Code CLI, system service). |
+| **[Beecork Cloud](https://beecork.com/cloud)** | Zero setup — a full cloud computer with everything pre-configured. No terminal, no installation. |
 
-Same install command, same config. Only difference is where it runs.
+Local install is `npm install -g beecork`. VPS requires the same plus a properly configured server environment. Beecork Cloud handles all of that for you.
 
 ## Architecture
 

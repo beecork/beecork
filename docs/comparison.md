@@ -9,7 +9,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
 | **What it is** | Always-on AI coding agent with multi-channel messaging | Self-hosted multi-model AI agent with 100+ skills | Remote task delegation via Claude Desktop | Multi-model autonomous task executor | Autonomous AI agent with cloud sandbox |
-| **Launch** | 2025 | Nov 2025 | Mar 2026 | Feb 2026 | Mar 2025 |
+| **Launch** | Mar 2026 | Nov 2025 | Mar 2026 | Feb 2026 | Mar 2025 |
 | **Open source** | Yes (MIT) | Yes (MIT) | No | No | No |
 | **Self-hosted** | Yes (free, open source) | Yes | No (requires Claude Desktop) | No | No |
 | **Pricing** | Free + your Claude subscription | Free + your API keys | $20-200/mo (Claude plan) | $200/mo (credits) | $0-199/mo (credits) |
@@ -109,25 +109,25 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Feature | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
 | Claude Code | Yes (primary) | No | N/A | No | No |
-| OpenAI Codex CLI | Coming soon | No | No | No | No |
-| Gemini CLI | Coming soon | No | No | No | No |
 | Any OpenAI-compatible | No | Yes | No | No | No |
 | Multi-model orchestration | No | No | No | Yes (19 models) | Yes |
 
-**Verdict**: Beecork wraps coding CLI tools (Claude Code today, Codex and Gemini CLI coming soon) — giving you full tool use, MCP, and computer use capabilities from your messaging channels. OpenClaw supports any OpenAI-compatible model. Perplexity orchestrates 19 models but at $200/mo.
+**Verdict**: Beecork wraps Claude Code — giving you full tool use, MCP, and computer use capabilities from your messaging channels. The architecture is designed to support additional coding CLIs (Codex, Gemini CLI) as they mature — see [Roadmap](#roadmap). OpenClaw supports any OpenAI-compatible model. Perplexity orchestrates 19 models but at $200/mo.
 
 ### Pricing & Cost
 
 | | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
-| **Pricing model** | **Subscription (flat monthly)** | BYO API keys | Bundled in Claude plan | Credit-based | Credit-based |
+| **Pricing model** | **Your Claude subscription** | BYO API keys | Bundled in Claude plan | Credit-based | Credit-based |
 | **Free tier** | **Yes (self-hosted)** | Yes (self-hosted) | No | No | Yes (limited) |
-| **API keys required?** | **No** | Yes (you manage keys) | No (bundled) | No (bundled) | No (bundled) |
-| **Token/usage costs?** | **No — included in plan** | Yes (you pay per token) | Bundled (opaque) | Credits (opaque) | Credits (expire monthly) |
+| **API keys required?** | **No\*** | Yes (you manage keys) | No (bundled) | No (bundled) | No (bundled) |
+| **Token/usage costs?** | **No — runs on your Claude plan** | Yes (you pay per token) | Bundled (opaque) | Credits (opaque) | Credits (expire monthly) |
 | **Cost predictability** | **Fixed monthly price** | Unpredictable (varies by usage) | Fixed monthly | Credit burn varies | Credit burn varies |
 | **Cost transparency** | **Full — you know exactly what you pay** | You see API bills but costs vary | Opaque (bundled) | Opaque (credit-based) | Opaque (credit-based) |
 
-**Beecork's pricing advantage**: Simple subscription plans with no API keys to manage, no token costs, no surprise bills. You pick a plan, you know what you pay. OpenClaw is free software but you pay unpredictable API costs. Perplexity and Manus use credit systems where a single complex task can burn hundreds of credits with no upfront estimate.
+\* Core features (messaging, tabs, scheduling, memory, MCP tools) work entirely on your Claude Pro/Max subscription — no API keys, no token costs. Optional add-ons like media generation and voice use third-party API keys.
+
+**Beecork's pricing advantage**: Beecork runs on your existing Claude subscription instead of building a separate API layer. No API keys to manage for core functionality, no token costs, no surprise bills. OpenClaw is free software but you pay unpredictable API costs. Perplexity and Manus use credit systems where a single complex task can burn hundreds of credits with no upfront estimate.
 
 ### Developer Experience
 
@@ -185,7 +185,7 @@ We believe in transparency. Here's where Beecork falls short today:
 |---|---|
 | **Fewer channels than OpenClaw** | 5 channels vs 20+. Slack, Signal, iMessage coming soon but not yet available. |
 | **No mobile/desktop app yet** | Coming soon. Today you interact via messaging apps, CLI, or web dashboard. |
-| **No multi-model orchestration** | Uses coding CLIs (Claude Code today, Codex and Gemini CLI coming). No 19-model approach like Perplexity. |
+| **Single CLI today** | Built on Claude Code. Support for additional coding CLIs (Codex, Gemini CLI) is on the roadmap as they mature. No 19-model approach like Perplexity. |
 | **Requires some technical setup** | Needs Node.js and npm. The setup wizard handles most configuration. |
 | **Basic dashboard** | The web UI is functional but minimal compared to Manus or Perplexity's polished interfaces. |
 | **Smaller community** | Growing project without OpenClaw's 247K-star ecosystem yet. |
@@ -226,12 +226,20 @@ We believe in transparency. Here's where Beecork falls short today:
 | CLI tools | Yes | Limited | No | No | No |
 | MCP integration | Yes (38 tools) | No | Yes | No | No |
 | Claude Code | Yes | No | N/A | No | No |
-| Codex CLI | Soon | No | No | No | No |
-| Gemini CLI | Soon | No | No | No | No |
-| Multi-model | Soon | Yes | No | Yes (19) | Yes |
+| Multi-model | Roadmap | Yes | No | Yes (19) | Yes |
 | Web dashboard | Yes | Yes | Yes | Yes | Yes |
 | Webhook API | Yes | No | No | Yes | No |
 | Plugin system | Yes | Yes (100+) | Yes (8000+) | No | No |
+
+---
+
+## Roadmap
+
+Planned additions (no timeline commitment):
+
+- **Additional coding CLIs** — Codex CLI, Gemini CLI, and other agentic CLIs as they mature. The architecture wraps CLI subprocesses, making this a natural extension.
+- **More channels** — Slack, Signal, iMessage, mobile app, desktop app
+- **Multi-model orchestration** — Route to the best CLI/model for each task
 
 ---
 

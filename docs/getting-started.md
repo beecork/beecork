@@ -58,7 +58,7 @@ Open your Telegram bot and send any message. Beecork will pass it to Claude Code
 | `beecork logs` | View daemon logs |
 | `beecork doctor` | Run diagnostics |
 | `beecork dashboard` | Open web dashboard |
-| `beecork cron list` | View scheduled tasks |
+| `beecork tasks list` | View scheduled tasks |
 | `beecork mcp list` | View MCP servers |
 
 ## Organizing Work with Tabs
