@@ -46,23 +46,6 @@ export function registerThisMachine(projectPaths: string[]): Machine {
   return { id, name, host: null, sshUser: null, projectPaths, isPrimary: false, lastSeenAt: new Date().toISOString() };
 }
 
-/** Add a remote machine */
-export function addRemoteMachine(name: string, host: string, sshUser: string, projectPaths: string[]): Machine {
-  const db = getDb();
-  const id = uuidv4();
-  db.prepare(
-    'INSERT INTO machines (id, name, host, ssh_user, project_paths) VALUES (?, ?, ?, ?, ?)'
-  ).run(id, name, host, sshUser, JSON.stringify(projectPaths));
-  return { id, name, host, sshUser, projectPaths, isPrimary: false, lastSeenAt: new Date().toISOString() };
-}
-
-/** Remove a machine */
-export function removeMachine(nameOrId: string): boolean {
-  const db = getDb();
-  const result = db.prepare('DELETE FROM machines WHERE id = ? OR name = ?').run(nameOrId, nameOrId);
-  return result.changes > 0;
-}
-
 /** List all machines */
 export function listMachines(): Machine[] {
   const db = getDb();
@@ -78,13 +61,3 @@ export function listMachines(): Machine[] {
   }));
 }
 
-/** Find which machine has a project path */
-export function findMachineForPath(projectPath: string): Machine | null {
-  const machines = listMachines();
-  for (const machine of machines) {
-    for (const p of machine.projectPaths) {
-      if (projectPath.startsWith(p)) return machine;
-    }
-  }
-  return null;
-}

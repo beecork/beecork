@@ -198,7 +198,7 @@ async function main(): Promise<void> {
         import('./observability/analytics.js').then(({ checkAnomalies }) => {
           const anomaly = checkAnomalies();
           if (anomaly) broadcastNotify(anomaly);
-        }).catch(() => {});
+        }).catch(err => logger.debug('Anomaly check failed:', err));
       }
     } catch (err) {
       logger.error('Poll error:', err);

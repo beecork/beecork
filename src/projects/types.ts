@@ -18,7 +18,4 @@ export interface RouteDecision {
 
 export interface RoutingContext {
   userId?: string;
-  lastProjectName?: string;
-  lastTabName?: string;
-  recentMessages?: Array<{ role: string; content: string }>;
 }

@@ -65,22 +65,3 @@ export function hasAdmin(): boolean {
   return row.c > 0;
 }
 
-/** Get user's identities across channels */
-export function getUserIdentities(userId: string): Array<{ channelId: string; peerId: string }> {
-  const db = getDb();
-  return db.prepare('SELECT channel_id as channelId, peer_id as peerId FROM identities WHERE user_id = ?').all(userId) as Array<{ channelId: string; peerId: string }>;
-}
-
-/** Auto-create admin user from config's allowed IDs (migration helper) */
-export function ensureAdminFromConfig(channelId: string, peerIds: Array<string | number>): void {
-  const db = getDb();
-  for (const peerId of peerIds) {
-    const existing = db.prepare('SELECT user_id FROM identities WHERE channel_id = ? AND peer_id = ?').get(channelId, String(peerId));
-    if (!existing) {
-      // Auto-register as admin
-      const id = uuidv4();
-      db.prepare('INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)').run(id, `admin-${peerId}`, 'admin');
-      db.prepare('INSERT OR IGNORE INTO identities (user_id, channel_id, peer_id) VALUES (?, ?, ?)').run(id, channelId, String(peerId));
-    }
-  }
-}

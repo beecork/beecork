@@ -114,6 +114,7 @@ export interface BeecorkConfig {
   groups?: GroupConfig;
   notifications?: NotificationConfig[];
   mediaGenerators?: MediaGeneratorConfig[];
+  communityChannels?: string[];
   deployment: 'local' | 'vps';
 }
 
@@ -218,15 +219,6 @@ export interface Task {
   lastRunAt: string | null;
   nextRunAt: string | null;
 }
-
-/** @deprecated Use TaskScheduleType */
-export type CronScheduleType = TaskScheduleType;
-
-/** @deprecated Use TaskPayloadType */
-export type CronPayloadType = TaskPayloadType;
-
-/** @deprecated Use Task */
-export type CronJob = Task;
 
 // ─── Memory ───
 

@@ -4,7 +4,8 @@ import type { Watcher } from './types.js';
 export async function evaluateWatcher(watcher: Watcher): Promise<{ triggered: boolean; output: string }> {
   try {
     const { stdout } = await execAsync(watcher.checkCommand, { timeout: 30000 });
-    const output = stdout.trim();
+    const trimmed = stdout.trim();
+    const output = trimmed.length > 10240 ? trimmed.slice(0, 10240) + ' [truncated]' : trimmed;
 
     const triggered = evaluateCondition(output, watcher.condition);
     return { triggered, output };

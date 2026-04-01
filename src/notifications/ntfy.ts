@@ -1,4 +1,3 @@
-import { logger } from '../util/logger.js';
 import type { NotificationProvider } from './types.js';
 
 export class NtfyProvider implements NotificationProvider {

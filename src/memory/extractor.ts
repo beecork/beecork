@@ -96,9 +96,16 @@ function parseFactsFromText(text: string): string[] {
   return [];
 }
 
+let cachedClient: any = null;
+let cachedApiKey = '';
+
 async function runExtractionViaApi(apiKey: string, model: string, prompt: string): Promise<string[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  if (!cachedClient || cachedApiKey !== apiKey) {
+    cachedClient = new Anthropic({ apiKey });
+    cachedApiKey = apiKey;
+  }
+  const client = cachedClient;
 
   try {
     const response = await client.messages.create({
@@ -108,7 +115,7 @@ async function runExtractionViaApi(apiKey: string, model: string, prompt: string
       messages: [{ role: 'user', content: prompt }],
     }, { timeout: 15000 });
 
-    const text = response.content.find(b => b.type === 'text')?.text ?? '[]';
+    const text = response.content.find((b: any) => b.type === 'text')?.text ?? '[]';
     return parseFactsFromText(text);
   } catch (err) {
     logger.warn('API-based memory extraction failed, falling back to subprocess:', err);

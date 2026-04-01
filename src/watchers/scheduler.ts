@@ -67,15 +67,15 @@ export class WatcherScheduler {
 
       if (result.triggered) {
         this.store.markTriggered(watcher.id);
-        fs.appendFileSync(logFile, `[${new Date().toISOString()}] TRIGGERED: ${result.output.slice(0, 500)}\n`);
+        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] TRIGGERED: ${result.output.slice(0, 500)}\n`);
         await this.executeAction(watcher, result.output);
       } else {
-        fs.appendFileSync(logFile, `[${new Date().toISOString()}] OK: ${result.output.slice(0, 200)}\n`);
+        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] OK: ${result.output.slice(0, 200)}\n`);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error(`Watcher "${watcher.name}" check failed:`, err);
-      fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
+      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
     }
   }
 

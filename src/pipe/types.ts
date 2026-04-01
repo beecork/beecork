@@ -25,17 +25,6 @@ export interface GoalEvaluation {
   followUp: string | null;
 }
 
-export interface PermissionEntry {
-  id: number;
-  toolName: string;
-  toolArgsPattern: string;
-  decision: 'allow' | 'deny';
-  confidence: number;
-  context: string | null;
-  tabName: string | null;
-  createdAt: string;
-}
-
 export interface KnowledgeEntry {
   content: string;
   category: 'project' | 'preference' | 'decision' | 'fact';

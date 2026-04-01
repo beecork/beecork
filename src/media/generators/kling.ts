@@ -1,5 +1,5 @@
 import { saveMedia } from '../store.js';
-import { logger } from '../../util/logger.js';
+import { pollForCompletion } from './poll-util.js';
 import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
 
 export class KlingGenerator implements MediaGenerator {
@@ -34,22 +34,19 @@ export class KlingGenerator implements MediaGenerator {
     const { data } = await response.json() as { data: { task_id: string } };
 
     // Poll for completion
-    for (let i = 0; i < 60; i++) {
-      await new Promise(r => setTimeout(r, 5000));
-      const statusResp = await fetch(`https://api.klingai.com/v1/videos/text2video/${data.task_id}`, {
-        headers: { 'Authorization': `Bearer ${this.apiKey}` },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!statusResp.ok) continue;
-      const status = await statusResp.json() as { data: { task_status: string; task_result?: { videos: Array<{ url: string }> } } };
-      if (status.data.task_status === 'succeed' && status.data.task_result?.videos[0]) {
-        const videoResp = await fetch(status.data.task_result.videos[0].url, { signal: AbortSignal.timeout(60000) });
-        const buffer = Buffer.from(await videoResp.arrayBuffer());
-        const filePath = saveMedia(buffer, 'mp4', 'generated-video.mp4');
-        return { filePath, mimeType: 'video/mp4' };
-      }
-      if (status.data.task_status === 'failed') throw new Error('Kling video generation failed');
-    }
-    throw new Error('Kling video generation timed out');
+    const headers = { 'Authorization': `Bearer ${this.apiKey}` };
+    const videoUrl = await pollForCompletion({
+      statusUrl: `https://api.klingai.com/v1/videos/text2video/${data.task_id}`,
+      headers,
+      isComplete: (data) => data.data.task_status === 'succeed' && !!data.data.task_result?.videos[0],
+      isFailed: (data) => data.data.task_status === 'failed' ? 'generation failed' : null,
+      getResultUrl: (data) => data.data.task_result.videos[0].url,
+      label: 'Kling',
+    });
+
+    const videoResp = await fetch(videoUrl, { signal: AbortSignal.timeout(60000) });
+    const buffer = Buffer.from(await videoResp.arrayBuffer());
+    const filePath = saveMedia(buffer, 'mp4', 'generated-video.mp4');
+    return { filePath, mimeType: 'video/mp4' };
   }
 }

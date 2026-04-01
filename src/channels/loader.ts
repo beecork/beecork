@@ -13,6 +13,10 @@ const CHANNEL_PREFIX = 'beecork-channel-';
 export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channel[]> {
   const channels: Channel[] = [];
 
+  // Require explicit opt-in via config to prevent supply-chain attacks
+  const allowlist = ctx.config.communityChannels;
+  if (!allowlist || allowlist.length === 0) return channels;
+
   // Look in global and local node_modules
   const searchPaths = [
     path.join(process.cwd(), 'node_modules'),
@@ -35,6 +39,7 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
       const dirs = fs.readdirSync(searchPath);
       for (const dir of dirs) {
         if (!dir.startsWith(CHANNEL_PREFIX)) continue;
+        if (!allowlist.includes(dir)) continue;
 
         const channelName = dir.slice(CHANNEL_PREFIX.length);
         const pkgPath = path.join(searchPath, dir);

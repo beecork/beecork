@@ -64,12 +64,3 @@ export function uninstallWindowsService(): void {
   }
 }
 
-/** Check if the Windows service is installed */
-export function isWindowsServiceInstalled(): boolean {
-  try {
-    execSync(`schtasks /Query /TN "${TASK_NAME}" 2>nul`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}

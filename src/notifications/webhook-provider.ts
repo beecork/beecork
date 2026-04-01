@@ -1,4 +1,3 @@
-import { logger } from '../util/logger.js';
 import type { NotificationProvider } from './types.js';
 
 export class WebhookNotificationProvider implements NotificationProvider {

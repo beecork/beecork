@@ -213,12 +213,30 @@ export function getDashboardHtml(token: string): string {
   let memorySearchTimer = null;
   let tabsData = [];
 
+  // Toast notifications
+  function showToast(msg, isError) {
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-4 right-4 px-4 py-2 rounded-lg text-sm z-50 ' + (isError ? 'bg-red-900/90 text-red-200' : 'bg-green-900/90 text-green-200');
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+  }
+
   // API helpers
   async function api(path, opts) {
     const headers = { 'Authorization': 'Bearer ' + API_TOKEN };
     if (opts && opts.body) headers['Content-Type'] = 'application/json';
-    const res = await fetch(path, { headers, ...opts });
-    return res.json();
+    try {
+      const res = await fetch(path, { headers, ...opts });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || 'Request failed');
+      }
+      return res.json();
+    } catch (err) {
+      showToast('API error: ' + err.message, true);
+      throw err;
+    }
   }
 
   function timeAgo(iso) {
@@ -234,12 +252,12 @@ export function getDashboardHtml(token: string): string {
 
   function esc(s) {
     if (!s) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   // --- SSE ---
   function connectSSE() {
-    const es = new EventSource('/api/events?token=' + API_TOKEN);
+    const es = new EventSource('/api/events');
     es.onopen = () => {
       document.getElementById('sse-dot').className = 'sse-indicator sse-connected';
       document.getElementById('sse-label').textContent = 'live';
@@ -313,7 +331,7 @@ export function getDashboardHtml(token: string): string {
 
   // --- Tabs ---
   async function loadTabs() {
-    tabsData = await api('/api/tabs');
+    try { tabsData = await api('/api/tabs'); } catch { return; }
     const list = document.getElementById('tab-list');
     document.getElementById('tab-count').textContent = tabsData.length.toString();
 
@@ -325,7 +343,7 @@ export function getDashboardHtml(token: string): string {
     list.innerHTML = tabsData.map(t => {
       const isActive = selectedTab === t.name ? ' active' : '';
       const cost = t.total_cost > 0 ? '$' + t.total_cost.toFixed(4) : '';
-      return '<div class="tab-item px-3 py-2.5 cursor-pointer' + isActive + '" data-tab-name="' + esc(t.name) + '" onclick="selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')">' +
+      return '<div class="tab-item px-3 py-2.5 cursor-pointer' + isActive + '" data-tab-name="' + esc(t.name) + '" role="button" tabindex="0" onclick="selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')" onkeydown="if(event.key===\\'Enter\\')selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')">' +
         '<div class="flex items-center justify-between">' +
           '<div class="flex items-center gap-2 min-w-0">' +
             '<span class="status-dot tab-status-dot status-' + t.status + '"></span>' +
@@ -357,7 +375,7 @@ export function getDashboardHtml(token: string): string {
       document.getElementById('msg-tab-status').textContent = tab.status;
     }
 
-    const data = await api('/api/tabs/' + encodeURIComponent(name) + '/messages?limit=100');
+    let data; try { data = await api('/api/tabs/' + encodeURIComponent(name) + '/messages?limit=100'); } catch { return; }
     const list = document.getElementById('msg-list');
     document.getElementById('msg-count').textContent = data.total + ' messages';
 
@@ -425,7 +443,7 @@ export function getDashboardHtml(token: string): string {
   async function deleteSelectedTab() {
     if (!selectedTab) return;
     if (!confirm('Delete tab "' + selectedTab + '" and all its messages?')) return;
-    await api('/api/tabs/' + encodeURIComponent(selectedTab), { method: 'DELETE' });
+    try { await api('/api/tabs/' + encodeURIComponent(selectedTab), { method: 'DELETE' }); } catch { return; }
     selectedTab = null;
     document.getElementById('msg-title').textContent = 'Select a tab';
     document.getElementById('msg-tab-status').textContent = '';
@@ -464,7 +482,7 @@ export function getDashboardHtml(token: string): string {
     if (!name) return;
     const workingDir = document.getElementById('modal-tab-dir').value.trim() || undefined;
     const systemPrompt = document.getElementById('modal-tab-prompt').value.trim() || undefined;
-    await api('/api/tabs', { method: 'POST', body: JSON.stringify({ name, workingDir, systemPrompt }) });
+    try { await api('/api/tabs', { method: 'POST', body: JSON.stringify({ name, workingDir, systemPrompt }) }); } catch { return; }
     closeModal();
     loadTabs();
   }
@@ -472,7 +490,7 @@ export function getDashboardHtml(token: string): string {
   // --- Memories ---
   async function loadMemories(query) {
     const q = query || document.getElementById('memory-search').value || '';
-    const data = await api('/api/memories?limit=100&q=' + encodeURIComponent(q));
+    let data; try { data = await api('/api/memories?limit=100&q=' + encodeURIComponent(q)); } catch { return; }
     const list = document.getElementById('memory-list');
     document.getElementById('memory-count').textContent = data.total + ' total';
 
@@ -491,7 +509,7 @@ export function getDashboardHtml(token: string): string {
           '</div>' +
           '<div class="flex items-center gap-2">' +
             '<span class="text-xs text-gray-700">' + timeAgo(m.created_at) + '</span>' +
-            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" onclick="deleteMemory(' + m.id + ')">x</button>' +
+            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" aria-label="Delete memory" onclick="deleteMemory(' + m.id + ')">x</button>' +
           '</div>' +
         '</div>' +
         '<p class="text-sm text-gray-300 leading-relaxed">' + esc(m.content) + '</p>' +
@@ -505,7 +523,7 @@ export function getDashboardHtml(token: string): string {
   }
 
   async function deleteMemory(id) {
-    await api('/api/memories/' + id, { method: 'DELETE' });
+    try { await api('/api/memories/' + id, { method: 'DELETE' }); } catch { return; }
     loadMemories();
   }
 
@@ -533,14 +551,14 @@ export function getDashboardHtml(token: string): string {
     const content = document.getElementById('modal-mem-content').value.trim();
     if (!content) return;
     const tabName = document.getElementById('modal-mem-tab').value.trim() || undefined;
-    await api('/api/memories', { method: 'POST', body: JSON.stringify({ content, tabName }) });
+    try { await api('/api/memories', { method: 'POST', body: JSON.stringify({ content, tabName }) }); } catch { return; }
     closeModal();
     loadMemories();
   }
 
   // --- Tasks (formerly Crons) ---
   async function loadCrons() {
-    const crons = await api('/api/tasks');
+    let crons; try { crons = await api('/api/tasks'); } catch { return; }
     const list = document.getElementById('cron-list');
 
     if (crons.length === 0) {
@@ -558,7 +576,7 @@ export function getDashboardHtml(token: string): string {
           '</div>' +
           '<div class="flex items-center gap-2">' +
             '<span class="text-xs font-mono text-gray-400">' + c.schedule_type + ': ' + esc(c.schedule) + '</span>' +
-            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" onclick="deleteCron(\\'' + esc(c.id) + '\\')">x</button>' +
+            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" aria-label="Delete task" onclick="deleteCron(\\'' + esc(c.id) + '\\')">x</button>' +
           '</div>' +
         '</div>' +
         '<div class="flex items-center justify-between mt-1 pl-5">' +
@@ -571,7 +589,7 @@ export function getDashboardHtml(token: string): string {
 
   async function deleteCron(id) {
     if (!confirm('Delete this task?')) return;
-    await api('/api/tasks/' + encodeURIComponent(id), { method: 'DELETE' });
+    try { await api('/api/tasks/' + encodeURIComponent(id), { method: 'DELETE' }); } catch { return; }
     loadCrons();
   }
 
@@ -610,14 +628,14 @@ export function getDashboardHtml(token: string): string {
     const tabName = document.getElementById('modal-cron-tab').value.trim() || 'default';
     const message = document.getElementById('modal-cron-msg').value.trim();
     if (!name || !schedule || !message) return;
-    await api('/api/tasks', { method: 'POST', body: JSON.stringify({ name, scheduleType, schedule, tabName, message }) });
+    try { await api('/api/tasks', { method: 'POST', body: JSON.stringify({ name, scheduleType, schedule, tabName, message }) }); } catch { return; }
     closeModal();
     loadCrons();
   }
 
   // --- Watchers ---
   async function loadWatchers() {
-    const watchers = await api('/api/watchers');
+    let watchers; try { watchers = await api('/api/watchers'); } catch { return; }
     const list = document.getElementById('watcher-list');
 
     if (watchers.length === 0) {
@@ -636,7 +654,7 @@ export function getDashboardHtml(token: string): string {
           '<div class="flex items-center gap-2">' +
             '<span class="text-xs font-mono text-gray-400">' + esc(w.schedule) + '</span>' +
             '<span class="text-xs text-gray-500">action: ' + esc(w.action) + '</span>' +
-            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" onclick="deleteWatcher(\\'' + esc(w.id) + '\\')">x</button>' +
+            '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" aria-label="Delete watcher" onclick="deleteWatcher(\\'' + esc(w.id) + '\\')">x</button>' +
           '</div>' +
         '</div>' +
         '<div class="flex items-center justify-between mt-1 pl-5">' +
@@ -649,13 +667,13 @@ export function getDashboardHtml(token: string): string {
 
   async function deleteWatcher(id) {
     if (!confirm('Delete this watcher?')) return;
-    await api('/api/watchers/' + encodeURIComponent(id), { method: 'DELETE' });
+    try { await api('/api/watchers/' + encodeURIComponent(id), { method: 'DELETE' }); } catch { return; }
     loadWatchers();
   }
 
   // --- Costs ---
   async function loadCosts() {
-    const costs = await api('/api/costs');
+    let costs; try { costs = await api('/api/costs'); } catch { return; }
     const chart = document.getElementById('cost-chart');
 
     if (costs.length === 0) {

@@ -136,11 +136,11 @@ export class TaskScheduler {
       try {
         await this.handleSystemEvent(job);
         this.store.update(job.id, { lastRunAt: new Date().toISOString() });
-        fs.appendFileSync(logFile, `[${new Date().toISOString()}] SYSTEM: ${job.message}\n`);
+        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] SYSTEM: ${job.message}\n`);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         logger.error(`System event "${job.name}" failed:`, err);
-        fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
+        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
       }
       return;
     }
@@ -154,7 +154,7 @@ export class TaskScheduler {
       const firstLine = result.text.split('\n')[0]?.slice(0, 200) || '(no output)';
 
       // Log result
-      fs.appendFileSync(logFile, `[${new Date().toISOString()}] SUCCESS: ${firstLine}\n`);
+      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] SUCCESS: ${firstLine}\n`);
 
       // Notify (separate try/catch -- notification failure shouldn't be reported as job failure)
       try {
@@ -171,7 +171,7 @@ export class TaskScheduler {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error(`Task "${job.name}" failed:`, err);
-      fs.appendFileSync(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
+      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
 
       try {
         await this.onNotify?.(`[${job.name}] Failed -- ${errMsg}`);
@@ -195,9 +195,6 @@ export class TaskScheduler {
     }
   }
 }
-
-/** @deprecated Use TaskScheduler */
-export { TaskScheduler as CronScheduler };
 
 /** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to milliseconds */
 export function intervalToMs(interval: string): number | null {

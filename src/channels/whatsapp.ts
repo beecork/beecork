@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
+import { chunkText } from '../util/text.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
-import { ProgressTracker } from '../util/progress.js';
+import { processInboundMessage } from './pipeline.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 import { initVoiceProviders } from '../voice/index.js';
 import type { STTProvider } from '../voice/stt.js';
@@ -169,26 +169,10 @@ export class WhatsAppChannel implements Channel {
           .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
           .map(r => r.value!);
 
-        // Warm up STT connection on first voice message
-        if (this.sttProvider && !this.sttWarmedUp) {
-          this.sttProvider.warmup?.();
-          this.sttWarmedUp = true;
-        }
-
         // Transcribe voice messages if STT is configured
         if (this.sttProvider) {
-          for (const att of media) {
-            if (att.type === 'voice' && att.filePath) {
-              const voiceStartTime = Date.now();
-              try {
-                const transcription = await this.sttProvider.transcribe(att.filePath);
-                att.caption = `[Transcribed from voice message]: ${transcription}`;
-                logger.info(`[whatsapp] Voice transcription: ${Date.now() - voiceStartTime}ms`);
-              } catch (err) {
-                logger.warn('Voice transcription failed, passing file path instead:', err);
-              }
-            }
-          }
+          const { transcribeVoiceMessages } = await import('../voice/index.js');
+          this.sttWarmedUp = await transcribeVoiceMessages(media, this.sttProvider!, 'whatsapp', this.sttWarmedUp);
         }
 
         if (!text && media.length === 0) return;
@@ -211,53 +195,34 @@ export class WhatsAppChannel implements Channel {
             }
           }
 
-          const { tabName, prompt: rawPrompt } = parseTabMessage(text);
-          if (!rawPrompt && media.length === 0) return;
-
-          // Build prompt with media references
-          const prompt = buildMediaPrompt(media, rawPrompt);
-
-          // Smart project routing (shared across all channels)
-          const { resolveProjectRoute } = await import('./command-handler.js');
-          const route = await resolveProjectRoute(rawPrompt, tabName, text, waUserId);
-          if (route.confirmationMessage) {
-            await sock.sendMessage(sender, { text: route.confirmationMessage });
-            return;
-          }
-          let effectiveTabName = route.effectiveTabName;
-          let projectPath = route.projectPath;
-
           await sock.sendPresenceUpdate('composing', sender).catch(() => {});
 
-          // Progress updates for long tasks (every 30 seconds)
-          const progressTracker = new ProgressTracker(effectiveTabName, (msg) => {
-            sock.sendMessage(sender, { text: msg }).catch(() => {});
+          // Shared message pipeline
+          const pipelineResult = await processInboundMessage({
+            text,
+            media,
+            channelId: 'whatsapp',
+            tabManager: this.ctx.tabManager,
+            voiceReplyMode: this.ctx.config.voice?.replyMode,
+            ttsProvider: this.ttsProvider,
+            userId: waUserId,
+            sendProgress: (msg) => {
+              sock.sendMessage(sender, { text: msg }).catch(() => {});
+            },
           });
-
-          const result = await this.ctx.tabManager.sendMessage(effectiveTabName, prompt, {
-            onToolUse: (name, input) => progressTracker.record(name, input),
-            projectPath,
-          });
-          progressTracker.stop();
-          const responseText = result.error
-            ? `Error: ${result.text}`
-            : result.text || '(empty response)';
 
           await sock.sendPresenceUpdate('paused', sender).catch(() => {});
 
-          // TTS: send voice reply if configured
-          const voiceReplyMode = this.ctx.config.voice?.replyMode;
-          if (this.ttsProvider && (voiceReplyMode === 'voice' || voiceReplyMode === 'both')) {
-            try {
-              const audioPath = await this.ttsProvider.synthesize(responseText);
-              await sock.sendMessage(sender, { audio: { url: audioPath }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
-              if (voiceReplyMode === 'voice') return; // Don't send text
-            } catch (err) {
-              logger.warn('TTS failed, sending text reply:', err);
-            }
+          // Empty result means no prompt and no media
+          if (!pipelineResult.responseText) return;
+
+          // Send voice reply if TTS generated audio
+          if (pipelineResult.audioPath) {
+            await sock.sendMessage(sender, { audio: { url: pipelineResult.audioPath }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            if (pipelineResult.voiceOnly) return;
           }
 
-          await this.sendResponse(sender, responseText, effectiveTabName);
+          await this.sendResponse(sender, pipelineResult.responseText, pipelineResult.tabName);
         } catch (err) {
           logger.error('WhatsApp message handler error:', err);
           await sock.sendMessage(sender, { text: 'Something went wrong processing your message. Check daemon logs for details.' }).catch(() => {});

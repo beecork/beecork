@@ -1,12 +1,12 @@
 import { logger } from '../util/logger.js';
-import { chunkText, parseTabMessage, buildMediaPrompt } from '../util/text.js';
+import { chunkText, parseTabMessage } from '../util/text.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { initVoiceProviders } from '../voice/index.js';
 import type { STTProvider } from '../voice/stt.js';
 import type { TTSProvider } from '../voice/tts.js';
-import { ProgressTracker } from '../util/progress.js';
+import { processInboundMessage } from './pipeline.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 export class DiscordChannel implements Channel {
@@ -121,9 +121,8 @@ export class DiscordChannel implements Channel {
         // Show typing
         await message.channel.sendTyping().catch(() => {});
 
-        // Parse tab name
-        const { tabName, prompt } = parseTabMessage(text || '');
-        if (!prompt && media.length === 0) return;
+        // Parse tab name (needed for command handling check)
+        const { tabName } = parseTabMessage(text || '');
 
         // Shared command handler
         if (text.startsWith('/')) {
@@ -140,30 +139,15 @@ export class DiscordChannel implements Channel {
           }
         }
 
-        // Build prompt with media
-        const fullPrompt = buildMediaPrompt(media, prompt || '');
-
-        // Use thread name as tab if in a thread (sanitize to valid tab name)
-        let effectiveTab = tabName;
-        let projectPath: string | undefined;
-
+        // Discord-specific: use thread name as tab if in a thread
+        let overrideTabName: string | undefined;
         if (message.channel.isThread?.()) {
           const threadName = (message.channel.name || '')
             .replace(/[^a-zA-Z0-9-]/g, '-')
             .replace(/^-+|-+$/g, '')
             .slice(0, 32);
-          if (threadName) effectiveTab = threadName;
+          if (threadName && tabName === 'default') overrideTabName = threadName;
         }
-
-        // Smart project routing (shared across all channels)
-        const { resolveProjectRoute } = await import('./command-handler.js');
-        const route = await resolveProjectRoute(prompt || '', effectiveTab, text, message.author.id);
-        if (route.confirmationMessage) {
-          await message.reply(route.confirmationMessage);
-          return;
-        }
-        effectiveTab = route.effectiveTabName;
-        projectPath = route.projectPath;
 
         // Typing indicator refresh
         const typingInterval = setInterval(() => {
@@ -171,36 +155,33 @@ export class DiscordChannel implements Channel {
         }, 8000); // Discord typing lasts 10s
 
         try {
-          // Progress updates for long tasks (every 30 seconds)
-          const progressTracker = new ProgressTracker(effectiveTab, (msg) => {
-            message.channel.send(msg).catch(() => {});
+          // Shared message pipeline
+          const pipelineResult = await processInboundMessage({
+            text: text || '',
+            media,
+            channelId: 'discord',
+            tabManager: this.ctx.tabManager,
+            voiceReplyMode: this.ctx.config.voice?.replyMode,
+            ttsProvider: this.ttsProvider,
+            userId: message.author.id,
+            sendProgress: (msg) => {
+              message.channel.send(msg).catch(() => {});
+            },
+            overrideTabName,
           });
-
-          const result = await this.ctx.tabManager.sendMessage(effectiveTab, fullPrompt, {
-            onToolUse: (name, input) => progressTracker.record(name, input),
-            projectPath,
-          });
-          progressTracker.stop();
           clearInterval(typingInterval);
 
-          const responseText = result.error
-            ? `Error: ${result.text}`
-            : result.text || '(empty response)';
+          // Empty result means no prompt and no media
+          if (!pipelineResult.responseText) return;
 
-          // Voice reply if configured
-          const voiceMode = this.ctx.config.voice?.replyMode;
-          if (this.ttsProvider && (voiceMode === 'voice' || voiceMode === 'both')) {
-            try {
-              const audioPath = await this.ttsProvider.synthesize(responseText);
-              await message.reply({ files: [audioPath] });
-              if (voiceMode === 'voice') return;
-            } catch (err) {
-              logger.warn('Discord TTS failed:', err);
-            }
+          // Voice reply if TTS generated audio
+          if (pipelineResult.audioPath) {
+            await message.reply({ files: [pipelineResult.audioPath] });
+            if (pipelineResult.voiceOnly) return;
           }
 
           // Send text response
-          await this.sendResponse(message, responseText, effectiveTab);
+          await this.sendResponse(message, pipelineResult.responseText, pipelineResult.tabName);
         } catch (err) {
           clearInterval(typingInterval);
           throw err;

@@ -1,6 +1,5 @@
 export type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from './types.js';
 export { createMediaGenerator } from './factory.js';
-export { loadCommunityGenerators } from './loader.js';
 export { saveMedia, cleanupMedia, ensureMediaDir, getMediaDir, isOversized } from './store.js';
 
 import { createMediaGenerator } from './factory.js';

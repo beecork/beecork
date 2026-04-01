@@ -103,6 +103,3 @@ export class TaskStore {
     }
   }
 }
-
-/** @deprecated Use TaskStore */
-export { TaskStore as CronStore };

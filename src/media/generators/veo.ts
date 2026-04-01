@@ -1,5 +1,4 @@
 import { saveMedia } from '../store.js';
-import { logger } from '../../util/logger.js';
 import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
 
 export class VeoGenerator implements MediaGenerator {

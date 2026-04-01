@@ -9,6 +9,7 @@ import { getDashboardHtml } from './html.js';
 import { VERSION } from '../version.js';
 import { getDaemonPid } from '../cli/helpers.js';
 import { validateTabName } from '../config.js';
+import { createTabRecord } from '../db/index.js';
 
 let cachedDashDb: Database.Database | null = null;
 function getDashDb(): Database.Database {
@@ -19,13 +20,17 @@ function getDashDb(): Database.Database {
   return cachedDashDb;
 }
 
-function withWriteDb<T>(fn: (db: Database.Database) => T): T {
-  const db = new Database(getDbPath());
-  try {
-    return fn(db);
-  } finally {
-    db.close();
+let cachedWriteDb: Database.Database | null = null;
+function getWriteDb(): Database.Database {
+  if (!cachedWriteDb) {
+    cachedWriteDb = new Database(getDbPath());
+    cachedWriteDb.pragma('journal_mode = WAL');
   }
+  return cachedWriteDb;
+}
+
+function withWriteDb<T>(fn: (db: Database.Database) => T): T {
+  return fn(getWriteDb());
 }
 
 function json(res: http.ServerResponse, data: unknown, status = 200): void {
@@ -60,7 +65,11 @@ export function startDashboardServer(port = 0): void {
         res.end('Forbidden');
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html', 'Referrer-Policy': 'no-referrer' });
+      res.writeHead(200, {
+        'Content-Type': 'text/html',
+        'Referrer-Policy': 'no-referrer',
+        'Set-Cookie': `beecork_dash=${authToken}; HttpOnly; SameSite=Strict; Path=/`,
+      });
       res.end(getDashboardHtml(authToken));
       return;
     }
@@ -69,7 +78,8 @@ export function startDashboardServer(port = 0): void {
     if (path.startsWith('/api/')) {
       const authHeader = req.headers.authorization;
       const queryToken = url.searchParams.get('token');
-      const providedToken = authHeader?.replace('Bearer ', '') || queryToken;
+      const cookieToken = req.headers.cookie?.split(';').map(c => c.trim()).find(c => c.startsWith('beecork_dash='))?.split('=')[1];
+      const providedToken = authHeader?.replace('Bearer ', '') || queryToken || cookieToken;
       if (providedToken !== authToken) {
         json(res, { error: 'Unauthorized' }, 401);
         return;
@@ -113,7 +123,8 @@ export function startDashboardServer(port = 0): void {
         if (!message) { json(res, { error: 'Missing message' }, 400); return; }
 
         const tabName = decodeURIComponent(path.split('/')[3]);
-        if (!validateTabName(tabName)) { json(res, { error: 'Invalid tab name' }, 400); return; }
+        const tabErr = validateTabName(tabName);
+        if (tabErr) { json(res, { error: tabErr }, 400); return; }
         withWriteDb(db => db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'user'));
         json(res, { success: true, tab: tabName });
         return;
@@ -127,12 +138,10 @@ export function startDashboardServer(port = 0): void {
         try { parsedTab = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { name, workingDir, systemPrompt } = parsedTab;
         if (!name) { json(res, { error: 'Missing tab name' }, 400); return; }
-        if (!validateTabName(name)) { json(res, { error: 'Invalid tab name' }, 400); return; }
+        const nameErr = validateTabName(name);
+        if (nameErr) { json(res, { error: nameErr }, 400); return; }
 
-        const id = crypto.randomUUID();
-        withWriteDb(db => db.prepare('INSERT OR IGNORE INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)').run(
-          id, name, crypto.randomUUID(), 'idle', workingDir || process.env.HOME || '/', systemPrompt || null
-        ));
+        withWriteDb(db => createTabRecord(db, { name, workingDir, systemPrompt }));
         json(res, { success: true, name });
         return;
       }
@@ -160,7 +169,8 @@ export function startDashboardServer(port = 0): void {
         const { name, scheduleType, schedule, tabName, message } = parsedCron;
         if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
         const effectiveTab = tabName || 'default';
-        if (!validateTabName(effectiveTab)) { json(res, { error: 'Invalid tab name' }, 400); return; }
+        const cronTabErr = validateTabName(effectiveTab);
+        if (cronTabErr) { json(res, { error: cronTabErr }, 400); return; }
 
         const id = crypto.randomUUID();
         withWriteDb(db => db.prepare('INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)').run(
@@ -440,7 +450,9 @@ export function startDashboardServer(port = 0): void {
         const packId = path.split('/')[3];
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        const { apiKey } = JSON.parse(body);
+        let parsedCap: any;
+        try { parsedCap = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
+        const { apiKey } = parsedCap;
         const { enablePack } = await import('../capabilities/index.js');
         try {
           enablePack(packId, apiKey);

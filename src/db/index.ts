@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { getDbPath, ensureBeecorkDirs } from '../util/paths.js';
 import { runMigrations } from './migrations.js';
@@ -76,6 +77,25 @@ export function getDb(): Database.Database {
   }, 30 * 60 * 1000); // every 30 minutes
 
   return db;
+}
+
+export interface CreateTabOptions {
+  name: string;
+  workingDir?: string;
+  systemPrompt?: string | null;
+}
+
+/** Shared tab record creation — used by dashboard, MCP, and TabManager */
+export function createTabRecord(db: Database.Database, opts: CreateTabOptions): { id: string; name: string; created: boolean } {
+  const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(opts.name) as { name: string } | undefined;
+  if (existing) return { id: '', name: opts.name, created: false };
+
+  const id = crypto.randomUUID();
+  const dir = opts.workingDir || process.env.HOME || '/';
+  db.prepare(
+    'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, opts.name, crypto.randomUUID(), 'idle', dir, opts.systemPrompt || null);
+  return { id, name: opts.name, created: true };
 }
 
 export function closeDb(): void {

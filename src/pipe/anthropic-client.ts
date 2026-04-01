@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../util/logger.js';
+import { retryWithBackoff } from '../util/retry.js';
 import type { RouteDecision, GoalEvaluation, KnowledgeEntry, Project } from './types.js';
 
 export class PipeAnthropicClient {
@@ -39,6 +40,7 @@ If unsure which project, set confidence below 0.5 and needsConfirmation to true.
     try {
       return JSON.parse(response);
     } catch {
+      logger.warn('Failed to parse routing response:', response);
       return { tabName: 'default', projectPath: null, confidence: 0.3, reason: 'Could not parse routing', needsConfirmation: true };
     }
   }
@@ -63,6 +65,7 @@ If the response is a simple answer to a question (not a task), status is "done".
     try {
       return JSON.parse(result);
     } catch {
+      logger.warn('Failed to parse routing response:', result);
       return { status: 'done', reason: 'Could not evaluate', followUp: null };
     }
   }
@@ -100,12 +103,16 @@ Return [] if nothing new is worth remembering. Max 5 entries.`,
   private async complete(systemPrompt: string, userMessage: string, model: 'haiku' | 'sonnet'): Promise<string> {
     const modelId = model === 'haiku' ? this.routingModel : this.complexModel;
     try {
-      const response = await this.client.messages.create({
-        model: modelId,
-        max_tokens: 500,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
-      }, { timeout: 30000 });
+      const response = await retryWithBackoff(
+        () => this.client.messages.create({
+          model: modelId,
+          max_tokens: 500,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }, { timeout: 30000 }),
+        [1000, 5000, 15000],
+        `Pipe API call (${model})`,
+      );
 
       const textBlock = response.content.find(b => b.type === 'text');
       return textBlock?.text ?? '';

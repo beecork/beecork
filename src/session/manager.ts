@@ -338,7 +338,7 @@ export class TabManager {
           };
 
           // Handle resume failure (session expired/not found) — retry with fresh session + context
-          if (result.error && shouldResume && result.text.includes('session')) {
+          if (result.error && shouldResume && result.text.match(/session (not found|expired|invalid)/i)) {
             logger.info(`[${tab.name}] Session resume failed, retrying with context injection`);
             const recentMsgs = db.prepare(
               'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'

@@ -58,11 +58,6 @@ export function createDelegation(sourceTab: string, targetTab: string, message: 
   return delegation;
 }
 
-/** Mark a delegation as running */
-export function markDelegationRunning(id: string): void {
-  getDb().prepare("UPDATE delegations SET status = 'running' WHERE id = ?").run(id);
-}
-
 /** Complete a delegation with a result */
 export function completeDelegation(targetTab: string, result: string): Delegation | null {
   const db = getDb();

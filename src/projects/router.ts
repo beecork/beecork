@@ -203,7 +203,7 @@ function checkLearnedRouting(message: string): { projectName: string; confidence
 
   // Fetch all preferences in a single query and match in JS
   const allPrefs = db.prepare(
-    'SELECT pattern, project_name, confidence, hit_count FROM routing_preferences WHERE hit_count >= 3 ORDER BY hit_count DESC'
+    'SELECT pattern, project_name, confidence, hit_count FROM routing_preferences WHERE hit_count >= 3 ORDER BY hit_count DESC LIMIT 200'
   ).all() as Array<{ pattern: string; project_name: string; confidence: number; hit_count: number }>;
 
   for (const pref of allPrefs) {

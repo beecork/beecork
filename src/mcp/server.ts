@@ -64,6 +64,7 @@ function signalWatcherReload(): void {
 
 import { VERSION } from '../version.js';
 import { getConfig, validateTabName } from '../config.js';
+import { createTabRecord } from '../db/index.js';
 
 async function handleMediaGeneration(db: Database.Database, mediaType: string, args: Record<string, unknown>): Promise<ReturnType<typeof ok>> {
   const { prompt, style, duration, provider } = args as { prompt: string; style?: string; duration?: number; provider?: string };
@@ -624,17 +625,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (tabCreateError) {
           return fail(tabCreateError);
         }
-        const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(tabName);
-        if (existing) {
-          return ok(`Tab "${tabName}" already exists.`);
-        }
         // Apply template if specified
         const config = getConfig();
         const template = templateName ? config.tabTemplates?.[templateName] : undefined;
         if (templateName && !template) {
           return fail(`Template "${templateName}" not found. Available: ${Object.keys(config.tabTemplates || {}).join(', ') || 'none'}`);
         }
-        const id = uuidv4();
         // Explicit args take precedence over template values
         let dir = workingDir || template?.workingDir || os.homedir();
         dir = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir;
@@ -643,9 +639,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return fail(`Working directory does not exist or is not a directory: ${dir}`);
         }
         const tabSystemPrompt = systemPrompt || template?.systemPrompt || null;
-        db.prepare(
-          'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(id, tabName, uuidv4(), 'idle', dir, tabSystemPrompt);
+        const result = createTabRecord(db, { name: tabName, workingDir: dir, systemPrompt: tabSystemPrompt });
+        if (!result.created) {
+          return ok(`Tab "${tabName}" already exists.`);
+        }
         const parts = [`Created tab: "${tabName}" (working dir: ${dir})`];
         if (tabSystemPrompt) parts.push(`System prompt: "${tabSystemPrompt.slice(0, 100)}${tabSystemPrompt.length > 100 ? '...' : ''}"`);
         if (templateName) parts.push(`Template: ${templateName}`);
