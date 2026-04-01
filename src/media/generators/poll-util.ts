@@ -1,17 +1,17 @@
 import { logger } from '../../util/logger.js';
 
-interface PollOptions {
+interface PollOptions<T = unknown> {
   statusUrl: string;
   headers: Record<string, string>;
-  isComplete: (data: any) => boolean;
-  isFailed: (data: any) => string | null; // returns error message or null
-  getResultUrl: (data: any) => string;
+  isComplete: (data: T) => boolean;
+  isFailed: (data: T) => string | null; // returns error message or null
+  getResultUrl: (data: T) => string;
   interval?: number;
   maxAttempts?: number;
   label?: string;
 }
 
-export async function pollForCompletion(opts: PollOptions): Promise<string> {
+export async function pollForCompletion<T = unknown>(opts: PollOptions<T>): Promise<string> {
   const { statusUrl, headers, isComplete, isFailed, getResultUrl, interval = 5000, maxAttempts = 60, label = 'API' } = opts;
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, interval));
@@ -23,7 +23,7 @@ export async function pollForCompletion(opts: PollOptions): Promise<string> {
       }
       continue;
     }
-    const data = await resp.json();
+    const data = await resp.json() as T;
     const failMsg = isFailed(data);
     if (failMsg) throw new Error(`${label} generation failed: ${failMsg}`);
     if (isComplete(data)) return getResultUrl(data);

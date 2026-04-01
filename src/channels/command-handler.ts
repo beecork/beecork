@@ -5,6 +5,22 @@
 import { timeAgo } from '../util/text.js';
 import { validateTabName } from '../config.js';
 import type { TabManager } from '../session/manager.js';
+import type { Project } from '../projects/types.js';
+
+interface WatcherRow {
+  name: string;
+  enabled: number;
+  schedule: string;
+  trigger_count: number;
+}
+
+interface TaskRow {
+  name: string;
+  enabled: number;
+  schedule_type: string;
+  schedule: string;
+  tab_name: string;
+}
 
 export interface CommandContext {
   userId: string;
@@ -117,9 +133,9 @@ export async function handleSharedCommand(
   if (text === '/watches' || text.startsWith('/watches@')) {
     const { getDb } = await import('../db/index.js');
     const db = getDb();
-    const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<Record<string, unknown>>;
+    const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as WatcherRow[];
     if (watchers.length === 0) return { handled: true, response: 'No watchers configured.' };
-    const watchList = watchers.map((w: any) => {
+    const watchList = watchers.map((w) => {
       const status = w.enabled ? 'active' : 'disabled';
       return `[${status}] ${w.name} -- ${w.schedule} (triggers: ${w.trigger_count})`;
     }).join('\n');
@@ -130,9 +146,9 @@ export async function handleSharedCommand(
   if (text === '/tasks' || text.startsWith('/tasks@')) {
     const { getDb } = await import('../db/index.js');
     const db = getDb();
-    const tasks = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as Array<Record<string, unknown>>;
+    const tasks = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as TaskRow[];
     if (tasks.length === 0) return { handled: true, response: 'No tasks scheduled.' };
-    const taskList = tasks.map((t: any) => {
+    const taskList = tasks.map((t) => {
       const status = t.enabled ? 'enabled' : 'disabled';
       return `[${status}] ${t.name} (${t.schedule_type}: ${t.schedule}) -> tab:${t.tab_name}`;
     }).join('\n');
@@ -180,13 +196,13 @@ export async function handleSharedCommand(
     const { listProjects } = await import('../projects/index.js');
     const projects = listProjects();
     if (projects.length === 0) return { handled: true, response: 'No projects found. Create one with /newproject <name>' };
-    const userProjects = projects.filter((p: any) => p.type === 'user-project');
-    const categories = projects.filter((p: any) => p.type === 'category');
+    const userProjects = projects.filter((p): p is Project => p.type === 'user-project');
+    const categories = projects.filter((p): p is Project => p.type === 'category');
     let msg = '📦 Projects:\n';
-    if (userProjects.length > 0) msg += userProjects.map((p: any) => `  • ${p.name} — ${p.path}`).join('\n');
+    if (userProjects.length > 0) msg += userProjects.map((p) => `  • ${p.name} — ${p.path}`).join('\n');
     if (categories.length > 0) {
       msg += '\n\n📁 Categories:\n';
-      msg += categories.map((p: any) => `  • ${p.name}`).join('\n');
+      msg += categories.map((p) => `  • ${p.name}`).join('\n');
     }
     return { handled: true, response: msg };
   }
@@ -257,8 +273,8 @@ export async function resolveProjectRoute(
     const decision = routeMessage(rawPrompt, { userId });
 
     if (decision.needsConfirmation) {
-      const projects = listProjects().filter((p: any) => p.type === 'user-project');
-      const options = projects.map((p: any, i: number) => `${i + 1}) ${p.name}`).join('\n');
+      const projects = listProjects().filter((p): p is Project => p.type === 'user-project');
+      const options = projects.map((p, i: number) => `${i + 1}) ${p.name}`).join('\n');
       return {
         effectiveTabName: tabName,
         confirmationMessage: `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`,

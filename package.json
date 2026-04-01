@@ -15,6 +15,7 @@
     "dev:daemon": "tsx src/daemon.ts",
     "test": "vitest",
     "lint": "eslint src/",
+    "build:css": "tailwindcss --content src/dashboard/html.ts --minify",
     "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
@@ -29,13 +30,17 @@
     "uuid": "^11.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "^4.2.2",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.0",
     "@types/node-telegram-bot-api": "^0.64.0",
     "@types/uuid": "^10.0.0",
+    "eslint": "^10.1.0",
+    "tailwindcss": "^4.2.2",
     "tsx": "^4.0.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.58.0",
     "vitest": "^3.0.0"
   },
   "files": [

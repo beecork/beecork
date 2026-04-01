@@ -11,6 +11,17 @@ import { getDaemonPid } from '../cli/helpers.js';
 import { validateTabName } from '../config.js';
 import { createTabRecord } from '../db/index.js';
 
+interface TabStatusRow { name: string; status: string; last_activity_at: string; }
+
+interface SendMessageBody { message: string; }
+interface CreateTabBody { name: string; workingDir?: string; systemPrompt?: string; }
+interface CreateTaskBody { name: string; scheduleType?: string; schedule: string; tabName?: string; message: string; }
+interface CreateMemoryBody { content: string; tabName?: string; }
+interface ComputerUseBody { enabled: boolean; }
+interface EnableCapBody { apiKey?: string; }
+
+interface MediaGeneratorConfig { provider: string; model?: string; apiKey?: string; }
+
 let cachedDashDb: Database.Database | null = null;
 function getDashDb(): Database.Database {
   if (!cachedDashDb) {
@@ -101,8 +112,8 @@ export function startDashboardServer(port = 0): void {
         const interval = setInterval(() => {
           try {
             const db = getDashDb();
-            const tabs = db.prepare('SELECT name, status, last_activity_at FROM tabs ORDER BY last_activity_at DESC').all();
-            const activeCount = tabs.filter((t: any) => t.status === 'running').length;
+            const tabs = db.prepare('SELECT name, status, last_activity_at FROM tabs ORDER BY last_activity_at DESC').all() as TabStatusRow[];
+            const activeCount = tabs.filter((t) => t.status === 'running').length;
             res.write(`data: ${JSON.stringify({ type: 'update', tabs, activeTabs: activeCount })}\n\n`);
           } catch {}
         }, 2000);
@@ -117,7 +128,7 @@ export function startDashboardServer(port = 0): void {
       if (path.match(/^\/api\/tabs\/[^/]+\/send$/) && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsed: any;
+        let parsed: SendMessageBody;
         try { parsed = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { message } = parsed;
         if (!message) { json(res, { error: 'Missing message' }, 400); return; }
@@ -134,7 +145,7 @@ export function startDashboardServer(port = 0): void {
       if (path === '/api/tabs' && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsedTab: any;
+        let parsedTab: CreateTabBody;
         try { parsedTab = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { name, workingDir, systemPrompt } = parsedTab;
         if (!name) { json(res, { error: 'Missing tab name' }, 400); return; }
@@ -164,7 +175,7 @@ export function startDashboardServer(port = 0): void {
       if ((path === '/api/tasks' || path === '/api/crons') && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsedCron: any;
+        let parsedCron: CreateTaskBody;
         try { parsedCron = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { name, scheduleType, schedule, tabName, message } = parsedCron;
         if (!name || !schedule || !message) { json(res, { error: 'Missing required fields' }, 400); return; }
@@ -207,7 +218,7 @@ export function startDashboardServer(port = 0): void {
       if (path === '/api/memories' && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsedMemory: any;
+        let parsedMemory: CreateMemoryBody;
         try { parsedMemory = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { content, tabName } = parsedMemory;
         if (!content) { json(res, { error: 'Missing content' }, 400); return; }
@@ -228,8 +239,8 @@ export function startDashboardServer(port = 0): void {
       if (path === '/api/media/config') {
         const { getConfig } = await import('../config.js');
         const config = getConfig();
-        const generators = config.mediaGenerators || [];
-        const info = generators.map((g: any) => ({
+        const generators: MediaGeneratorConfig[] = config.mediaGenerators || [];
+        const info = generators.map((g) => ({
           provider: g.provider,
           model: g.model,
           configured: !!g.apiKey,
@@ -254,7 +265,7 @@ export function startDashboardServer(port = 0): void {
       if (path === '/api/computer-use' && req.method === 'POST') {
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsedCU: any;
+        let parsedCU: ComputerUseBody;
         try { parsedCU = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { enabled } = parsedCU;
         const { getConfig, saveConfig } = await import('../config.js');
@@ -426,8 +437,8 @@ export function startDashboardServer(port = 0): void {
         try {
           const { stdout } = await execAsync(cmd, { timeout: 120000 });
           json(res, { success: true, package: pkgName, output: stdout.trim() });
-        } catch (err: any) {
-          json(res, { error: err.message }, 500);
+        } catch (err) {
+          json(res, { error: err instanceof Error ? err.message : String(err) }, 500);
         }
         return;
       }
@@ -450,15 +461,15 @@ export function startDashboardServer(port = 0): void {
         const packId = path.split('/')[3];
         let body = '';
         for await (const chunk of req) { body += chunk; if (body.length > 1_000_000) { json(res, { error: 'Payload too large' }, 413); return; } }
-        let parsedCap: any;
+        let parsedCap: EnableCapBody;
         try { parsedCap = JSON.parse(body); } catch { json(res, { error: 'Invalid JSON' }, 400); return; }
         const { apiKey } = parsedCap;
         const { enablePack } = await import('../capabilities/index.js');
         try {
           enablePack(packId, apiKey);
           json(res, { success: true, message: 'Restart daemon to activate.' });
-        } catch (err: any) {
-          json(res, { error: err.message }, 400);
+        } catch (err) {
+          json(res, { error: err instanceof Error ? err.message : String(err) }, 400);
         }
         return;
       }

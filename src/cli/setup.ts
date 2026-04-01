@@ -377,8 +377,8 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
         try {
           enablePack(cap.packId, cap.apiKey);
           console.log(`✓ ${cap.packId} enabled`);
-        } catch (err: any) {
-          console.log(`⚠ Failed to enable ${cap.packId}: ${err.message}`);
+        } catch (err) {
+          console.log(`⚠ Failed to enable ${cap.packId}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }

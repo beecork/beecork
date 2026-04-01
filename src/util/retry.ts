@@ -20,5 +20,5 @@ export async function retryWithBackoff<T>(
     }
   }
 
-  throw lastError!;
+  throw lastError ?? new Error(`${label} failed after ${delays.length + 1} attempts`);
 }

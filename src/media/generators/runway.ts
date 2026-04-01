@@ -2,6 +2,11 @@ import { saveMedia } from '../store.js';
 import { pollForCompletion } from './poll-util.js';
 import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
 
+interface RunwayStatusResponse {
+  status: string;
+  output?: string[];
+}
+
 export class RunwayGenerator implements MediaGenerator {
   readonly id = 'runway';
   readonly name = 'Runway Gen-3';
@@ -37,12 +42,12 @@ export class RunwayGenerator implements MediaGenerator {
 
     // Poll for completion (max 5 minutes)
     const headers = { 'Authorization': `Bearer ${this.apiKey}`, 'X-Runway-Version': '2024-11-06' };
-    const videoUrl = await pollForCompletion({
+    const videoUrl = await pollForCompletion<RunwayStatusResponse>({
       statusUrl: `https://api.runwayml.com/v1/tasks/${taskId}`,
       headers,
       isComplete: (data) => data.status === 'SUCCEEDED' && !!data.output?.[0],
       isFailed: (data) => data.status === 'FAILED' ? 'generation failed' : null,
-      getResultUrl: (data) => data.output[0],
+      getResultUrl: (data) => data.output![0],
       label: 'Runway',
     });
 

@@ -2,6 +2,15 @@ import { saveMedia } from '../store.js';
 import { pollForCompletion } from './poll-util.js';
 import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
 
+interface KlingStatusResponse {
+  data: {
+    task_status: string;
+    task_result?: {
+      videos: Array<{ url: string }>;
+    };
+  };
+}
+
 export class KlingGenerator implements MediaGenerator {
   readonly id = 'kling';
   readonly name = 'Kling AI';
@@ -35,12 +44,12 @@ export class KlingGenerator implements MediaGenerator {
 
     // Poll for completion
     const headers = { 'Authorization': `Bearer ${this.apiKey}` };
-    const videoUrl = await pollForCompletion({
+    const videoUrl = await pollForCompletion<KlingStatusResponse>({
       statusUrl: `https://api.klingai.com/v1/videos/text2video/${data.task_id}`,
       headers,
-      isComplete: (data) => data.data.task_status === 'succeed' && !!data.data.task_result?.videos[0],
-      isFailed: (data) => data.data.task_status === 'failed' ? 'generation failed' : null,
-      getResultUrl: (data) => data.data.task_result.videos[0].url,
+      isComplete: (d) => d.data.task_status === 'succeed' && !!d.data.task_result?.videos[0],
+      isFailed: (d) => d.data.task_status === 'failed' ? 'generation failed' : null,
+      getResultUrl: (d) => d.data.task_result!.videos[0].url,
       label: 'Kling',
     });
 

@@ -39,8 +39,8 @@ function getDb(): Database.Database {
 process.on('exit', () => { cachedDb?.close(); });
 
 // Cached media generators (lazy singleton, like cachedDb)
-let cachedGenerators: any[] | null = null;
-async function getGenerators(): Promise<any[]> {
+let cachedGenerators: import('../media/types.js').MediaGenerator[] | null = null;
+async function getGenerators(): Promise<import('../media/types.js').MediaGenerator[]> {
   if (!cachedGenerators) {
     const config = getConfig();
     const { initMediaGenerators } = await import('../media/index.js');
@@ -84,8 +84,8 @@ async function handleMediaGeneration(db: Database.Database, mediaType: string, a
       'default', JSON.stringify({ type: 'media', filePath: result.filePath, caption: prompt.slice(0, 200) }), 'media'
     );
     return ok(`Generated ${mediaType}: ${result.filePath}`);
-  } catch (err: any) {
-    return fail(`${mediaType} generation failed: ${err.message}`);
+  } catch (err) {
+    return fail(`${mediaType} generation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -841,8 +841,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Queue the message for the target tab
           db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, message, 'delegation');
           return ok(`Delegated to tab "${tabName}". Result will be sent back to "${delegation.returnToTab}" when complete.\n\nDelegation ID: ${delegation.id}`);
-        } catch (err: any) {
-          return fail(`Delegation failed: ${err.message}`);
+        } catch (err) {
+          return fail(`Delegation failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
