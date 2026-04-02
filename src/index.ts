@@ -203,13 +203,14 @@ program
   .description('Set up WhatsApp — enter phone number, then scan QR code to pair')
   .action(async () => {
     const readline = await import('node:readline');
+    const fs = await import('node:fs');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
 
     console.log('\nWhatsApp Setup\n');
     console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
-    console.log('  After setup, run "beecork start" and the QR code will appear');
-    console.log('  in your terminal. Scan it with your phone to pair.\n');
+    console.log('  After entering your phone number, a QR code will appear.');
+    console.log('  Scan it with your phone to pair.\n');
 
     const number = await ask('Your WhatsApp phone number (e.g., 14155551234)');
     if (!number) { console.log('No number provided. Cancelled.'); rl.close(); return; }
@@ -217,18 +218,53 @@ program
     const { getConfig, saveConfig } = await import('./config.js');
     const { getBeecorkHome } = await import('./util/paths.js');
     const config = getConfig();
+    const sessionPath = `${getBeecorkHome()}/whatsapp-session`;
     config.whatsapp = {
       enabled: true,
       mode: 'baileys',
-      sessionPath: `${getBeecorkHome()}/whatsapp-session`,
+      sessionPath,
       allowedNumbers: [number],
     };
     saveConfig(config);
-    console.log('\n✓ WhatsApp configured.');
-    console.log('  Next: run "beecork start" — the QR code will appear in your terminal.');
-    console.log('  Scan it with your phone to pair. Once paired, press Ctrl+C and');
-    console.log('  run "beecork start" again for background operation.\n');
+    console.log('\n✓ Config saved. Connecting to WhatsApp...\n');
     rl.close();
+
+    // Pair immediately — show QR code in this terminal
+    try {
+      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import('@whiskeysockets/baileys');
+      fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
+      const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+
+      const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true,
+      });
+
+      sock.ev.on('creds.update', saveCreds);
+
+      sock.ev.on('connection.update', (update: { connection?: string; lastDisconnect?: { error?: Error } }) => {
+        if (update.connection === 'open') {
+          console.log('\n✓ WhatsApp paired successfully!');
+          console.log('  You can now start the daemon: beecork start\n');
+          sock.end(undefined);
+          process.exit(0);
+        }
+        if (update.connection === 'close') {
+          const reason = (update.lastDisconnect?.error as any)?.output?.statusCode;
+          if (reason === DisconnectReason.loggedOut) {
+            console.log('\n✗ WhatsApp logged out. Please try again.\n');
+            process.exit(1);
+          }
+        }
+      });
+
+      console.log('Scan the QR code above with your phone (WhatsApp → Linked Devices → Link a Device)');
+      console.log('Waiting for pairing... (Ctrl+C to cancel)\n');
+    } catch (err) {
+      console.error('Failed to connect to WhatsApp:', err instanceof Error ? err.message : err);
+      console.log('\nConfig is saved. You can try pairing later by running: beecork whatsapp');
+      process.exit(1);
+    }
   });
 
 program
