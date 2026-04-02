@@ -33,6 +33,24 @@ export async function startDaemon(): Promise<void> {
     return;
   }
 
+  // Check if WhatsApp needs pairing
+  const config = getConfig();
+  const waSessionPath = config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
+  const waEnabled = config.whatsapp?.enabled;
+  const waHasSession = waEnabled && fs.existsSync(waSessionPath) && fs.readdirSync(waSessionPath).length > 0;
+
+  if (waEnabled && !waHasSession) {
+    console.log('\n⚠ WhatsApp is enabled but not yet paired.');
+    console.log('  Starting daemon in foreground so you can scan the QR code...');
+    console.log('  Once paired, press Ctrl+C and run "beecork start" again.\n');
+    const daemonPath = new URL('../daemon.js', import.meta.url).pathname;
+    const child = spawn('node', [daemonPath], {
+      stdio: 'inherit',
+    });
+    process.on('SIGINT', () => { child.kill(); process.exit(0); });
+    return;
+  }
+
   try {
     startService();
     console.log('Beecork daemon started via system service.');
