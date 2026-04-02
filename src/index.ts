@@ -208,8 +208,8 @@ program
 
     console.log('\nWhatsApp Setup\n');
     console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
-    console.log('  When you start the daemon, a QR code will appear in the terminal.');
-    console.log('  Scan it with your phone to link.\n');
+    console.log('  After setup, run "beecork start" and the QR code will appear');
+    console.log('  in your terminal. Scan it with your phone to pair.\n');
 
     const number = await ask('Your WhatsApp phone number (e.g., 14155551234)');
     if (!number) { console.log('No number provided. Cancelled.'); rl.close(); return; }
@@ -224,7 +224,10 @@ program
       allowedNumbers: [number],
     };
     saveConfig(config);
-    console.log('\n✓ WhatsApp configured. Restart daemon to scan QR: beecork stop && beecork start\n');
+    console.log('\n✓ WhatsApp configured.');
+    console.log('  Next: run "beecork start" — the QR code will appear in your terminal.');
+    console.log('  Scan it with your phone to pair. Once paired, press Ctrl+C and');
+    console.log('  run "beecork start" again for background operation.\n');
     rl.close();
   });
 
