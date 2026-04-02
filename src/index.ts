@@ -491,7 +491,7 @@ mediaCmd.action(async () => {
 
 program
   .command('enable <capability>')
-  .description('Enable a capability (email, calendar, github, notion, drive, web, database)')
+  .description('Enable a capability (github, notion, database)')
   .action(async (capability: string) => {
     const { enableCapability } = await import('./cli/capabilities.js');
     await enableCapability(capability);

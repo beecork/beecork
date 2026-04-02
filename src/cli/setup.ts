@@ -327,39 +327,10 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
         }
       }
 
-      // Capabilities
-      console.log('\nOptional: Capabilities\n');
-      console.log('Pre-configured integrations for common tasks.');
-      console.log('You can add these later with: beecork enable <name>\n');
-
-      const capPacks = ['email', 'calendar', 'github', 'notion', 'drive', 'web', 'database'];
-      const capNames: Record<string, string> = {
-        email: 'Email (Gmail)',
-        calendar: 'Calendar (Google)',
-        github: 'GitHub',
-        notion: 'Notion',
-        drive: 'Google Drive',
-        web: 'Web Browsing',
-        database: 'Database (PostgreSQL)',
-      };
-
-      for (const packId of capPacks) {
-        const pack = CAPABILITY_PACKS.find(p => p.id === packId);
-        if (!pack) continue;
-        const answer = await ask(rl, `Enable ${capNames[packId]}? (y/n)`, 'n');
-        if (answer.toLowerCase() === 'y' && pack.requiresApiKey) {
-          const key = await ask(rl, `  ${pack.apiKeyHint}`);
-          if (key) {
-            enabledCaps.push({ packId, apiKey: key });
-          }
-        } else if (answer.toLowerCase() === 'y') {
-          enabledCaps.push({ packId });
-        }
-      }
-
       console.log('You can add or change channels later with:');
       console.log('  beecork discord    — add/reconfigure Discord');
       console.log('  beecork whatsapp   — add/reconfigure WhatsApp');
+      console.log('  beecork enable     — add integrations (GitHub, Notion, PostgreSQL)');
       console.log('  beecork dashboard  — manage everything from the web UI\n');
     }
 
@@ -442,9 +413,8 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
 
     if (!showExtras) {
       console.log('  Add more features anytime:');
-      console.log('    beecork enable email      — manage your inbox');
       console.log('    beecork enable github     — repos, PRs, issues');
-      console.log('    beecork enable calendar   — schedule meetings');
+      console.log('    beecork enable notion     — pages, databases, notes');
       console.log('    beecork capabilities      — see all options');
       console.log('    beecork setup --full      — full guided setup');
       console.log('');

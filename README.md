@@ -80,7 +80,7 @@ beecork knowledge          # View stored knowledge
 beecork discord            # Set up Discord bot
 beecork whatsapp           # Set up WhatsApp
 beecork webhook            # Set up webhook endpoint
-beecork enable <cap>       # Enable a capability (email, github, calendar, etc.)
+beecork enable <cap>       # Enable a capability (github, notion, database)
 beecork disable <cap>      # Disable a capability
 beecork capabilities       # List available capabilities
 

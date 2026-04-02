@@ -3,36 +3,6 @@ import type { CapabilityPack } from './types.js';
 export const CAPABILITY_PACKS: CapabilityPack[] = [
   // Productivity
   {
-    id: 'email',
-    name: 'Email (Gmail)',
-    description: 'Read, send, and manage emails via Gmail',
-    category: 'productivity',
-    mcpServer: {
-      package: '@anthropic/gmail-mcp',
-      command: 'npx',
-      args: ['-y', '@anthropic/gmail-mcp'],
-    },
-    requiresApiKey: true,
-    apiKeyHint: 'Google OAuth credentials (follow the setup guide)',
-    apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
-  },
-  {
-    id: 'calendar',
-    name: 'Calendar (Google)',
-    description: 'Schedule meetings, check availability, manage events',
-    category: 'productivity',
-    mcpServer: {
-      package: '@anthropic/google-calendar-mcp',
-      command: 'npx',
-      args: ['-y', '@anthropic/google-calendar-mcp'],
-    },
-    requiresApiKey: true,
-    apiKeyHint: 'Google OAuth credentials (same as email if already set up)',
-    apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
-  },
-  {
     id: 'notion',
     name: 'Notion',
     description: 'Read and write pages, databases, notes in Notion',
@@ -46,21 +16,6 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Notion integration token (from notion.so/my-integrations)',
     apiKeyEnvVar: 'NOTION_API_KEY',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
-  },
-  {
-    id: 'drive',
-    name: 'Google Drive',
-    description: 'Search, read, and organize files in Google Drive',
-    category: 'productivity',
-    mcpServer: {
-      package: '@anthropic/gdrive-mcp',
-      command: 'npx',
-      args: ['-y', '@anthropic/gdrive-mcp'],
-    },
-    requiresApiKey: true,
-    apiKeyHint: 'Google OAuth credentials',
-    apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
     setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 
@@ -96,21 +51,6 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/db)',
     apiKeyEnvVar: 'DATABASE_URL',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
-  },
-
-  // Web
-  {
-    id: 'web',
-    name: 'Web Browsing',
-    description: 'Search the web, fetch and read web pages',
-    category: 'web',
-    mcpServer: {
-      package: '@anthropic/web-search-mcp',
-      command: 'npx',
-      args: ['-y', '@anthropic/web-search-mcp'],
-    },
-    requiresApiKey: false,
     setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 ];
