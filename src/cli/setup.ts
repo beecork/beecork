@@ -252,7 +252,9 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
             sessionPath: `${getBeecorkHome()}/whatsapp-session`,
             allowedNumbers: [waNumber],
           };
-          console.log('  ✓ WhatsApp configured (scan QR code when daemon starts)\n');
+          console.log('  ✓ WhatsApp configured');
+          console.log('  ⚠ After starting the daemon, run: beecork logs');
+          console.log('    The QR code will appear in the logs — scan it with your phone.\n');
         }
       }
 
