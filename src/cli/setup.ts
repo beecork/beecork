@@ -157,6 +157,16 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       shouldInstallService = installServiceAnswer.toLowerCase() === 'y';
     }
 
+    // Offer full setup at end of quick mode
+    let showExtras = mode === 'full';
+    if (mode === 'quick') {
+      console.log('\n  ✓ Telegram is ready!\n');
+      const wantMore = await ask(rl, 'Configure additional features? (Discord, WhatsApp, media, capabilities) (y/n)', 'n');
+      if (wantMore.toLowerCase() === 'y') {
+        showExtras = true;
+      }
+    }
+
     // Build config
     const config: BeecorkConfig = {
       ...getConfig(),
@@ -193,7 +203,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       deployment: 'local',
     };
 
-    if (mode === 'full') {
+    if (showExtras) {
       // Optional: Additional channels
       console.log('\nOptional: Add more channels\n');
       console.log('You can also connect via WhatsApp, Discord, or Webhooks.');
@@ -430,7 +440,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     console.log('    beecork quickstart — full getting-started checklist');
     console.log('');
 
-    if (mode === 'quick') {
+    if (!showExtras) {
       console.log('  Add more features anytime:');
       console.log('    beecork enable email      — manage your inbox');
       console.log('    beecork enable github     — repos, PRs, issues');
