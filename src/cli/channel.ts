@@ -185,7 +185,7 @@ npm publish
 
 export function channelList(): void {
   try {
-    const output = execSync('npm list -g --depth=0 2>/dev/null', { encoding: 'utf-8' });
+    const output = execSync('npm list -g --depth=0', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
     const lines = output.split('\n').filter(line => line.includes(CHANNEL_PREFIX));
     if (lines.length === 0) {
       console.log('No community channels installed.');

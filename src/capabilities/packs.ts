@@ -15,7 +15,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Google OAuth credentials (follow the setup guide)',
     apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
-    setupUrl: 'https://support.beecork.com/capabilities/email',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
   {
     id: 'calendar',
@@ -30,7 +30,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Google OAuth credentials (same as email if already set up)',
     apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
-    setupUrl: 'https://support.beecork.com/capabilities/calendar',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
   {
     id: 'notion',
@@ -46,7 +46,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Notion integration token (from notion.so/my-integrations)',
     apiKeyEnvVar: 'NOTION_API_KEY',
-    setupUrl: 'https://support.beecork.com/capabilities/notion',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
   {
     id: 'drive',
@@ -61,7 +61,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Google OAuth credentials',
     apiKeyEnvVar: 'GOOGLE_OAUTH_CREDENTIALS',
-    setupUrl: 'https://support.beecork.com/capabilities/drive',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 
   // Development
@@ -79,7 +79,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'GitHub personal access token (from github.com/settings/tokens)',
     apiKeyEnvVar: 'GITHUB_TOKEN',
-    setupUrl: 'https://support.beecork.com/capabilities/github',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 
   // Data
@@ -96,7 +96,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/db)',
     apiKeyEnvVar: 'DATABASE_URL',
-    setupUrl: 'https://support.beecork.com/capabilities/database',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 
   // Web
@@ -111,6 +111,6 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
       args: ['-y', '@anthropic/web-search-mcp'],
     },
     requiresApiKey: false,
-    setupUrl: 'https://support.beecork.com/capabilities/web',
+    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
   },
 ];

@@ -22,7 +22,8 @@ function ask(rl: readline.Interface, question: string, defaultValue?: string): P
 
 function findClaudeBin(): string {
   try {
-    return execSync('which claude', { encoding: 'utf-8' }).trim();
+    const cmd = process.platform === 'win32' ? 'where claude' : 'which claude';
+    return execSync(cmd, { encoding: 'utf-8' }).trim().split('\n')[0];
   } catch {
     return 'claude';
   }
@@ -52,7 +53,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       console.log('    You can continue setup now and install Claude Code afterwards.');
       console.log('    Beecork will remind you at the end.');
       console.log('');
-      console.log('    Guide: https://support.beecork.com/claude-code-setup');
+      console.log('    Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites');
     }
     console.log('');
 
@@ -70,7 +71,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     console.log('  5. Choose a username ending in "bot" (e.g., "mybeecork_bot")');
     console.log('  6. BotFather will reply with a token — copy it');
     console.log('');
-    console.log('  Detailed guide: https://support.beecork.com/telegram-setup\n');
+    console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
 
     let token = '';
     while (!token) {
@@ -106,7 +107,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     console.log('  2. Tap "Start" and send it any message');
     console.log('  3. It replies with your user ID (a number like 123456789)');
     console.log('');
-    console.log('  Detailed guide: https://support.beecork.com/telegram-setup\n');
+    console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
 
     const userIdStr = await ask(rl, 'Your Telegram user ID');
     const userId = parseInt(userIdStr, 10);
@@ -137,7 +138,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       console.log('  and screen. This lets Beecork use any app on your computer — browsers,');
       console.log('  spreadsheets, design tools, internal dashboards. Powerful but requires');
       console.log('  granting screen recording and accessibility permissions.');
-      console.log('  Guide: https://support.beecork.com/computer-use\n');
+      console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n');
       enableComputerUse = await ask(rl, 'Enable computer use? (y/n)', 'n');
 
       // 6. Anthropic API key (optional - enables intelligent pipe)
@@ -208,7 +209,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
         console.log('  5. Under Bot → enable "Message Content Intent"');
         console.log('  6. Use OAuth2 URL Generator to invite bot to your server');
         console.log('');
-        console.log('  Detailed guide: https://support.beecork.com/discord-setup\n');
+        console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
 
         const discordToken = await ask(rl, 'Discord bot token (or press Enter to skip)');
         if (discordToken) {
@@ -231,7 +232,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
         console.log('  Note: This uses reverse-engineered WhatsApp Web protocol.');
         console.log('  For personal use only — not officially supported by WhatsApp.');
         console.log('');
-        console.log('  Guide: https://support.beecork.com/whatsapp-setup\n');
+        console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
 
         const waNumber = await ask(rl, 'Your WhatsApp phone number (e.g., 14155551234)');
         if (waNumber) {
@@ -414,7 +415,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       console.log('');
       console.log('     You also need a Claude Pro or Max subscription ($20/month).');
       console.log('     Sign up at: https://claude.ai');
-      console.log('     Guide: https://support.beecork.com/claude-code-setup');
+      console.log('     Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites');
       console.log('');
     }
 
@@ -439,7 +440,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       console.log('');
     }
 
-    console.log('  Need help? https://support.beecork.com\n');
+    console.log('  Need help? https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n');
 
   } finally {
     rl.close();

@@ -16,7 +16,8 @@ export async function runDoctor(): Promise<void> {
   try {
     const config = getConfig();
     const bin = config.claudeCode?.bin || 'claude';
-    execSync(`which ${bin}`, { encoding: 'utf-8' });
+    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+    execSync(`${whichCmd} ${bin}`, { encoding: 'utf-8' });
     try {
       const version = execSync(`${bin} --version 2>&1`, { encoding: 'utf-8' }).trim();
       checks.push({ name: 'Claude Code', status: 'pass', message: `Found: ${version}` });

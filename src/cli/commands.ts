@@ -141,8 +141,14 @@ export async function tailLogs(tabName?: string): Promise<void> {
     return;
   }
 
-  const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
-  process.on('SIGINT', () => child.kill());
+  if (process.platform === 'win32') {
+    // Windows: use PowerShell Get-Content -Wait
+    const child = spawn('powershell', ['-Command', `Get-Content -Path '${logFile}' -Tail 50 -Wait`], { stdio: 'inherit' });
+    process.on('SIGINT', () => child.kill());
+  } else {
+    const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
+    process.on('SIGINT', () => child.kill());
+  }
 }
 
 export async function listCrons(): Promise<void> {

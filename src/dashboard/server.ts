@@ -50,8 +50,14 @@ function json(res: http.ServerResponse, data: unknown, status = 200): void {
 }
 
 function openBrowser(url: string): void {
-  const cmd = platform() === 'darwin' ? 'open' : 'xdg-open';
-  execFile(cmd, [url]);
+  const p = platform();
+  if (p === 'darwin') {
+    execFile('open', [url]);
+  } else if (p === 'win32') {
+    execFile('cmd', ['/c', 'start', url]);
+  } else {
+    execFile('xdg-open', [url]);
+  }
 }
 
 export function startDashboardServer(port = 0): void {

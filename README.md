@@ -26,7 +26,7 @@ Message Claude Code from Telegram at 2am — it wakes up, does the work, message
 - **Memory** — Cross-session memory so Claude Code never loses context.
 - **MCP server** — 38 tools Claude Code can call to manage tabs, memory, cron jobs, watchers, media, projects, and more.
 - **Smart routing** — Pipe brain routes messages to the right tab, tracks goals, learns from your usage.
-- **Background service** — Runs as a launchd/systemd service. Starts on login, runs silently.
+- **Background service** — Runs as a launchd (macOS), systemd (Linux), or Task Scheduler (Windows) service. Starts on login, runs silently.
 
 ## Quick Start
 
@@ -53,20 +53,23 @@ beecork start              # Start the daemon
 beecork stop               # Stop the daemon
 beecork status             # Check if running
 beecork setup              # Interactive setup wizard
+beecork setup --full       # Full setup with all options
 beecork doctor             # Diagnose common issues
 beecork update             # Update to latest version
+beecork quickstart         # Print getting-started checklist
 
 # Tabs & Messages
 beecork tabs               # List active tabs
 beecork send <msg>         # Send a message to the default tab
 beecork logs               # Tail daemon logs
-beecork export <tab>       # Export tab history
+beecork export <tab>       # Export tab for terminal handoff
 beecork attach <tab>       # Attach to a running tab
 
 # Scheduling & Watchers
 beecork tasks list         # List scheduled tasks
 beecork tasks delete <id>  # Delete a task
 beecork watches            # List active watchers
+beecork watch delete <id>  # Delete a watcher
 
 # Memory & Knowledge
 beecork memory list        # List stored memories
@@ -77,16 +80,21 @@ beecork knowledge          # View stored knowledge
 beecork discord            # Set up Discord bot
 beecork whatsapp           # Set up WhatsApp
 beecork webhook            # Set up webhook endpoint
+beecork enable <cap>       # Enable a capability (email, github, calendar, etc.)
+beecork disable <cap>      # Disable a capability
+beecork capabilities       # List available capabilities
 
 # Tools
 beecork dashboard          # Open the web dashboard
 beecork mcp list           # List MCP server configs
 beecork media setup        # Configure media generators
-beecork activity           # View activity timeline
-beecork capabilities       # List available capabilities
+beecork activity           # View activity summary
 beecork history            # Show activity timeline
 beecork projects           # List discovered projects
 beecork machines           # List registered machines
+beecork templates          # List tab templates
+beecork store search <q>   # Search community extensions
+beecork store install <p>  # Install a community package
 ```
 
 Tasks, watchers, and memories are created by Claude Code itself via MCP tools — just tell it what you need in natural language. The CLI is for viewing and managing them.

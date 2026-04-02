@@ -279,7 +279,7 @@ program
       console.log('\nClaude can now control your mouse, keyboard, and screen.');
       console.log('Make sure you have granted permissions:');
       console.log('  macOS: System Settings → Privacy → Screen Recording + Accessibility');
-      console.log('  Guide: https://support.beecork.com/computer-use');
+      console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md');
     }
     console.log('\nRestart daemon to apply: beecork stop && beecork start\n');
   });
