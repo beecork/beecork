@@ -171,7 +171,7 @@ channelCmd
 
 program
   .command('discord')
-  .description('Configure Discord channel')
+  .description('Set up Discord — interactive setup for bot token and user ID')
   .action(async () => {
     const readline = await import('node:readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -200,7 +200,7 @@ program
 
 program
   .command('whatsapp')
-  .description('Configure WhatsApp channel')
+  .description('Set up WhatsApp — enter phone number, then scan QR code to pair')
   .action(async () => {
     const readline = await import('node:readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -233,7 +233,7 @@ program
 
 program
   .command('webhook')
-  .description('Configure Webhook channel')
+  .description('Set up Webhook — enable HTTP API for triggering Beecork from any service')
   .action(async () => {
     const readline = await import('node:readline');
     const crypto = await import('node:crypto');
