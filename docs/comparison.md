@@ -154,7 +154,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 ### Choose OpenClaw if you want:
 - **Maximum channel support** — 20+ messaging platforms including Signal, iMessage, Teams
 - **Model flexibility** — use Claude, GPT, DeepSeek, or any OpenAI-compatible model
-- **Large community** — 247K GitHub stars, extensive documentation, active development
+- **Large community** — 335K+ GitHub stars, extensive documentation, active development
 - **Advanced memory** — hybrid BM25 + vector search
 
 ### Choose Claude Dispatch if you want:
@@ -188,7 +188,7 @@ We believe in transparency. Here's where Beecork falls short today:
 | **Single CLI today** | Built on Claude Code. Support for additional coding CLIs (Codex, Gemini CLI) is on the roadmap as they mature. No 19-model approach like Perplexity. |
 | **Requires some technical setup** | Needs Node.js and npm. The setup wizard handles most configuration. |
 | **Basic dashboard** | The web UI is functional but minimal compared to Manus or Perplexity's polished interfaces. |
-| **Smaller community** | Growing project without OpenClaw's 247K-star ecosystem yet. |
+| **Smaller community** | Growing project without OpenClaw's 335K+-star ecosystem yet. |
 
 ---
 
