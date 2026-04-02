@@ -49,16 +49,16 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 
 **Verdict**: Beecork and OpenClaw are true daemons. Dispatch requires your Mac to be awake. Cloud products (Perplexity, Manus) are always on but you don't control the infrastructure.
 
-### Multi-Agent / Multi-Project
+### Multi-Agent / Multi-Folder
 
 | Feature | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
 | Multiple concurrent agents | Yes (tabs) | Yes (multi-agent) | Single session | Yes (sub-agents) | Yes (sub-agents) |
-| Project-aware routing | Yes (auto-discovery) | No (manual config) | No | No | No |
+| Folder-aware routing | Yes (auto-discovery) | No (manual config) | No | No | No |
 | Agent delegation | Yes (depth-limited) | Yes (orchestrator) | No | Yes (model-specific) | Yes (planner/executor) |
 | Per-agent working directory | Yes | Yes | Single workspace | Sandboxed | Sandboxed |
 
-**Verdict**: Beecork's project-aware routing is unique — it auto-discovers your git repos and routes messages to the right tab. OpenClaw has the most flexible multi-agent architecture.
+**Verdict**: Beecork's folder-aware routing is unique — it auto-discovers your git repos and routes messages to the right tab. OpenClaw has the most flexible multi-agent architecture.
 
 ### Memory & Context
 
@@ -68,7 +68,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Auto-extraction | Yes | Yes | Unclear | No | No |
 | Memory search | Yes (full-text) | Yes (BM25 + vector) | No API | No | No |
 | Context compaction | Yes (auto at 90%) | Yes (summarize + flush) | 1M context window | Model-dependent | Context engineering |
-| Knowledge layers | Global + project + tab | Per-agent files | N/A | N/A | N/A |
+| Knowledge layers | Global + folder + tab | Per-agent files | N/A | N/A | N/A |
 
 **Verdict**: Beecork and OpenClaw both have sophisticated memory systems. OpenClaw's hybrid BM25+vector search is more advanced. Dispatch benefits from Claude's native 1M context window. Manus's context engineering approach is well-documented and clever.
 
@@ -145,7 +145,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 
 ### Choose Beecork if you want:
 - **Predictable pricing** — flat subscription, no API keys, no token costs, no surprise bills
-- **Claude Code integration** — MCP tools, computer use, project-aware routing
+- **Claude Code integration** — MCP tools, computer use, folder-aware routing
 - **Multi-channel messaging** — Telegram + WhatsApp + Discord from one daemon, with Slack and more coming
 - **Media generation** — built-in image, video, music, voice
 - **Watchers** — automated monitoring with condition-based actions
@@ -213,7 +213,7 @@ We believe in transparency. Here's where Beecork falls short today:
 | Desktop app | Soon | No | Yes | No | Yes |
 | Always-on daemon | Yes | Yes | Mac required | Cloud | Cloud |
 | Multi-tab/agent | Yes | Yes | No | Yes | Yes |
-| Project routing | Yes | No | No | No | No |
+| Folder routing | Yes | No | No | No | No |
 | Long-term memory | Yes | Yes | Yes | Limited | Yes |
 | Memory search | Yes | Yes | No | No | No |
 | Scheduled tasks | Yes | Yes | Yes | No | Yes |

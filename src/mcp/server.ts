@@ -103,7 +103,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object' as const,
         properties: {
           content: { type: 'string', description: 'The fact or information to remember' },
-          scope: { type: 'string', enum: ['global', 'project', 'tab', 'auto'], description: 'Where to store: global (about the user), project (about this project), tab (about this conversation), or auto (Claude decides)' },
+          scope: { type: 'string', enum: ['global', 'project', 'tab', 'auto'], description: 'Where to store: global (about the user), project (about this folder), tab (about this conversation), or auto (Claude decides)' },
           category: { type: 'string', description: 'For global scope: people, preferences, routines, or general' },
         },
         required: ['content'],
@@ -346,7 +346,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'beecork_machines',
-      description: 'List registered machines and their project paths. Shows which machine handles which projects.',
+      description: 'List registered machines and their folder paths. Shows which machine handles which folders.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -374,11 +374,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'beecork_project_create',
-      description: 'Create a new project folder in the workspace',
+      description: 'Register a new folder in the workspace',
       inputSchema: {
         type: 'object' as const,
         properties: {
-          name: { type: 'string', description: 'Project name' },
+          name: { type: 'string', description: 'Folder name' },
           path: { type: 'string', description: 'Optional: custom path. Defaults to workspace root.' },
         },
         required: ['name'],
@@ -386,7 +386,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'beecork_project_list',
-      description: 'List all known projects and categories',
+      description: 'List all known folders and categories',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -447,11 +447,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'beecork_knowledge',
-      description: 'List all knowledge Beecork has about the current context (global + project + tab)',
+      description: 'List all knowledge Beecork has about the current context (global + folder + tab)',
       inputSchema: {
         type: 'object' as const,
         properties: {
-          scope: { type: 'string', enum: ['global', 'project', 'tab', 'all'], description: 'Which layer to show (default: all)' },
+          scope: { type: 'string', enum: ['global', 'project', 'tab', 'all'], description: 'Which layer to show: global, project (folder), tab, or all (default: all)' },
         },
       },
     },
@@ -861,13 +861,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { name, path: customPath } = args as { name: string; path?: string };
         const { createProject } = await import('../projects/index.js');
         const project = createProject(name, customPath);
-        return ok(`Project "${name}" created at ${project.path}`);
+        return ok(`Folder "${name}" registered at ${project.path}`);
       }
 
       case 'beecork_project_list': {
         const { listProjects } = await import('../projects/index.js');
         const projects = listProjects();
-        if (projects.length === 0) return ok('No projects discovered. Create one with beecork_project_create.');
+        if (projects.length === 0) return ok('No folders discovered. Create one with beecork_project_create.');
         const lines = projects.map(p => `${p.type === 'category' ? '📁' : '📦'} ${p.name} — ${p.path}`);
         return ok(lines.join('\n'));
       }

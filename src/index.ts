@@ -444,18 +444,19 @@ program
   });
 
 program
-  .command('projects')
-  .description('List all discovered projects')
+  .command('folders')
+  .alias('projects')
+  .description('List all discovered folders')
   .action(async () => {
     const { listProjects } = await import('./projects/index.js');
     const projects = listProjects();
     if (projects.length === 0) {
-      console.log('No projects found. Start the daemon to discover projects.');
+      console.log('No folders found. Start the daemon to discover folders.');
       return;
     }
-    console.log(`\n${projects.length} project(s):\n`);
+    console.log(`\n${projects.length} folder(s):\n`);
     for (const p of projects) {
-      const icon = p.type === 'category' ? '📁' : '📦';
+      const icon = p.type === 'category' ? '📂' : '📁';
       console.log(`  ${icon} ${p.name} — ${p.path}`);
     }
     console.log('');

@@ -34,14 +34,14 @@ export class PipeBrain {
 
     // Step 2: Ensure the tab exists with the right working directory
     if (route.projectPath) {
-      this.tabManager.ensureTab(route.tabName);
+      this.tabManager.ensureTab(route.tabName, route.projectPath);
       this.memory.updateProjectLastUsed(route.projectPath);
     }
 
     // Step 3: Send to Claude Code
     let result: SendResult;
     try {
-      result = await this.tabManager.sendMessage(route.tabName, message, { skipExtraction: true });
+      result = await this.tabManager.sendMessage(route.tabName, message, { skipExtraction: true, projectPath: route.projectPath ?? undefined });
     } catch (err) {
       return {
         tabName: route.tabName,

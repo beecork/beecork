@@ -191,42 +191,44 @@ export async function handleSharedCommand(
     return { handled: true, response: `🖥 ${machines.length} machine(s):\n\n${list}` };
   }
 
-  // /projects
-  if (text === '/projects' || text.startsWith('/projects@')) {
+  // /folders (also accept legacy /projects)
+  if (text === '/folders' || text === '/projects' || text.startsWith('/folders@') || text.startsWith('/projects@')) {
     const { listProjects } = await import('../projects/index.js');
     const projects = listProjects();
-    if (projects.length === 0) return { handled: true, response: 'No projects found. Create one with /newproject <name>' };
+    if (projects.length === 0) return { handled: true, response: 'No folders found. Create one with /newfolder <name>' };
     const userProjects = projects.filter((p): p is Project => p.type === 'user-project');
     const categories = projects.filter((p): p is Project => p.type === 'category');
-    let msg = '📦 Projects:\n';
+    let msg = '📁 Folders:\n';
     if (userProjects.length > 0) msg += userProjects.map((p) => `  • ${p.name} — ${p.path}`).join('\n');
     if (categories.length > 0) {
-      msg += '\n\n📁 Categories:\n';
+      msg += '\n\n📂 Categories:\n';
       msg += categories.map((p) => `  • ${p.name}`).join('\n');
     }
     return { handled: true, response: msg };
   }
 
-  // /project <name>
-  if (text.startsWith('/project ') && !text.startsWith('/projects')) {
-    const name = text.slice(9).trim();
+  // /folder <name> (also accept legacy /project <name>)
+  if ((text.startsWith('/folder ') && !text.startsWith('/folders')) || (text.startsWith('/project ') && !text.startsWith('/projects'))) {
+    const prefix = text.startsWith('/folder ') ? '/folder ' : '/project ';
+    const name = text.slice(prefix.length).trim();
     const { getProject, setUserContext } = await import('../projects/index.js');
     const project = getProject(name);
-    if (!project) return { handled: true, response: `Project "${name}" not found. Use /projects to list or /newproject to create.` };
+    if (!project) return { handled: true, response: `Folder "${name}" not found. Use /folders to list or /newfolder to create.` };
     setUserContext(userId, project.name, project.name);
-    return { handled: true, response: `Switched to project: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this project.` };
+    return { handled: true, response: `Switched to folder: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this folder.` };
   }
 
-  // /newproject <name> [path]
-  if (text.startsWith('/newproject ')) {
-    const parts = text.slice(12).trim().split(/\s+/);
+  // /newfolder <name> [path] (also accept legacy /newproject)
+  if (text.startsWith('/newfolder ') || text.startsWith('/newproject ')) {
+    const prefix = text.startsWith('/newfolder ') ? '/newfolder ' : '/newproject ';
+    const parts = text.slice(prefix.length).trim().split(/\s+/);
     const name = parts[0];
     const customPath = parts[1] || undefined;
-    if (!name) return { handled: true, response: 'Usage: /newproject <name> [path]' };
+    if (!name) return { handled: true, response: 'Usage: /newfolder <name> [path]' };
     const { createProject, setUserContext } = await import('../projects/index.js');
     const project = createProject(name, customPath);
     setUserContext(userId, project.name, project.name);
-    return { handled: true, response: `✓ Project "${name}" created at ${project.path}\nSwitched to this project.` };
+    return { handled: true, response: `✓ Folder "${name}" created at ${project.path}\nSwitched to this folder.` };
   }
 
   // /close <tab>
@@ -240,15 +242,15 @@ export async function handleSharedCommand(
     return { handled: true, response: closed ? `Tab "${tabNameToClose}" permanently closed. History deleted.` : `Tab "${tabNameToClose}" not found.` };
   }
 
-  // /fresh <project>
+  // /fresh <folder>
   if (text.startsWith('/fresh ')) {
-    const projectName = text.slice(7).trim();
+    const folderName = text.slice(7).trim();
     const { getProject, setUserContext } = await import('../projects/index.js');
-    const project = getProject(projectName);
-    if (!project) return { handled: true, response: `Project "${projectName}" not found.` };
-    const freshTabName = `${projectName}-${Date.now().toString(36).slice(-4)}`;
+    const project = getProject(folderName);
+    if (!project) return { handled: true, response: `Folder "${folderName}" not found.` };
+    const freshTabName = `${folderName}-${Date.now().toString(36).slice(-4)}`;
     setUserContext(userId, project.name, freshTabName);
-    return { handled: true, response: `Fresh start in "${projectName}" (tab: ${freshTabName})\nSend your message now.` };
+    return { handled: true, response: `Fresh start in "${folderName}" (tab: ${freshTabName})\nSend your message now.` };
   }
 
   return { handled: false };

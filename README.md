@@ -24,8 +24,8 @@ Message Claude Code from Telegram at 2am — it wakes up, does the work, message
 - **Virtual tabs** — Persistent Claude Code sessions with context that survives restarts.
 - **Task scheduling** — Tell Claude Code to set up recurring tasks via MCP tools — it wakes up, runs the task, reports back.
 - **Memory** — Cross-session memory so Claude Code never loses context.
-- **MCP server** — 38 tools Claude Code can call to manage tabs, memory, cron jobs, watchers, media, projects, and more.
-- **Smart routing** — Pipe brain routes messages to the right tab, tracks goals, learns from your usage.
+- **MCP server** — 38 tools Claude Code can call to manage tabs, memory, cron jobs, watchers, media, folders, and more.
+- **Smart routing** — Pipe brain routes messages to the right folder and tab, tracks goals, learns from your usage.
 - **Background service** — Runs as a launchd (macOS), systemd (Linux), or Task Scheduler (Windows) service. Starts on login, runs silently.
 
 ## Quick Start
@@ -89,7 +89,7 @@ beecork mcp list           # List MCP server configs
 beecork media setup        # Configure media generators
 beecork activity           # View activity summary
 beecork history            # Show activity timeline
-beecork projects           # List discovered projects
+beecork folders            # List discovered folders
 beecork machines           # List registered machines
 beecork templates          # List tab templates
 beecork store search <q>   # Search community extensions

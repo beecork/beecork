@@ -220,9 +220,9 @@ export async function setupWizard(): Promise<void> {
     console.log('    beecork quickstart — full getting-started checklist');
     console.log('');
 
-    console.log('  ★ Recommended: Smart project routing');
-    console.log('    If you work on multiple projects, Beecork can auto-detect which');
-    console.log('    project you mean and route messages to the right tab.');
+    console.log('  ★ Recommended: Smart folder routing');
+    console.log('    If you work in multiple folders, Beecork can auto-detect which');
+    console.log('    folder you mean and route messages to the right tab.');
     console.log('    Run: beecork pipe setup');
     console.log('');
     console.log('  Add more channels:');
