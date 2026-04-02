@@ -8,7 +8,6 @@ import { saveConfig, getConfig } from '../config.js';
 import { ensureBeecorkDirs, getMcpConfigPath, getBeecorkHome } from '../util/paths.js';
 import { installService } from '../service/install.js';
 import { getDb, closeDb } from '../db/index.js';
-import { CAPABILITY_PACKS } from '../capabilities/packs.js';
 import type { BeecorkConfig } from '../types.js';
 
 function ask(rl: readline.Interface, question: string, defaultValue?: string): Promise<string> {
@@ -29,7 +28,7 @@ function findClaudeBin(): string {
   }
 }
 
-export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<void> {
+export async function setupWizard(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
   console.log('\n🔧 Beecork Setup\n');
@@ -116,56 +115,9 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       return;
     }
 
-    // Quick mode defaults
-    let claudeBin = findClaudeBin();
-    let defaultDir = os.homedir();
-    let enableComputerUse = 'n';
-    let apiKey = '';
-    let scanPaths = ['~/Coding', '~/Projects', '~/code', '~/dev'];
-    let shouldInstallService = true;
-    const enabledCaps: Array<{ packId: string; apiKey?: string }> = [];
-
-    if (mode === 'full') {
-      // 3. Claude binary path
-      const defaultBin = findClaudeBin();
-      claudeBin = await ask(rl, 'Path to claude binary', defaultBin);
-
-      // 4. Default working directory
-      defaultDir = await ask(rl, 'Default working directory', os.homedir());
-
-      // 5. Computer use (optional)
-      console.log('\n  Computer use (optional): Allow Claude to control your mouse, keyboard,');
-      console.log('  and screen. This lets Beecork use any app on your computer — browsers,');
-      console.log('  spreadsheets, design tools, internal dashboards. Powerful but requires');
-      console.log('  granting screen recording and accessibility permissions.');
-      console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n');
-      enableComputerUse = await ask(rl, 'Enable computer use? (y/n)', 'n');
-
-      // 6. Anthropic API key (optional - enables intelligent pipe)
-      console.log('\n  Intelligent routing (optional): Beecork can route messages to the right');
-      console.log('  project automatically and track goal completion. Requires an Anthropic API key.');
-      apiKey = await ask(rl, 'Anthropic API key (press Enter to skip)');
-
-      // 6. Project scan paths
-      if (apiKey) {
-        const scanInput = await ask(rl, 'Project scan paths (comma-separated)', scanPaths.join(', '));
-        scanPaths = scanInput.split(',').map(s => s.trim()).filter(Boolean);
-      }
-
-      // 7. Install as service?
-      const installServiceAnswer = await ask(rl, 'Install as background service? (y/n)', 'y');
-      shouldInstallService = installServiceAnswer.toLowerCase() === 'y';
-    }
-
-    // Offer full setup at end of quick mode
-    let showExtras = mode === 'full';
-    if (mode === 'quick') {
-      console.log('\n  ✓ Telegram is ready!\n');
-      const wantMore = await ask(rl, 'Configure additional features? (Discord, WhatsApp, media, capabilities) (y/n)', 'n');
-      if (wantMore.toLowerCase() === 'y') {
-        showExtras = true;
-      }
-    }
+    const claudeBin = findClaudeBin();
+    const defaultDir = os.homedir();
+    const scanPaths = ['~/Coding', '~/Projects', '~/code', '~/dev'];
 
     // Build config
     const config: BeecorkConfig = {
@@ -177,7 +129,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       claudeCode: {
         bin: claudeBin,
         defaultFlags: ['--dangerously-skip-permissions'],
-        computerUse: enableComputerUse.toLowerCase() === 'y',
+        computerUse: false,
       },
       tabs: {
         default: {
@@ -192,8 +144,8 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
         maxLongTermEntries: 1000,
       },
       pipe: {
-        enabled: !!apiKey,
-        anthropicApiKey: apiKey,
+        enabled: false,
+        anthropicApiKey: '',
         routingModel: 'claude-haiku-4-5-20251001',
         complexModel: 'claude-sonnet-4-6-20250514',
         confidenceThreshold: 0.75,
@@ -203,138 +155,6 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
       deployment: 'local',
     };
 
-    if (showExtras) {
-      // Optional: Additional channels
-      console.log('\nOptional: Add more channels\n');
-      console.log('You can also connect via WhatsApp, Discord, or Webhooks.');
-      console.log('You can always add these later with: beecork discord, beecork whatsapp, etc.\n');
-
-      const addDiscord = await ask(rl, 'Set up Discord? (y/n)', 'n');
-      if (addDiscord.toLowerCase() === 'y') {
-        console.log('\nDiscord Setup:');
-        console.log('  1. Go to https://discord.com/developers/applications');
-        console.log('  2. Click "New Application", give it a name');
-        console.log('  3. Go to Bot → click "Add Bot"');
-        console.log('  4. Copy the bot token');
-        console.log('  5. Under Bot → enable "Message Content Intent"');
-        console.log('  6. Use OAuth2 URL Generator to invite bot to your server');
-        console.log('');
-        console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
-
-        const discordToken = await ask(rl, 'Discord bot token (or press Enter to skip)');
-        if (discordToken) {
-          const discordUserId = await ask(rl, 'Your Discord user ID (right-click your name → Copy User ID)');
-          config.discord = {
-            token: discordToken,
-            allowedUserIds: discordUserId ? [discordUserId] : [],
-          };
-          console.log('  ✓ Discord configured\n');
-        }
-      }
-
-      const addWhatsApp = await ask(rl, 'Set up WhatsApp? (y/n)', 'n');
-      if (addWhatsApp.toLowerCase() === 'y') {
-        console.log('\nWhatsApp Setup:');
-        console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
-        console.log('  When you start the daemon, a QR code appears in the terminal.');
-        console.log('  Scan it with your phone to link your WhatsApp account.');
-        console.log('');
-        console.log('  Note: This uses reverse-engineered WhatsApp Web protocol.');
-        console.log('  For personal use only — not officially supported by WhatsApp.');
-        console.log('');
-        console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
-
-        const waNumber = await ask(rl, 'Your WhatsApp phone number (e.g., 14155551234)');
-        if (waNumber) {
-          config.whatsapp = {
-            enabled: true,
-            mode: 'baileys',
-            sessionPath: `${getBeecorkHome()}/whatsapp-session`,
-            allowedNumbers: [waNumber],
-          };
-          console.log('  ✓ WhatsApp configured');
-          console.log('  ⚠ After starting the daemon, run: beecork logs');
-          console.log('    The QR code will appear in the logs — scan it with your phone.\n');
-        }
-      }
-
-      const addWebhook = await ask(rl, 'Enable Webhook API? (y/n)', 'n');
-      if (addWebhook.toLowerCase() === 'y') {
-        const webhookPort = await ask(rl, 'Webhook port', '8374');
-        const webhookToken = await ask(rl, 'Webhook auth token (press Enter to auto-generate)');
-        const whToken = webhookToken || crypto.randomBytes(24).toString('base64url');
-        config.webhook = {
-          enabled: true,
-          port: parseInt(webhookPort),
-          authToken: whToken,
-        };
-        console.log(`  ✓ Webhook enabled on port ${webhookPort}`);
-        if (!webhookToken) console.log(`  Auth token: ${whToken}\n`);
-      }
-
-      // Optional: Media generation
-      console.log('\nOptional: Media Generation\n');
-      console.log('Beecork can generate images, videos, and music using AI providers.');
-      console.log('You can add these later with: beecork media\n');
-
-      const addMedia = await ask(rl, 'Set up media generation? (y/n)', 'n');
-      if (addMedia.toLowerCase() === 'y') {
-        const mediaGenerators: Array<{ provider: string; apiKey: string; model?: string }> = [];
-
-        console.log('\nImage: 1) Nano Banana (Google)  2) DALL-E (OpenAI)  3) Stable Diffusion  4) Recraft (Vectors)');
-        const imgChoice = await ask(rl, 'Choose image provider (1/2/3/4 or Enter to skip)');
-        if (imgChoice === '1') {
-          const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
-          if (key) mediaGenerators.push({ provider: 'nano-banana', apiKey: key });
-        } else if (imgChoice === '2') {
-          const key = await ask(rl, '  OpenAI API key');
-          if (key) mediaGenerators.push({ provider: 'dall-e', apiKey: key });
-        } else if (imgChoice === '3') {
-          const key = await ask(rl, '  Stability AI API key');
-          if (key) mediaGenerators.push({ provider: 'stable-diffusion', apiKey: key });
-        } else if (imgChoice === '4') {
-          const key = await ask(rl, '  Recraft API key');
-          if (key) mediaGenerators.push({ provider: 'recraft', apiKey: key });
-        }
-
-        console.log('\nVideo: 1) Runway  2) Veo  3) Kling');
-        const vidChoice = await ask(rl, 'Choose video provider (1/2/3 or Enter to skip)');
-        if (vidChoice === '1') {
-          const key = await ask(rl, '  Runway API key');
-          if (key) mediaGenerators.push({ provider: 'runway', apiKey: key });
-        } else if (vidChoice === '2') {
-          const key = await ask(rl, '  Google AI API key');
-          if (key) mediaGenerators.push({ provider: 'veo', apiKey: key });
-        } else if (vidChoice === '3') {
-          const key = await ask(rl, '  Kling API key');
-          if (key) mediaGenerators.push({ provider: 'kling', apiKey: key });
-        }
-
-        console.log('\nAudio/Music: 1) ElevenLabs Music  2) Google Lyria  3) ElevenLabs SFX');
-        const audChoice = await ask(rl, 'Choose audio provider (1/2/3 or Enter to skip)');
-        if (audChoice === '1') {
-          const key = await ask(rl, '  ElevenLabs API key (xi-...)');
-          if (key) mediaGenerators.push({ provider: 'elevenlabs-music', apiKey: key });
-        } else if (audChoice === '2') {
-          const key = await ask(rl, '  Google AI API key (from ai.google.dev)');
-          if (key) mediaGenerators.push({ provider: 'lyria', apiKey: key });
-        } else if (audChoice === '3') {
-          const key = await ask(rl, '  ElevenLabs API key (xi-...)');
-          if (key) mediaGenerators.push({ provider: 'elevenlabs-sfx', apiKey: key });
-        }
-
-        if (mediaGenerators.length > 0) {
-          config.mediaGenerators = mediaGenerators;
-          console.log(`\n  ✓ ${mediaGenerators.length} media provider(s) configured`);
-        }
-      }
-
-      console.log('You can add or change channels later with:');
-      console.log('  beecork discord    — add/reconfigure Discord');
-      console.log('  beecork whatsapp   — add/reconfigure WhatsApp');
-      console.log('  beecork enable     — add integrations (GitHub, Notion, PostgreSQL)');
-      console.log('  beecork dashboard  — manage everything from the web UI\n');
-    }
 
     // Write everything
     ensureBeecorkDirs();
@@ -354,19 +174,6 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     injectClaudeMd();
     console.log('✓ Beecork tools injected into ~/.claude/CLAUDE.md');
 
-    // Enable capabilities
-    if (enabledCaps.length > 0) {
-      const { enablePack } = await import('../capabilities/index.js');
-      for (const cap of enabledCaps) {
-        try {
-          enablePack(cap.packId, cap.apiKey);
-          console.log(`✓ ${cap.packId} enabled`);
-        } catch (err) {
-          console.log(`⚠ Failed to enable ${cap.packId}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    }
-
     // Scan for projects if pipe is enabled
     if (config.pipe.enabled) {
       const { scanForProjects } = await import('../pipe/project-scanner.js');
@@ -379,7 +186,7 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     }
 
     // Install service
-    if (shouldInstallService) {
+    {
       try {
         const servicePath = installService();
         console.log(`✓ Service installed at ${servicePath}`);
@@ -413,14 +220,17 @@ export async function setupWizard(mode: 'quick' | 'full' = 'quick'): Promise<voi
     console.log('    beecork quickstart — full getting-started checklist');
     console.log('');
 
-    if (!showExtras) {
-      console.log('  Add more features anytime:');
-      console.log('    beecork enable github     — repos, PRs, issues');
-      console.log('    beecork enable notion     — pages, databases, notes');
-      console.log('    beecork capabilities      — see all options');
-      console.log('    beecork setup --full      — full guided setup');
-      console.log('');
-    }
+    console.log('  Add more channels:');
+    console.log('    beecork whatsapp           — connect WhatsApp');
+    console.log('    beecork discord            — connect Discord');
+    console.log('    beecork webhook            — enable webhook API');
+    console.log('');
+    console.log('  Add more features:');
+    console.log('    beecork media setup        — image, video, audio generation');
+    console.log('    beecork enable github      — repos, PRs, issues');
+    console.log('    beecork enable notion      — pages, databases, notes');
+    console.log('    beecork computer-use enable — mouse, keyboard, screen control');
+    console.log('');
 
     console.log('  Need help? https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n');
 

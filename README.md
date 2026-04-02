@@ -52,8 +52,7 @@ See [Getting Started](https://github.com/beecork/beecork/blob/main/docs/getting-
 beecork start              # Start the daemon
 beecork stop               # Stop the daemon
 beecork status             # Check if running
-beecork setup              # Interactive setup wizard
-beecork setup --full       # Full setup with all options
+beecork setup              # Set up Beecork (Telegram + system service)
 beecork doctor             # Diagnose common issues
 beecork update             # Update to latest version
 beecork quickstart         # Print getting-started checklist

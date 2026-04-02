@@ -26,11 +26,9 @@ program
 
 program
   .command('setup')
-  .description('Set up Beecork')
-  .option('--quick', 'Quick setup: just Telegram, done in 60 seconds')
-  .option('--full', 'Full guided setup: all options')
-  .action(async (options: { quick?: boolean; full?: boolean }) => {
-    await setupWizard(options.full ? 'full' : options.quick ? 'quick' : 'quick');
+  .description('Set up Beecork (Telegram + system service)')
+  .action(async () => {
+    await setupWizard();
   });
 
 program
