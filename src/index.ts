@@ -579,4 +579,11 @@ storeCmd
     await storeInfo(pkg);
   });
 
+program
+  .command('help')
+  .description('Show help')
+  .action(() => {
+    program.outputHelp();
+  });
+
 program.parse();
