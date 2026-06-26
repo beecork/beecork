@@ -66,6 +66,16 @@ async function main() {
   // (Created earlier, readline swallows piped stdin during the awaits above.)
   const rl = createInterface({ input: process.stdin, output: process.stdout, completer });
 
+  // Show the startup banner FIRST — before any API-key prompt — so the agent
+  // always greets the same way whether or not a key is configured yet.
+  printBanner(state.model, instr.sources.map((s) => s.replace(homedir(), "~")));
+  if (approvedTools.size) {
+    console.log(color.dim(`pre-approved tools (from ~/.beecork/settings.json): ${[...approvedTools].join(", ")}`) + "\n");
+  }
+  if (settings.projectAlwaysAllowIgnored) {
+    console.log(color.yellow("⚠ A project .beecork/settings.json tried to pre-approve tools (alwaysAllow) — ignored. Pre-approval is honored only from ~/.beecork/settings.json.") + "\n");
+  }
+
   // First run with no key found → prompt for one and save it (interactive only).
   if (!apiKey && process.stdin.isTTY) {
     console.log(color.dim("No OpenRouter API key found. Get one at https://openrouter.ai/keys"));
@@ -85,14 +95,6 @@ async function main() {
     process.exit(1);
   }
   state.apiKey = apiKey;
-
-  printBanner(state.model, instr.sources.map((s) => s.replace(homedir(), "~")));
-  if (approvedTools.size) {
-    console.log(color.dim(`pre-approved tools (from ~/.beecork/settings.json): ${[...approvedTools].join(", ")}`) + "\n");
-  }
-  if (settings.projectAlwaysAllowIgnored) {
-    console.log(color.yellow("⚠ A project .beecork/settings.json tried to pre-approve tools (alwaysAllow) — ignored. Pre-approval is honored only from ~/.beecork/settings.json.") + "\n");
-  }
 
   // Ctrl-C cancels a RUNNING turn (keeping the session alive); at the prompt it
   // quits. Registered on both process + readline because which one receives the
