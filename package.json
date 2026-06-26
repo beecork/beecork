@@ -1,0 +1,18 @@
+{
+  "name": "beecork",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "beecork — a CLI coding agent, built slowly, part by part.",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "eval": "tsx eval/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
