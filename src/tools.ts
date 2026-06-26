@@ -19,6 +19,9 @@ const execAsync = promisify(exec);
 // Uniform tool error string, keeping each tool's own verb (e.g. "reading file").
 const fail = (verb: string, err: unknown) => `Error ${verb}: ${(err as Error).message}`;
 
+// Brave web-search result shape (only the fields we read).
+type BraveResult = { title?: string; url?: string; description?: string };
+
 // The current todo list (written by the update_todos tool; rendered when it changes).
 let todos: TodoItem[] = [];
 
@@ -51,9 +54,24 @@ const RISKY_BASH: RegExp[] = [
   /\|\s*(sudo\s+)?(sh|bash|zsh|python\d?|node|perl|ruby|php)\b/, // pipe INTO an interpreter
   /\b(eval|source)\b[\s\S]*\$\(\s*(curl|wget|fetch)\b/, // eval/source of a download
 ];
+// Heuristic out-of-root detector for run_bash: parent-dir escapes, ~ home refs, and
+// space/quote-anchored absolute paths that resolve outside the project root (URLs are
+// skipped naturally — their "/" follows ":"). Not a true sandbox (the roadmap defers
+// that), but it routes shell access to outside paths through the gate too, instead of
+// relying only on a prompt-text deterrent.
+function refsOutsideRoot(cmd: string): boolean {
+  if (/(^|[\s"'`=(])(\.\.\/|~(\/|$))/.test(cmd)) return true; // ../ escape or ~ home ref
+  for (const m of cmd.matchAll(/(?:^|[\s"'`=(])(\/[^\s"'`;|&()<>]*)/g)) {
+    if (!resolveInRoot(m[1]).inRoot) return true; // an absolute path outside the root
+  }
+  return false;
+}
 function bashGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
-  const hit = RISKY_BASH.find((re) => re.test(String(args.command ?? "")));
-  return hit ? { needsApproval: true, reason: `this shell command looks risky (matched ${hit})` } : {};
+  const cmd = String(args.command ?? "");
+  const risky = RISKY_BASH.find((re) => re.test(cmd));
+  if (risky) return { needsApproval: true, reason: `this shell command looks risky (matched ${risky})` };
+  if (refsOutsideRoot(cmd)) return { needsApproval: true, reason: "this shell command references a path outside the project root" };
+  return {};
 }
 
 // --- web_fetch helpers ------------------------------------------------------
@@ -382,11 +400,11 @@ export const toolDefs: ToolDef[] = [
         );
         if (res.status === 401 || res.status === 403) return "Error: Brave rejected the API key (check BRAVE_API_KEY).";
         if (!res.ok) return `Error: Brave search returned HTTP ${res.status}.`;
-        const data: any = await res.json();
+        const data = (await res.json()) as { web?: { results?: BraveResult[] } };
         const results = (data.web?.results ?? []).slice(0, count);
         if (results.length === 0) return `No results for "${query}".`;
         return results
-          .map((r: any, i: number) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${String(r.description ?? "").replace(/<[^>]+>/g, "")}`)
+          .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${String(r.description ?? "").replace(/<[^>]+>/g, "")}`)
           .join("\n\n");
       } catch (err) {
         return fail("searching", err);

@@ -95,10 +95,12 @@ function showRecommended(): void {
   console.log(`\nswitch:  ${color.cyan("/model <slug>")}    search all:  ${color.cyan("/models <term>")}\n`);
 }
 
+type OpenRouterModel = { id: string; supported_parameters?: string[]; pricing?: { prompt?: string } };
+
 async function listModels(term: string): Promise<void> {
   try {
     const res = await fetch(config.modelsUrl);
-    const all = (await res.json()).data as any[];
+    const all = ((await res.json()) as { data?: OpenRouterModel[] }).data ?? [];
     const matches = all.filter((m) => m.id.includes(term.toLowerCase())).slice(0, 20);
     if (matches.length === 0) {
       console.log(color.dim(`no models match "${term}"`) + "\n");

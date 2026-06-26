@@ -13,6 +13,25 @@ import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserCo
 import { handleCommand, completer } from "./commands";
 import type { Message } from "./types";
 
+// Ask a question without echoing the typed answer (for secrets). Best-effort: masks
+// keystrokes via readline's output hook on a TTY, and falls back to a normal prompt
+// if that internal isn't available. Storage is already chmod-600 + excluded from
+// transcripts, so this only guards against shoulder-surfing during entry.
+async function maskedQuestion(rl: ReturnType<typeof createInterface>, query: string): Promise<string> {
+  const i = rl as unknown as { _writeToOutput?: (s: string) => void };
+  const orig = i._writeToOutput?.bind(rl);
+  if (!orig || !process.stdin.isTTY) return rl.question(query);
+  let masking = false;
+  i._writeToOutput = (s: string) => (masking && !/[\r\n]/.test(s) ? orig("*") : orig(s));
+  try {
+    const p = rl.question(query); // writes the prompt synchronously (still visible)
+    masking = true; // …then mask only what the user types
+    return await p;
+  } finally {
+    i._writeToOutput = orig;
+  }
+}
+
 async function main() {
   // Resolve keys from env / .env (config.ts) or ~/.beecork/config.json — no
   // console input needed yet. The Brave key is optional (only web_search needs it).
@@ -51,7 +70,7 @@ async function main() {
   if (!apiKey && process.stdin.isTTY) {
     console.log(color.dim("No OpenRouter API key found. Get one at https://openrouter.ai/keys"));
     try {
-      apiKey = (await rl.question(color.green("Paste your OpenRouter API key: "))).trim();
+      apiKey = (await maskedQuestion(rl, color.green("Paste your OpenRouter API key: "))).trim();
     } catch {
       apiKey = ""; // stdin closed
     }
