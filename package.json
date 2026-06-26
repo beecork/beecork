@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "beecork — a CLI coding agent, built slowly, part by part.",
+  "engines": {
+    "node": ">=20.12"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",

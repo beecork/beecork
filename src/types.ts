@@ -20,6 +20,9 @@ export type ToolDef = {
   parameters: object; // JSON Schema for the arguments
   run: (args: Record<string, any>) => Promise<string>;
   needsApproval?: boolean; // dangerous tools must be approved before running
+  // Per-CALL approval decision (e.g. a path outside the project root). Lets the
+  // gate ask about this specific call, not just by tool name.
+  guard?: (args: Record<string, any>) => { needsApproval?: boolean; reason?: string };
 };
 
 export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed" };

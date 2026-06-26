@@ -6,7 +6,7 @@ import { config } from "./config";
 import { state } from "./state";
 import { color, RECOMMENDED_MODELS } from "./ui";
 import { estimateTokens } from "./context";
-import { loadLatestSession } from "./memory";
+import { loadLatestSession, saveUserConfig } from "./memory";
 import type { Message } from "./types";
 
 export async function handleCommand(input: string, messages: Message[]): Promise<void> {
@@ -20,6 +20,14 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     } else {
       state.model = arg;
       console.log(color.green(`switched to: ${state.model}`) + "\n");
+    }
+  } else if (cmd === "/key") {
+    if (!arg) {
+      console.log(color.dim("usage: /key <your-openrouter-key>  (saved to ~/.beecork/config.json)") + "\n");
+    } else {
+      state.apiKey = arg;
+      await saveUserConfig({ OPENROUTER_API_KEY: arg });
+      console.log(color.green("API key updated and saved.") + "\n");
     }
   } else if (cmd === "/models") {
     if (!arg) showRecommended();
@@ -64,6 +72,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
           "  /models           show recommended starter models",
           "  /models <term>    search the full OpenRouter catalog",
           "  /context          show conversation size (tokens)",
+          "  /key <key>        set + save your OpenRouter API key",
           "  /resume           resume your last session in this folder",
           "  /good  /bad       rate this conversation (saves it; bad → eval/failures)",
           "  /help             show this help",
@@ -107,7 +116,7 @@ async function listModels(term: string): Promise<void> {
 }
 
 // --- Tab-completion ---------------------------------------------------------
-const COMMANDS = ["/help", "/model", "/models", "/context", "/resume", "/good", "/bad"];
+const COMMANDS = ["/help", "/model", "/models", "/context", "/key", "/resume", "/good", "/bad"];
 export function completer(line: string): [string[], string] {
   if (line.startsWith("/model ")) {
     const all = RECOMMENDED_MODELS.map((m) => `/model ${m.slug}`);
