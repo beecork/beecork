@@ -1,9 +1,15 @@
 {
   "name": "beecork",
-  "version": "0.0.0",
-  "private": true,
+  "version": "2.0.0",
+  "description": "beecork — a from-scratch CLI coding agent: multi-model (OpenRouter), BYOK, path-confined tools, built part by part.",
   "type": "module",
-  "description": "beecork — a CLI coding agent, built slowly, part by part.",
+  "bin": {
+    "beecork": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist/"
+  ],
   "engines": {
     "node": ">=20.12"
   },
@@ -11,10 +17,35 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
-    "eval": "tsx eval/run.ts"
+    "eval": "tsx eval/run.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --banner:js='#!/usr/bin/env node' && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
+  "keywords": [
+    "claude",
+    "coding-agent",
+    "ai-agent",
+    "cli",
+    "openrouter",
+    "llm",
+    "ai",
+    "code",
+    "developer-tools",
+    "byok"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beecork/beecork.git"
+  },
+  "homepage": "https://beecork.com",
+  "bugs": {
+    "url": "https://github.com/beecork/beecork/issues"
+  },
+  "author": "Beecork <hello@beecork.com>",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "esbuild": "^0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
