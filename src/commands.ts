@@ -8,6 +8,7 @@ import { color, stripControl } from "./ui";
 import { estimateTokens } from "./context";
 import { loadLatestSession, listSessions, loadSession, saveUserConfig } from "./memory";
 import { skillNames } from "./skills";
+import { selfUpdate } from "./update";
 import { selectMenu } from "./input";
 import type { Message } from "./types";
 
@@ -17,6 +18,7 @@ export const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: "/context", desc: "conversation size in tokens" },
   { name: "/clear", desc: "clear the conversation" },
   { name: "/key", desc: "set + save your OpenRouter API key" },
+  { name: "/update", desc: "update beecork to the latest version" },
   { name: "/resume", desc: "resume a previous session (pick from a list)" },
   { name: "/good", desc: "rate this conversation good" },
   { name: "/bad", desc: "rate this conversation bad (→ eval/failures)" },
@@ -73,6 +75,14 @@ export async function handleCommand(input: string, messages: Message[]): Promise
         `~${estimateTokens(messages)} tokens in ${messages.length} messages (auto-compacts above ${config.maxContextTokens})`,
       ) + "\n",
     );
+  } else if (cmd === "/update") {
+    console.log(color.dim("updating beecork… (npm install -g beecork@latest)"));
+    const { ok, output } = await selfUpdate();
+    if (ok) console.log(color.green("✓ updated — restart beecork to use the new version.") + "\n");
+    else {
+      console.log(color.red("update failed: ") + output.split("\n").filter(Boolean).slice(-1)[0]);
+      console.log(color.dim("  run manually: npm install -g beecork  (may need sudo / your version manager)") + "\n");
+    }
   } else if (cmd === "/clear") {
     messages.splice(1); // keep the system prompt; drop the conversation history
     if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback + home

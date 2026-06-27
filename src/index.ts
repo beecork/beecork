@@ -8,7 +8,8 @@
 import { writeFile, chmod } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { tildify } from "./paths";
-import { API_KEY, KEY_FROM_PROJECT_ENV, config } from "./config";
+import { API_KEY, config } from "./config";
+import { checkForUpdate, currentVersion, selfUpdate } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
 import { color, printBanner } from "./ui";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
@@ -19,6 +20,19 @@ import { initInput, teardownInput, readPrompt, readChoice, pushKeyHandler } from
 import type { Message } from "./types";
 
 async function main() {
+  // `beecork update` — self-update from the shell, no key/REPL needed.
+  if (process.argv[2] === "update") {
+    console.log("Updating beecork…");
+    const { ok, output } = await selfUpdate();
+    if (ok) console.log(color.green("✓ beecork updated. Run `beecork` to use the new version."));
+    else {
+      console.error(color.red("Update failed:") + "\n" + output);
+      console.error(color.dim("\nTry manually: npm install -g beecork  (you may need sudo, or your Node version manager)."));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   // Resolve keys from env / .env (config.ts) or ~/.beecork/config.json — no
   // console input needed yet. The Brave key is optional (only web_search needs it).
   // These startup loads are independent (none consumes another's result), so run them
@@ -30,10 +44,10 @@ async function main() {
     loadSkills(),           // user-defined slash commands from .beecork/skills/
     loadProjectApprovals(), // per-project "always" from past sessions
   ]);
+  // Key precedence: a real shell env var (explicit), else your saved ~/.beecork key. If neither,
+  // we prompt for it below and save it to ~/.beecork. (A project's .env is never consulted.)
   const savedKey = String(userCfg.OPENROUTER_API_KEY ?? "");
-  // Precedence: a real shell env var is explicit (wins); but a PROJECT .env is lower-trust
-  // than your saved ~/.beecork key, so it must not override it (a cloned repo could swap the key).
-  let apiKey = KEY_FROM_PROJECT_ENV ? savedKey || API_KEY : API_KEY || savedKey;
+  let apiKey = API_KEY || savedKey;
   state.braveKey = process.env.BRAVE_API_KEY || String(userCfg.BRAVE_API_KEY ?? "");
   if (settings.model && !process.env.OPENROUTER_MODEL) state.model = settings.model;
 
@@ -72,6 +86,12 @@ async function main() {
 
   // Show the startup banner FIRST — before any API-key prompt.
   printBanner(state.model, instr.sources.map(tildify));
+  if (tty) {
+    // Non-blocking: shows a notice from the LAST cached check; refreshes in the background.
+    const version = await currentVersion();
+    const newer = await checkForUpdate(version);
+    if (newer) console.log(color.dim(`▸ beecork ${newer} is available (you have ${version}) — update: npm install -g beecork`) + "\n");
+  }
   if (approvedTools.size) {
     console.log(color.dim(`pre-approved tools (won't ask this session): ${[...approvedTools].join(", ")}`) + "\n");
   }
@@ -98,17 +118,12 @@ async function main() {
     }
   }
   if (!apiKey) {
-    console.error("No OpenRouter API key. Set OPENROUTER_API_KEY, add it to .env, or run interactively to paste one.");
+    console.error("No OpenRouter API key. Set the OPENROUTER_API_KEY env var, or run beecork interactively to paste one (saved to ~/.beecork).");
     teardownInput();
     rl?.close();
     process.exit(1);
   }
   state.apiKey = apiKey;
-  // Warn if the key came from a PROJECT .env — a cloned/untrusted repo could ship its own
-  // key to capture your prompts. (~/.beecork/config.json and real env vars are trusted.)
-  if (KEY_FROM_PROJECT_ENV && apiKey === API_KEY && apiKey) {
-    console.log(color.yellow("⚠ Using the OpenRouter API key from this project's .env — not your saved key. If this repo isn't yours, that key (and your prompts) may not be safe.") + "\n");
-  }
 
   // How approvals read the user's answer: a single keypress on a TTY, a readline
   // line off-TTY. askApproval interprets "y"/"a"/anything-else (agent.ts).

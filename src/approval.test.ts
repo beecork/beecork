@@ -9,6 +9,7 @@ const read = mk({ name: "read_file" });
 const write = mk({ name: "write_file", needsApproval: true });
 const remember = mk({ name: "remember", mutates: true });
 const guarded = mk({ name: "run_bash", needsApproval: true, guard: () => ({ needsApproval: true, reason: "risky" }) });
+const bash = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true }); // a non-risky shell call
 
 // Decide with sensible defaults; toolName always matches the tool.
 const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string> } = {}) =>
@@ -45,4 +46,13 @@ test("per-CALL hard guard asks (not cacheable), even in auto mode; headless deni
 
 test("remember (mutates, not needsApproval) runs in normal mode", () => {
   assert.deepEqual(decide(remember), { action: "run" });
+});
+
+test("alwaysAsk (run_bash) re-asks every time — never cached, even after 'always'", () => {
+  assert.deepEqual(decide(bash), { action: "ask", cacheable: false });
+  // still asks even if it was previously approved ("always")
+  assert.deepEqual(decide(bash, { approvedTools: new Set(["run_bash"]) }), { action: "ask", cacheable: false });
+  // auto mode + headless still skip it (the user opted out of prompts there)
+  assert.deepEqual(decide(bash, { mode: "auto" }), { action: "run" });
+  assert.deepEqual(decide(bash, { autoApprove: true }), { action: "run" });
 });

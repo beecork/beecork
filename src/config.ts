@@ -2,32 +2,11 @@
 // every numeric/flag knob can be overridden by an environment variable (the two
 // endpoint URLs are constants).
 
-import { readFileSync } from "node:fs";
-import { parseEnv } from "node:util";
-
-// Apply a project-local .env — but ONLY a safe allowlist of keys. A cloned or
-// otherwise untrusted repo's .env must NOT be able to set security-relevant flags
-// like AUTO_APPROVE or VERIFY_COMMAND: that would let a checked-in file disable the
-// approval gate and inject a shell command that runs after every edit. Those flags
-// (and every other knob below) are read ONLY from the real shell environment, which
-// a repo file can't reach. Real env vars also win — we only fill in what's missing.
-const SAFE_ENV_KEYS = ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "BRAVE_API_KEY"];
-let keyFromProjectEnv = false;
-try {
-  const fromFile = parseEnv(readFileSync(".env", "utf8")) as Record<string, string>;
-  for (const key of SAFE_ENV_KEYS) {
-    if (process.env[key] === undefined && fromFile[key] !== undefined) {
-      process.env[key] = fromFile[key];
-      if (key === "OPENROUTER_API_KEY") keyFromProjectEnv = true; // a cloned repo's .env could substitute the key
-    }
-  }
-} catch {
-  // no .env (or unreadable) — the key may be set some other way
-}
-// True when the OpenRouter key was sourced from a PROJECT .env (not the real env / ~/.beecork).
-// index.ts warns, since a hostile cloned repo could ship its own key to capture your prompts.
-export const KEY_FROM_PROJECT_ENV = keyFromProjectEnv;
-
+// The OpenRouter key comes from a real shell env var OR (preferred) ~/.beecork/config.json via
+// the /key prompt — NEVER from a project's .env file. beecork is a coding agent that runs INSIDE
+// arbitrary projects; the key is the USER's, machine-level, so it must not pick up (or be confused
+// by) whatever .env happens to sit in the working directory. Every knob below likewise reads ONLY
+// the real shell environment, never a checked-in file (which a cloned repo could weaponize).
 export const API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 
 // Curated starter models (shown by `/model` with no argument). Catalog data — lives here

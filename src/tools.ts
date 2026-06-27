@@ -466,13 +466,19 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "run_bash",
-    description: "Run a shell command and return its output. Use for things like running tests or git.",
+    description:
+      "Run a shell command and return its output (tests, git, builds, etc.). You MUST set `explanation` " +
+      "with what the command does and why you need it — the user sees it and approves every run.",
     needsApproval: true,
+    alwaysAsk: true, // shell access is confirmed every time — never silently "always"-cached
     guard: bashGuard, // risky commands (rm/dd/sudo/pipe-to-interpreter…) get the per-call gate
     parameters: {
       type: "object",
-      properties: { command: { type: "string", description: "The shell command to run." } },
-      required: ["command"],
+      properties: {
+        command: { type: "string", description: "The shell command to run." },
+        explanation: { type: "string", description: "One sentence: WHAT this command does and WHY you need it now. Shown to the user before they approve." },
+      },
+      required: ["command", "explanation"],
     },
     run: async (args, signal) => {
       const danger = DANGEROUS_BASH.find((re) => re.test(String(args.command)));

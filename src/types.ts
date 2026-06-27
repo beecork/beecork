@@ -22,6 +22,7 @@ export type ToolDef = {
   // "Error" — the agent loop + ui.summarizeResult detect failure by that prefix. signal = user cancel (Ctrl-C).
   run: (args: Record<string, any>, signal?: AbortSignal) => Promise<string>;
   needsApproval?: boolean; // dangerous tools must be approved before running
+  alwaysAsk?: boolean; // confirm EVERY time — never "always"-cached (e.g. run_bash, so its explanation is always seen)
   mutates?: boolean; // writes to disk / changes state — blocked in read-only mode (even without needsApproval)
   // Per-CALL approval decision (e.g. a path outside the project root). Lets the
   // gate ask about this specific call, not just by tool name.

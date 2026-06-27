@@ -61,7 +61,7 @@ outside (or any shell command) goes through a permission gate.
 
 ### Slash commands
 
-`/model` · `/key` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
+`/model` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
 
 ### Memory
 

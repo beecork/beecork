@@ -60,6 +60,7 @@ async function askApproval(
   console.log(color.yellow(`\n⚠️  The agent wants to use: ${call.function.name}`));
   if (reason) console.log(color.red(`   ⚠ ${reason}`));
   if (call.function.name === "run_bash") {
+    if (args.explanation) console.log("   " + color.cyan(stripControl(String(args.explanation)))); // what + why, from the model
     console.log(color.yellow(`   $ ${stripControl(String(args.command ?? ""))}`));
   } else if (call.function.name === "edit_file") {
     console.log(color.yellow(`   edit ${stripControl(String(args.path ?? ""))}:`));
@@ -106,10 +107,13 @@ export function decideApproval(
     if (ctx.autoApprove) return { action: "deny", kind: "headless", reason: guard.reason ?? "blocked" };
     return { action: "ask", cacheable: false, reason: guard.reason };
   }
-  // per-TOOL gate (write_file / edit_file / run_bash): cacheable via "always". Skipped in
-  // auto mode and headless — but the hard guard above still ran in both.
-  if (tool?.needsApproval && !ctx.approvedTools.has(ctx.toolName) && !ctx.autoApprove && ctx.mode !== "auto") {
-    return { action: "ask", cacheable: true };
+  // per-TOOL gate (write_file / edit_file / run_bash). Skipped in auto mode and headless —
+  // but the hard guard above still ran in both.
+  if (tool?.needsApproval && !ctx.autoApprove && ctx.mode !== "auto") {
+    // alwaysAsk (run_bash) re-confirms EVERY time — never "always"-cached — so the user always
+    // sees its explanation and approves it. Other tools cache the approval via "always".
+    if (tool.alwaysAsk) return { action: "ask", cacheable: false };
+    if (!ctx.approvedTools.has(ctx.toolName)) return { action: "ask", cacheable: true };
   }
   return { action: "run" };
 }
