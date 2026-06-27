@@ -8,7 +8,8 @@
 
 import { config } from "./config";
 import { state } from "./state";
-import { color } from "./ui";
+import { color, startSpinner } from "./ui";
+import { createMarkdownStream } from "./markdown";
 import { TOOLS } from "./tools";
 import type { Message, ToolCall } from "./types";
 
@@ -65,6 +66,15 @@ export async function callModel(messages: Message[], includeTools = true, signal
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // Render the model's markdown to ANSI as it streams (TTY only — eval/piped runs
+    // keep the raw char-stream so their output is unchanged). `content` below still
+    // accumulates the RAW markdown for history; this only changes what the human sees.
+    const md = process.stdout.isTTY ? createMarkdownStream((s) => process.stdout.write(s)) : null;
+
+    // Spin until the first token (or tool call) lands, so a slow / reasoning-heavy
+    // model never looks frozen. Idempotent + TTY-only (no-op in eval/piped runs).
+    const stopSpinner = startSpinner("thinking…");
+
     try {
       for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
         buffer += decoder.decode(chunk, { stream: true });
@@ -88,15 +98,18 @@ export async function callModel(messages: Message[], includeTools = true, signal
           if (!delta) continue;
 
           if (delta.content) {
+            stopSpinner();
             if (!printedText) {
               process.stdout.write("\n" + color.cyan("bot: "));
               printedText = true;
             }
-            process.stdout.write(delta.content);
+            if (md) md.push(delta.content);
+            else process.stdout.write(delta.content);
             content += delta.content;
           }
 
           if (delta.tool_calls) {
+            stopSpinner();
             for (const tc of delta.tool_calls) {
               const i = tc.index ?? 0;
               toolCalls[i] ??= { id: "", type: "function", function: { name: "", arguments: "" } };
@@ -108,6 +121,7 @@ export async function callModel(messages: Message[], includeTools = true, signal
         }
       }
     } catch (err) {
+      stopSpinner();
       if (signal?.aborted) throw err; // user cancelled (Ctrl-C) — don't salvage/retry
       // Stream died mid-way. A plain-text answer with no half-built tool call is
       // usable — salvage it. Otherwise treat as transient and retry below.
@@ -118,8 +132,12 @@ export async function callModel(messages: Message[], includeTools = true, signal
         streamBroke = true;
       }
     }
+    stopSpinner(); // ensure stopped before any further output (idempotent)
 
-    if (printedText) process.stdout.write("\n\n");
+    if (printedText) {
+      if (md) { md.end(); process.stdout.write("\n"); } // flush the last buffered line
+      else process.stdout.write("\n\n");
+    }
 
     // Retry an empty completion (no content, no tool calls) or a broken stream —
     // the truncated-reasoning case that would otherwise no-op the whole turn.

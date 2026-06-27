@@ -7,6 +7,7 @@ import { state } from "./state";
 import { color, RECOMMENDED_MODELS } from "./ui";
 import { estimateTokens } from "./context";
 import { loadLatestSession, saveUserConfig } from "./memory";
+import { skillNames } from "./skills";
 import type { Message } from "./types";
 
 export async function handleCommand(input: string, messages: Message[]): Promise<void> {
@@ -38,6 +39,9 @@ export async function handleCommand(input: string, messages: Message[]): Promise
         `~${estimateTokens(messages)} tokens in ${messages.length} messages (auto-compacts above ${config.maxContextTokens})`,
       ) + "\n",
     );
+  } else if (cmd === "/clear") {
+    messages.splice(1); // keep the system prompt; drop the conversation history
+    console.log(color.dim("conversation cleared (kept the system prompt, your model + settings).") + "\n");
   } else if (cmd === "/resume") {
     const restored = await loadLatestSession();
     if (restored.length) {
@@ -72,10 +76,13 @@ export async function handleCommand(input: string, messages: Message[]): Promise
           "  /models           show recommended starter models",
           "  /models <term>    search the full OpenRouter catalog",
           "  /context          show conversation size (tokens)",
+          "  /clear            clear the conversation (keep settings)",
           "  /key <key>        set + save your OpenRouter API key",
           "  /resume           resume your last session in this folder",
           "  /good  /bad       rate this conversation (saves it; bad → eval/failures)",
+          "  /<name>           run a skill from .beecork/skills/<name>.md (Tab completes)",
           "  /help             show this help",
+          "  Shift+Tab         rotate mode: normal → auto-approve → read-only",
           "  exit              quit",
           "",
         ].join("\n"),
@@ -118,7 +125,13 @@ async function listModels(term: string): Promise<void> {
 }
 
 // --- Tab-completion ---------------------------------------------------------
-const COMMANDS = ["/help", "/model", "/models", "/context", "/key", "/resume", "/good", "/bad"];
+const COMMANDS = ["/help", "/model", "/models", "/context", "/clear", "/key", "/resume", "/good", "/bad"];
+
+// Is this a built-in command? (Built-ins always win over a same-named skill.)
+export function isBuiltin(cmd: string): boolean {
+  return COMMANDS.includes(cmd.startsWith("/") ? cmd : "/" + cmd);
+}
+
 export function completer(line: string): [string[], string] {
   if (line.startsWith("/model ")) {
     const all = RECOMMENDED_MODELS.map((m) => `/model ${m.slug}`);
@@ -126,8 +139,9 @@ export function completer(line: string): [string[], string] {
     return [hits.length ? hits : all, line];
   }
   if (line.startsWith("/")) {
-    const hits = COMMANDS.filter((c) => c.startsWith(line));
-    return [hits.length ? hits : COMMANDS, line];
+    const all = [...COMMANDS, ...skillNames().map((n) => "/" + n)]; // built-ins + user skills
+    const hits = all.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : all, line];
   }
   return [[], line];
 }

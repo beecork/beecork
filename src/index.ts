@@ -6,11 +6,12 @@ import { emitKeypressEvents } from "node:readline";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { API_KEY, config } from "./config";
-import { state, trace } from "./state";
+import { state, trace, nextMode, modeLabel } from "./state";
 import { color, printBanner } from "./ui";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig } from "./memory";
-import { handleCommand, completer } from "./commands";
+import { handleCommand, completer, isBuiltin } from "./commands";
+import { loadSkills, getSkill, expandSkill } from "./skills";
 import type { Message } from "./types";
 
 // Ask a question without echoing the typed answer (for secrets). Best-effort: masks
@@ -43,6 +44,7 @@ async function main() {
   const instr = await loadInstructions();
   const settings = await loadSettings();
   if (settings.model && !process.env.OPENROUTER_MODEL) state.model = settings.model;
+  const skills = await loadSkills(); // user-defined slash commands from .beecork/skills/
 
   // Trusted (~/.beecork) instructions are authoritative; project files travel with a
   // (possibly cloned) repo, so they're framed as lower-trust context that may set
@@ -74,6 +76,9 @@ async function main() {
   }
   if (settings.projectAlwaysAllowIgnored) {
     console.log(color.yellow("⚠ A project .beecork/settings.json tried to pre-approve tools (alwaysAllow) — ignored. Pre-approval is honored only from ~/.beecork/settings.json.") + "\n");
+  }
+  if (skills.length) {
+    console.log(color.dim(`skills: ${skills.map((s) => "/" + s.name).join(" ")}  (run /<name>)`) + "\n");
   }
 
   // First run with no key found → prompt for one and save it (interactive only).
@@ -111,31 +116,59 @@ async function main() {
   process.on("SIGINT", onInterrupt);
   rl.on("SIGINT", onInterrupt);
 
-  // Esc also cancels a running turn (like Claude Code's stop key). Best-effort:
-  // relies on the TTY being in raw mode, which readline keeps while it's active.
+  // The input prompt, with a colored tag when not in normal mode.
+  const promptString = () =>
+    (state.mode === "normal" ? "" : color.yellow(`[${modeLabel(state.mode)}] `)) + color.green("you: ");
+
+  // Esc cancels a running turn (like Claude Code's stop key); Shift+Tab rotates the
+  // permission mode (normal → auto-approve → read-only). Best-effort: relies on the
+  // TTY being in raw mode, which readline keeps while it's active.
   if (process.stdin.isTTY) {
     emitKeypressEvents(process.stdin);
     process.stdin.on("keypress", (_s, key) => {
-      if (key?.name === "escape" && activeTurn) activeTurn.abort();
+      if (!key) return;
+      if (key.name === "escape" && activeTurn) {
+        activeTurn.abort();
+        return;
+      }
+      if (key.name === "tab" && key.shift) {
+        state.mode = nextMode(state.mode);
+        if (activeTurn) {
+          process.stdout.write("\n" + color.yellow(`▸ mode: ${modeLabel(state.mode)}`) + "\n");
+        } else {
+          rl.setPrompt(promptString()); // redraw the prompt with the new mode tag
+          const r = rl as unknown as { _refreshLine?: () => void };
+          if (typeof r._refreshLine === "function") r._refreshLine();
+        }
+      }
     });
   }
 
   while (true) {
     let userInput: string;
     try {
-      userInput = await rl.question(color.green("you: "));
+      userInput = await rl.question(promptString());
     } catch {
       break; // stdin closed (Ctrl+D / piped input ended)
     }
     if (userInput.trim() === "exit") break;
 
     if (userInput.startsWith("/")) {
-      try {
-        await handleCommand(userInput, messages);
-      } catch (err) {
-        console.error(color.red(`[command error] ${(err as Error).message}`) + "\n");
+      const cmdName = userInput.trim().split(/\s+/)[0]; // "/foo bar" → "/foo"
+      const skill = isBuiltin(cmdName) ? undefined : getSkill(cmdName.slice(1));
+      if (skill) {
+        // A skill expands into a normal agent turn — fall through to runTurn below.
+        const extra = userInput.trim().slice(cmdName.length).trim();
+        console.log(color.dim(`▸ skill ${skill.name}${skill.source === "global" ? " (global)" : ""}`));
+        userInput = expandSkill(skill, extra);
+      } else {
+        try {
+          await handleCommand(userInput, messages);
+        } catch (err) {
+          console.error(color.red(`[command error] ${(err as Error).message}`) + "\n");
+        }
+        continue;
       }
-      continue;
     }
 
     activeTurn = new AbortController();

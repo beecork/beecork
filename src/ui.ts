@@ -1,6 +1,7 @@
 // Terminal presentation: colors, the startup banner, and small renderers.
 
 import { homedir } from "node:os";
+import { lineDiff } from "./diff";
 import type { TodoItem } from "./types";
 
 // --- Colors -----------------------------------------------------------------
@@ -14,6 +15,8 @@ export const color = {
   red: paint("31"),
   dim: paint("2"),
   bold: paint("1"),
+  italic: paint("3"),
+  strike: paint("9"),
   brand: (s: string) => (useColor ? `\x1b[38;2;40;158;116m${s}\x1b[0m` : s), // softened logo green
 };
 
@@ -38,6 +41,119 @@ export function renderTodos(items: TodoItem[]): string {
   return items
     .map((t) => `${t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]"} ${t.content}`)
     .join("\n");
+}
+
+// --- Tool activity: readable call lines + concise result summaries ----------
+// Replaces dumping raw JSON. The call line prints before the tool runs; the
+// summary (summarizeResult) completes the same line afterwards, e.g.
+//   edit   src/api.ts  ·  +2 −1
+//   $ npm run typecheck  ·  ✓ 14 lines
+const VERB_W = 7; // pad the verb column so targets line up
+
+export function renderToolCall(name: string, a: Record<string, any>): string {
+  const verb = (v: string, paint: (s: string) => string) => paint(v.padEnd(VERB_W));
+  switch (name) {
+    case "read_file":
+      return verb("read", color.cyan) + String(a.path ?? "") +
+        (a.offset ? color.dim(`  :${a.offset}${a.limit ? `+${a.limit}` : ""}`) : "");
+    case "list_dir":
+      return verb("list", color.cyan) + String(a.path ?? ".");
+    case "search":
+      return verb("search", color.cyan) + color.dim(`"${a.pattern ?? ""}"`) +
+        (a.path ? color.dim(`  in ${a.path}`) : "");
+    case "write_file":
+      return verb("write", color.yellow) + String(a.path ?? "");
+    case "edit_file":
+      return verb("edit", color.yellow) + String(a.path ?? "");
+    case "run_bash":
+      return color.yellow("$ ") + String(a.command ?? "");
+    case "web_fetch":
+      return verb("fetch", color.cyan) + String(a.url ?? "");
+    case "web_search":
+      return verb("web", color.cyan) + color.dim(`"${a.query ?? ""}"`);
+    case "remember":
+      return verb("note", color.cyan) + color.dim(String(a.fact ?? ""));
+    case "update_todos":
+      return color.cyan("plan");
+    default:
+      return color.dim(name);
+  }
+}
+
+function diffCounts(oldText: string, newText: string): { added: number; removed: number } {
+  let added = 0, removed = 0;
+  for (const l of lineDiff(oldText, newText).split("\n")) {
+    if (l.startsWith("+")) added++;
+    else if (l.startsWith("-")) removed++;
+  }
+  return { added, removed };
+}
+
+// A short, dim summary shown after the call line. Computed from the RAW tool
+// result (before any auto-check output is appended). Returns "" to add nothing
+// (todos render their own list).
+export function summarizeResult(name: string, a: Record<string, any>, result: string): string {
+  const errored = result.startsWith("Error");
+  const sep = (s: string) => color.dim("  ·  ") + s;
+  switch (name) {
+    case "read_file": {
+      if (result.startsWith("(")) return sep(color.dim(result.split("\n")[0].replace(/[()]/g, "")));
+      const lines = result.split("\n").filter((l) => /^\s*\d+\s/.test(l)).length;
+      return sep(color.dim(`${lines} line${lines === 1 ? "" : "s"}`));
+    }
+    case "list_dir":
+      return sep(color.dim(result.startsWith("(") ? "empty" : `${result.split("\n").length} entries`));
+    case "search": {
+      if (result.startsWith("No matches")) return sep(color.dim("no matches"));
+      const rows = result.split("\n").filter((l) => /:\d+:/.test(l));
+      const files = new Set(rows.map((l) => l.slice(0, l.indexOf(":"))));
+      return sep(color.dim(`${rows.length} match${rows.length === 1 ? "" : "es"} in ${files.size} file${files.size === 1 ? "" : "s"}`));
+    }
+    case "edit_file": {
+      if (errored) return sep(color.red("no match"));
+      const { added, removed } = diffCounts(String(a.old_text ?? ""), String(a.new_text ?? ""));
+      return sep(color.green(`+${added}`) + " " + color.red(`−${removed}`));
+    }
+    case "write_file": {
+      if (errored) return sep(color.red("failed"));
+      const lines = String(a.content ?? "").split("\n").length;
+      return sep(color.green(`+${lines}`) + color.dim(" lines"));
+    }
+    case "run_bash":
+      if (errored) return sep(color.red("✗ failed"));
+      return sep(result === "(no output)" ? color.green("✓") : color.green("✓") + color.dim(` ${result.split("\n").length} lines`));
+    case "web_fetch":
+      return sep(errored ? color.red("✗") : color.dim(`${result.length} chars`));
+    case "web_search":
+      return sep(result.startsWith("No results") ? color.dim("no results") : color.dim(`${(result.match(/^\d+\./gm) ?? []).length} results`));
+    case "remember":
+      return sep(color.green("✓ saved"));
+    case "update_todos":
+      return "";
+    default:
+      return sep(color.dim(`${result.length} chars`));
+  }
+}
+
+// --- "thinking…" spinner ----------------------------------------------------
+// Shown while waiting for the model's first token (or first tool call) so a slow
+// or reasoning-heavy model never looks frozen. TTY-only — never pollutes piped
+// or eval output. The returned stop() is idempotent.
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+export function startSpinner(label: string): () => void {
+  if (!process.stdout.isTTY || !useColor) return () => {};
+  let i = 0;
+  const draw = () => process.stdout.write("\r  " + color.brand(SPINNER[i = (i + 1) % SPINNER.length]) + " " + color.dim(label));
+  process.stdout.write("\x1b[?25l"); // hide cursor
+  draw();
+  const timer = setInterval(draw, 80);
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    process.stdout.write("\r\x1b[2K\x1b[?25h"); // clear the line + show cursor
+  };
 }
 
 // --- Logo mark --------------------------------------------------------------
