@@ -4,16 +4,16 @@
 import { config } from "./config";
 import { state } from "./state";
 import { color } from "./ui";
-import { openRouterChat } from "./api";
+import { openRouterChat, sleep, isTransientStatus } from "./api";
 import type { Message } from "./types";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Rough token estimate: ~4 characters per token. Good enough to decide WHEN to
 // compact (a precise count needs a model-specific tokenizer + a dependency).
+// Sum lengths directly — don't build the whole transcript string just to measure it.
 export function estimateTokens(messages: Message[]): number {
-  const text = messages.map((m) => (m.content ?? "") + (m.tool_calls ? JSON.stringify(m.tool_calls) : "")).join("");
-  return Math.ceil(text.length / 4);
+  let chars = 0;
+  for (const m of messages) chars += (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+  return Math.ceil(chars / 4);
 }
 
 // Flatten messages into a plain transcript. We summarize TEXT (not structured
@@ -53,7 +53,7 @@ async function summarize(old: Message[], signal?: AbortSignal): Promise<string> 
     try {
       const res = await openRouterChat(body, sig);
       if (!res.ok) {
-        if ((res.status === 429 || res.status >= 500) && attempt < tries) {
+        if (isTransientStatus(res.status) && attempt < tries) {
           await sleep(500 * attempt);
           continue;
         }

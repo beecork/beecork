@@ -1,14 +1,50 @@
-// Slash commands (input starting with "/" controls the program, not the model)
-// and tab-completion.
+// Slash commands (input starting with "/" controls the program, not the model),
+// tab-completion data, and the menu metadata used by the live slash menu.
 
-import { writeFile, mkdir } from "node:fs/promises";
-import { config } from "./config";
+import { writeFile, mkdir, chmod } from "node:fs/promises";
+import { config, RECOMMENDED_MODELS } from "./config";
 import { state } from "./state";
-import { color, RECOMMENDED_MODELS } from "./ui";
+import { color, stripControl } from "./ui";
 import { estimateTokens } from "./context";
-import { loadLatestSession, saveUserConfig } from "./memory";
+import { loadLatestSession, listSessions, loadSession, saveUserConfig } from "./memory";
 import { skillNames } from "./skills";
+import { selectMenu } from "./input";
 import type { Message } from "./types";
+
+// Single source of truth: name + one-line description (shown in the live menu).
+export const SLASH_COMMANDS: { name: string; desc: string }[] = [
+  { name: "/model", desc: "switch model (menu; /model <term> searches)" },
+  { name: "/context", desc: "conversation size in tokens" },
+  { name: "/clear", desc: "clear the conversation" },
+  { name: "/key", desc: "set + save your OpenRouter API key" },
+  { name: "/resume", desc: "resume a previous session (pick from a list)" },
+  { name: "/good", desc: "rate this conversation good" },
+  { name: "/bad", desc: "rate this conversation bad (→ eval/failures)" },
+  { name: "/help", desc: "show this help" },
+];
+const COMMANDS = SLASH_COMMANDS.map((c) => c.name);
+
+// Short relative time ("3m ago") for the /resume session picker.
+function ago(ms: number): string {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (!ms || s < 0) return "unknown";
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Print a restored conversation so the user can SEE what /resume loaded (tool calls/results
+// are omitted to keep it readable — the model still gets the full restored history).
+function replayConversation(msgs: Message[]): void {
+  console.log(color.dim("┄┄┄ resumed conversation ┄┄┄") + "\n");
+  for (const m of msgs) {
+    // stripControl: a project session file is repo-controlled — it must not carry escapes.
+    const c = typeof m.content === "string" ? stripControl(m.content).trim() : "";
+    if (m.role === "user" && c) console.log(color.green("you: ") + c + "\n");
+    else if (m.role === "assistant" && c) console.log(color.cyan("bee: ") + c + "\n");
+  }
+}
 
 export async function handleCommand(input: string, messages: Message[]): Promise<void> {
   const parts = input.trim().split(/\s+/);
@@ -16,11 +52,12 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   const arg = parts.slice(1).join(" ");
 
   if (cmd === "/model") {
-    if (!arg) {
-      console.log(color.cyan(`current model: ${state.model}`) + "\n");
-    } else {
-      state.model = arg;
+    if (!arg) await pickModel();
+    else if (arg.includes("/")) {
+      state.model = arg; // looks like a full slug (vendor/name) — set it directly
       console.log(color.green(`switched to: ${state.model}`) + "\n");
+    } else {
+      await searchModels(arg); // a bare term — search the catalog
     }
   } else if (cmd === "/key") {
     if (!arg) {
@@ -30,9 +67,6 @@ export async function handleCommand(input: string, messages: Message[]): Promise
       await saveUserConfig({ OPENROUTER_API_KEY: arg });
       console.log(color.green("API key updated and saved.") + "\n");
     }
-  } else if (cmd === "/models") {
-    if (!arg) showRecommended();
-    else await listModels(arg);
   } else if (cmd === "/context") {
     console.log(
       color.cyan(
@@ -41,15 +75,36 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     );
   } else if (cmd === "/clear") {
     messages.splice(1); // keep the system prompt; drop the conversation history
+    if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback + home
     console.log(color.dim("conversation cleared (kept the system prompt, your model + settings).") + "\n");
   } else if (cmd === "/resume") {
-    const restored = await loadLatestSession();
-    if (restored.length) {
-      messages.push(...restored);
-      console.log(color.cyan(`resumed ${restored.length} messages from your last session`) + "\n");
+    const sessions = process.stdin.isTTY ? await listSessions() : [];
+    let restored: Message[] = [];
+    if (sessions.length > 1) {
+      // Pick which session to resume.
+      const choice = await selectMenu({
+        title: "resume which session? — ↑/↓ then Enter (Esc to cancel)",
+        items: sessions.map((s) => ({
+          label: s.preview || "(no first message)",
+          value: s.file,
+          hint: `${s.count} msg${s.count === 1 ? "" : "s"} · ${ago(s.when)}`,
+        })),
+      });
+      if (!choice) {
+        console.log(color.dim("resume cancelled") + "\n");
+        return;
+      }
+      restored = await loadSession(choice);
     } else {
-      console.log(color.dim("no previous session to resume in this folder") + "\n");
+      restored = await loadLatestSession();
     }
+    if (!restored.length) {
+      console.log(color.dim("no previous session to resume in this folder") + "\n");
+      return;
+    }
+    messages.splice(1, messages.length, ...restored); // replace conversation (keep system prompt); idempotent
+    replayConversation(restored); // print it so you can SEE what loaded (and confirm the bee has it)
+    console.log(color.green(`↑ resumed ${restored.length} messages — the bee has this context now. Continue below.`) + "\n");
   } else if (cmd === "/good" || cmd === "/bad") {
     // Flywheel capture: save this conversation. A /bad one is a candidate to
     // turn into a new eval task later (you write the checker).
@@ -58,6 +113,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
       await mkdir(dir, { recursive: true });
       const file = `${dir}/${Date.now()}.json`;
       await writeFile(file, JSON.stringify({ rating: cmd.slice(1), model: state.model, messages }, null, 2), "utf8");
+      await chmod(file, 0o600).catch(() => {}); // the transcript may contain file contents / command output
       console.log(
         color.cyan(`saved this conversation → ${file}`) +
           (cmd === "/bad" ? " (turn it into an eval task later)" : "") +
@@ -70,17 +126,14 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     console.log(
       color.cyan(
         [
-          "commands:",
-          "  /model            show the current model",
-          "  /model <slug>     switch model (Tab completes slugs)",
-          "  /models           show recommended starter models",
-          "  /models <term>    search the full OpenRouter catalog",
+          "commands (type / to open the menu):",
+          "  /model            switch model — opens a picker; /model <term> searches the catalog",
           "  /context          show conversation size (tokens)",
           "  /clear            clear the conversation (keep settings)",
           "  /key <key>        set + save your OpenRouter API key",
           "  /resume           resume your last session in this folder",
           "  /good  /bad       rate this conversation (saves it; bad → eval/failures)",
-          "  /<name>           run a skill from .beecork/skills/<name>.md (Tab completes)",
+          "  /<name>           run a skill from .beecork/skills/<name>.md",
           "  /help             show this help",
           "  Shift+Tab         rotate mode: normal → auto-approve → read-only",
           "  exit              quit",
@@ -93,40 +146,68 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   }
 }
 
+// /model with no arg: an arrow-key picker over the recommended models (TTY); a
+// plain printed list otherwise.
+async function pickModel(): Promise<void> {
+  if (!process.stdin.isTTY) return showRecommended();
+  const choice = await selectMenu({
+    title: "switch model — ↑/↓ then Enter (Esc to cancel)",
+    initial: Math.max(0, RECOMMENDED_MODELS.findIndex((m) => m.slug === state.model)),
+    items: RECOMMENDED_MODELS.map((m) => ({
+      label: (m.slug === state.model ? "● " : "  ") + m.slug,
+      value: m.slug,
+      hint: `${m.price}/1M · ${m.note}`,
+    })),
+  });
+  if (choice) console.log(color.green(`switched to: ${(state.model = choice)}`) + "\n");
+}
+
 function showRecommended(): void {
   console.log(color.cyan("recommended models (all support tools):") + "\n");
   for (const m of RECOMMENDED_MODELS) {
     const here = m.slug === state.model ? color.green("●") : " ";
     console.log(`  ${here} ${m.slug.padEnd(30)} ${color.dim(`${m.price.padStart(6)}/1M`)}  ${color.dim(m.note)}`);
   }
-  console.log(`\nswitch:  ${color.cyan("/model <slug>")}    search all:  ${color.cyan("/models <term>")}\n`);
+  console.log(`\nswitch:  ${color.cyan("/model")}  (menu)    search all:  ${color.cyan("/model <term>")}\n`);
 }
 
 type OpenRouterModel = { id: string; supported_parameters?: string[]; pricing?: { prompt?: string } };
 
-async function listModels(term: string): Promise<void> {
+// /model <term>: search the full OpenRouter catalog; pick from a menu (TTY) or print.
+async function searchModels(term: string): Promise<void> {
   try {
-    const res = await fetch(config.modelsUrl);
+    const res = await fetch(config.modelsUrl, { signal: AbortSignal.timeout(config.webTimeoutMs) }); // don't hang forever
     const all = ((await res.json()) as { data?: OpenRouterModel[] }).data ?? [];
-    const matches = all.filter((m) => m.id.includes(term.toLowerCase())).slice(0, 20);
+    const matches = all.filter((m) => m.id.includes(term.toLowerCase())).slice(0, 30);
     if (matches.length === 0) {
       console.log(color.dim(`no models match "${term}"`) + "\n");
       return;
     }
-    for (const m of matches) {
-      const tools = (m.supported_parameters ?? []).includes("tools") ? "🔧" : "  ";
-      const price = m.pricing?.prompt != null ? `$${(parseFloat(m.pricing.prompt) * 1e6).toFixed(2)}/1M in` : "?";
-      console.log(`  ${tools} ${m.id}  ${color.dim(`(${price})`)}`);
+    const priceOf = (m: OpenRouterModel) =>
+      m.pricing?.prompt != null ? `$${(parseFloat(m.pricing.prompt) * 1e6).toFixed(2)}/1M` : "?";
+    if (process.stdin.isTTY) {
+      const choice = await selectMenu({
+        title: `models matching "${term}" — ↑/↓ then Enter (Esc to cancel)`,
+        items: matches.map((m) => ({
+          label: m.id,
+          value: m.id,
+          hint: ((m.supported_parameters ?? []).includes("tools") ? "tools · " : "") + priceOf(m),
+        })),
+      });
+      if (choice) console.log(color.green(`switched to: ${(state.model = choice)}`) + "\n");
+    } else {
+      for (const m of matches) {
+        const tools = (m.supported_parameters ?? []).includes("tools") ? "🔧" : "  ";
+        console.log(`  ${tools} ${m.id}  ${color.dim(`(${priceOf(m)})`)}`);
+      }
+      console.log("");
     }
-    console.log("");
   } catch (err) {
     console.log(color.red(`couldn't fetch models: ${(err as Error).message}`) + "\n");
   }
 }
 
-// --- Tab-completion ---------------------------------------------------------
-const COMMANDS = ["/help", "/model", "/models", "/context", "/clear", "/key", "/resume", "/good", "/bad"];
-
+// --- Tab-completion (non-TTY readline fallback only) ------------------------
 // Is this a built-in command? (Built-ins always win over a same-named skill.)
 export function isBuiltin(cmd: string): boolean {
   return COMMANDS.includes(cmd.startsWith("/") ? cmd : "/" + cmd);

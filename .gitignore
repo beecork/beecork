@@ -4,3 +4,5 @@ dist/
 eval/failures/
 eval/good/
 .beecork/sessions/
+.beecork/memory.md
+audits/

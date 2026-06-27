@@ -4,18 +4,24 @@
 
 import { resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 
 // The project root = the directory beecork was launched in. Canonicalized once.
 export const projectRoot = canonical(resolve(process.cwd()));
+
+// Shorten a path for display: $HOME → "~". (Display only — never use for fs ops.)
+const HOME = homedir();
+export const tildify = (p: string): string => p.replace(HOME, "~");
 
 // Resolve a user-supplied path to an absolute one and decide whether it stays
 // inside the project root. `abs` is what the fs op should use; `inRoot` is the
 // security verdict (false → out of bounds → the agent loop asks for approval).
 export function resolveInRoot(userPath: string): { abs: string; inRoot: boolean } {
-  const abs = resolve(projectRoot, userPath);
-  const real = canonical(abs);
+  const real = canonical(resolve(projectRoot, userPath));
   const inRoot = real === projectRoot || real.startsWith(projectRoot + sep);
-  return { abs, inRoot };
+  // Operate on the CANONICAL path (symlinks in the existing part already resolved), not the
+  // lexical one — so the fs op can't follow a symlink the guard didn't see (TOCTOU).
+  return { abs: real, inRoot };
 }
 
 // Canonicalize a path even if it doesn't fully exist yet (e.g. a new file we're

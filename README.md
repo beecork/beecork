@@ -56,12 +56,12 @@ outside (or any shell command) goes through a permission gate.
 
 ### Tools
 
-`read_file` · `write_file` · `edit_file` · `list_dir` · `search` · `run_bash` ·
+`read_file` · `show` · `write_file` · `edit_file` · `list_dir` · `search` · `run_bash` ·
 `web_fetch` · `web_search` · `update_todos` · `remember`
 
 ### Slash commands
 
-`/model` · `/models` · `/key` · `/context` · `/resume` · `/good` · `/bad` · `/help` · `exit`
+`/model` · `/key` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
 
 ### Memory
 

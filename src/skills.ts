@@ -7,6 +7,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { color } from "./ui";
 
 export type Skill = { name: string; content: string; source: "project" | "global" };
 
@@ -40,7 +41,14 @@ export async function loadSkills(): Promise<Skill[]> {
       if (!/^[a-z0-9][a-z0-9_-]*$/i.test(name)) continue; // safe slug only (it becomes /name)
       try {
         const content = (await readFile(join(dir, e.name), "utf8")).trim();
-        if (content) registry.set(name, { name, content, source });
+        if (!content) continue;
+        // Global (user-owned) skills are higher-trust than project (repo-owned) ones — a
+        // global skill wins on a name clash, and the shadowed project skill is flagged.
+        if (source === "project" && registry.has(name)) {
+          console.error(color.yellow(`⚠ project skill /${name} ignored — a global skill of that name takes precedence`));
+          continue;
+        }
+        registry.set(name, { name, content, source });
       } catch {
         // unreadable — skip
       }

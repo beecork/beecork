@@ -41,7 +41,10 @@ const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MS) || 180_000;
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-export type ToolCall = { tool: string; args: string; step: number };
+// The trace shape the agent serializes (src/types.ts). Aliased to it so a field change can't
+// silently drift from the producer — the harness reads the very file the agent writes.
+import type { TraceEntry } from "../src/types";
+export type ToolCall = TraceEntry;
 
 // A checker returns either a bare boolean (correctness only — the existing 14
 // tasks) or {correct, style}: correctness is the headline score, style is a
@@ -74,7 +77,7 @@ export type Task = {
   maxCalls?: number; // generous efficiency budget (reported, never fails a task)
 };
 
-export type RunResult = { output: string; trace: ToolCall[]; exitCode: number | null; errored: boolean };
+export type RunResult = { output: string; trace: ToolCall[]; errored: boolean };
 export type Status = "pass" | "fail" | "error";
 export type TaskOutcome = {
   task: Task;
@@ -151,6 +154,16 @@ export async function runAgent(dir: string, spec: RunSpec): Promise<RunResult> {
     child.stdout.on("data", onChunk);
     child.stderr.on("data", (d) => (out += d.toString())); // stderr: errors, not prompts
 
+    // A spawn failure (e.g. tsx missing) emits 'error' and NO 'close' — handle it so it
+    // resolves as an ERROR for this task instead of throwing an unhandled exception that
+    // aborts the whole eval run.
+    child.on("error", (err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ output: `${out}\n[harness: spawn failed: ${err.message}]`, trace: [], errored: true });
+    });
+
     child.on("close", async (code) => {
       if (done) return;
       done = true;
@@ -162,14 +175,14 @@ export async function runAgent(dir: string, spec: RunSpec): Promise<RunResult> {
         // no trace (made no tool calls, or crashed before writing it)
       }
       await rm(tracePath, { force: true });
-      const noOp = trace.length === 0 && !/bot: /.test(out); // agent did nothing: no tools, no answer
+      const noOp = trace.length === 0 && !/bee: /.test(out); // agent did nothing: no tools, no answer (prefix is "bee: ")
       const errored =
         code !== 0 ||
         out.trim() === "" ||
         /No OpenRouter API key/.test(out) || // the agent's missing-key message (index.ts)
         /\[error\] /.test(out) || // runTurn's caught-API-error marker
         noOp; // an empty/no-op turn is an infra failure, not a wrong answer → ERROR not FAIL
-      resolve({ output: out, trace, exitCode: code, errored });
+      resolve({ output: out, trace, errored });
     });
   });
 }
@@ -264,6 +277,7 @@ export async function judge(criterion: string, content: string): Promise<boolean
         { role: "user", content: `Criterion: ${criterion}\n\n--- content ---\n${content}\n--- end ---\n\nDoes the content meet the criterion?` },
       ],
     }),
+    signal: AbortSignal.timeout(60_000), // one hung judge call must not stall the whole eval run
   });
   const verdict = ((await res.json()).choices?.[0]?.message?.content ?? "").toUpperCase();
   return verdict.includes("PASS");

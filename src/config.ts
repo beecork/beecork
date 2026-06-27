@@ -12,16 +12,39 @@ import { parseEnv } from "node:util";
 // (and every other knob below) are read ONLY from the real shell environment, which
 // a repo file can't reach. Real env vars also win — we only fill in what's missing.
 const SAFE_ENV_KEYS = ["OPENROUTER_API_KEY", "OPENROUTER_MODEL", "BRAVE_API_KEY"];
+let keyFromProjectEnv = false;
 try {
   const fromFile = parseEnv(readFileSync(".env", "utf8")) as Record<string, string>;
   for (const key of SAFE_ENV_KEYS) {
-    if (process.env[key] === undefined && fromFile[key] !== undefined) process.env[key] = fromFile[key];
+    if (process.env[key] === undefined && fromFile[key] !== undefined) {
+      process.env[key] = fromFile[key];
+      if (key === "OPENROUTER_API_KEY") keyFromProjectEnv = true; // a cloned repo's .env could substitute the key
+    }
   }
 } catch {
   // no .env (or unreadable) — the key may be set some other way
 }
+// True when the OpenRouter key was sourced from a PROJECT .env (not the real env / ~/.beecork).
+// index.ts warns, since a hostile cloned repo could ship its own key to capture your prompts.
+export const KEY_FROM_PROJECT_ENV = keyFromProjectEnv;
 
 export const API_KEY = process.env.OPENROUTER_API_KEY ?? "";
+
+// Curated starter models (shown by `/model` with no argument). Catalog data — lives here
+// (config), not in the presentation module.
+export const RECOMMENDED_MODELS: { slug: string; price: string; note: string }[] = [
+  { slug: "deepseek/deepseek-v4-flash", price: "$0.09", note: "cheap + fast daily driver (default)" },
+  { slug: "openai/gpt-5.4-nano", price: "$0.20", note: "cheap OpenAI" },
+  { slug: "google/gemini-3.1-flash-lite", price: "$0.25", note: "cheap Google" },
+  { slug: "z-ai/glm-4.7", price: "$0.40", note: "strong coder, great value" },
+  { slug: "deepseek/deepseek-v4-pro", price: "$0.43", note: "stronger DeepSeek" },
+  { slug: "z-ai/glm-5.2", price: "$0.95", note: "top agentic coder" },
+  { slug: "anthropic/claude-haiku-4.5", price: "$1.00", note: "fast Claude" },
+  { slug: "x-ai/grok-4.3", price: "$1.25", note: "xAI Grok" },
+  { slug: "google/gemini-3.5-flash", price: "$1.50", note: "capable Google" },
+  { slug: "anthropic/claude-sonnet-4.6", price: "$3.00", note: "top quality (premium)" },
+  { slug: "openai/gpt-5.5", price: "$5.00", note: "OpenAI flagship (premium)" },
+];
 
 // Numeric env knob. Uses the fallback ONLY when unset/blank/non-numeric — so an
 // explicit 0 (e.g. KEEP_RECENT=0) is honored, unlike `Number(env) || fallback`.
@@ -49,6 +72,7 @@ export const config = {
   maxSteps: num("MAX_STEPS", 50), // tool steps per turn (runaway guard)
   loopRepeatLimit: num("LOOP_REPEAT_LIMIT", 3), // identical tool call N× → intervene
   retryAttempts: num("RETRY_ATTEMPTS", 3), // transient API failures
+  apiTimeoutMs: num("API_TIMEOUT_MS", 180_000), // per-attempt model-call timeout (generous for reasoning models)
 
   // Tool operational limits
   execTimeoutMs: num("EXEC_TIMEOUT_MS", 30_000), // run_bash command timeout
@@ -56,6 +80,8 @@ export const config = {
   webTimeoutMs: num("WEB_TIMEOUT_MS", 20_000), // web_fetch / web_search timeout
   maxToolBuffer: num("MAX_TOOL_BUFFER", 1_000_000), // exec stdout/stderr byte cap
   searchMaxResults: num("SEARCH_MAX_RESULTS", 100), // search match cap
+  searchTimeoutMs: num("SEARCH_TIMEOUT_MS", 5_000), // overall search traversal budget
+  searchMaxFileBytes: num("SEARCH_MAX_FILE_BYTES", 2_000_000), // skip files larger than this
 
   // Integrations / modes
   verifyCommand: process.env.VERIFY_COMMAND ?? "", // auto-run after edits (e.g. "npm run typecheck")

@@ -29,7 +29,9 @@ function decodeEntities(s: string): string {
   return s.replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, (m, code: string) => {
     if (code[0] === "#") {
       const n = code[1].toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
-      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+      // fromCodePoint throws on out-of-range/surrogate values — guard so one bad entity
+      // doesn't make the whole page un-fetchable.
+      return Number.isFinite(n) && n >= 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : m;
     }
     return named[code.toLowerCase()] ?? m;
   });

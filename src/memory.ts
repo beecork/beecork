@@ -2,10 +2,11 @@
 // ROOT; the machinery (memory.md, settings.json, sessions/) lives in each folder's
 // .beecork/. We read+merge those plus the global ~/.beecork, with session save/restore.
 
-import { readFile, writeFile, readdir, mkdir, chmod } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, chmod, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { color } from "./ui";
+import { projectRoot, tildify } from "./paths";
 import type { Message } from "./types";
 
 const BEECORK = ".beecork";
@@ -43,18 +44,39 @@ export async function loadInstructions(): Promise<{ trusted: string; project: st
   const trusted: string[] = [];
   const project: string[] = [];
   const sources: string[] = [];
+  // Budget the instruction text so a large checked-in cork.md/memory.md can't silently
+  // tax every request (it lands in the system prompt, which compaction can't trim).
+  const MAX_FILE = 8_000;
+  const MAX_TOTAL = 24_000;
+  let total = 0;
   for (const file of [...corkPaths(), ...beecorkPaths("memory.md")]) {
     try {
-      const content = (await readFile(file, "utf8")).trim();
+      let content = (await readFile(file, "utf8")).trim();
       if (!content) continue;
-      const block = `## From ${file.replace(home, "~")}\n${content}`;
+      if (content.length > MAX_FILE) content = content.slice(0, MAX_FILE) + "\n…(truncated)";
+      if (total + content.length > MAX_TOTAL) content = content.slice(0, Math.max(0, MAX_TOTAL - total)) + "\n…(truncated)";
+      total += content.length;
+      const block = `## From ${tildify(file)}\n${content}`;
       (file.startsWith(homeBeecork) ? trusted : project).push(block);
       sources.push(file);
+      if (total >= MAX_TOTAL) break;
     } catch {
       // missing — skip
     }
   }
   return { trusted: trusted.join("\n\n"), project: project.join("\n\n"), sources };
+}
+
+// Read+parse a JSON config file. Missing → null silently; malformed → warn (don't crash) → null.
+async function readJsonFile(path: string): Promise<Record<string, any> | null> {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(color.yellow(`⚠ ignoring malformed ${tildify(path)}: ${(err as Error).message}`));
+    }
+    return null;
+  }
 }
 
 // Read settings.json. `model` (a harmless preference) may come from any file in the
@@ -68,15 +90,8 @@ export async function loadSettings(): Promise<{ model?: string; alwaysAllow: str
   let alwaysAllow: string[] = [];
   let projectAlwaysAllowIgnored = false;
   for (let i = 0; i < paths.length; i++) {
-    let parsed: Record<string, any>;
-    try {
-      parsed = JSON.parse(await readFile(paths[i], "utf8"));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error(color.yellow(`⚠ ignoring malformed ${paths[i].replace(homedir(), "~")}: ${(err as Error).message}`));
-      }
-      continue; // missing → skip; malformed → warned above
-    }
+    const parsed = await readJsonFile(paths[i]);
+    if (!parsed) continue; // missing → skip; malformed → warned by readJsonFile
     if (typeof parsed.model === "string") model = parsed.model; // later/more-specific wins
     if (Array.isArray(parsed.alwaysAllow)) {
       if (i === 0) alwaysAllow = parsed.alwaysAllow.map(String); // global only
@@ -93,14 +108,7 @@ function userConfigPath(): string {
 }
 
 export async function loadUserConfig(): Promise<Record<string, any>> {
-  try {
-    return JSON.parse(await readFile(userConfigPath(), "utf8"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(color.yellow(`⚠ ignoring malformed ${userConfigPath().replace(homedir(), "~")}: ${(err as Error).message}`));
-    }
-    return {}; // missing → empty; malformed → warned above, then empty
-  }
+  return (await readJsonFile(userConfigPath())) ?? {}; // missing/malformed → empty (warned)
 }
 
 // Merge a patch into config.json (so saving a key doesn't clobber other fields),
@@ -120,23 +128,114 @@ export async function saveUserConfig(patch: Record<string, any>): Promise<void> 
 const sessionsDir = () => join(process.cwd(), BEECORK, "sessions");
 
 // Save a conversation (without the system prompt) to .beecork/sessions/, for /resume.
+// Atomic (temp file + rename) so a crash mid-write can't truncate a session, and owner-only
+// (the transcript may contain file contents / command output the model read).
 export async function saveSession(messages: Message[]): Promise<void> {
   try {
     const dir = sessionsDir();
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${Date.now()}.json`), JSON.stringify(messages), "utf8");
+    const file = join(dir, `${Date.now()}.json`);
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify(messages), "utf8");
+    await chmod(tmp, 0o600).catch(() => {});
+    await rename(tmp, file);
   } catch {
     // best-effort — ignore save errors
   }
 }
 
-// Load the most recent saved session's messages (for /resume).
+// Validate + sanitize a restored session. Sessions are saved WITHOUT the system prompt,
+// so a `system` message in a project session file is planted injection — drop it. Reject
+// the whole session if any message has an invalid shape (don't feed garbage to the model).
+function sanitizeSession(raw: unknown): Message[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Message[] = [];
+  for (const m of raw) {
+    if (!m || typeof m !== "object") return null;
+    const role = (m as { role?: unknown }).role;
+    if (role === "system") continue; // not legitimately in a saved session
+    if (role !== "user" && role !== "assistant" && role !== "tool") return null;
+    const content = (m as { content?: unknown }).content;
+    if (content != null && typeof content !== "string") return null;
+    const msg: Message = { role, content: (content as string) ?? null };
+    const tc = (m as { tool_calls?: unknown }).tool_calls;
+    if (Array.isArray(tc)) msg.tool_calls = tc as Message["tool_calls"];
+    const tcid = (m as { tool_call_id?: unknown }).tool_call_id;
+    if (typeof tcid === "string") msg.tool_call_id = tcid;
+    out.push(msg);
+  }
+  return out;
+}
+
+// Read + validate one session file by name. Returns null on missing/corrupt/invalid.
+async function readSession(file: string): Promise<Message[] | null> {
+  try {
+    return sanitizeSession(JSON.parse(await readFile(join(sessionsDir(), file), "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+// Load the most recent VALID saved session (for /resume), scanning newest→oldest so one
+// corrupt latest file doesn't hide older good sessions.
 export async function loadLatestSession(): Promise<Message[]> {
   try {
     const files = (await readdir(sessionsDir())).filter((f) => f.endsWith(".json")).sort();
-    if (files.length === 0) return [];
-    return JSON.parse(await readFile(join(sessionsDir(), files[files.length - 1]), "utf8"));
+    for (let i = files.length - 1; i >= 0; i--) {
+      const sane = await readSession(files[i]);
+      if (sane && sane.length) return sane;
+    }
+    return [];
   } catch {
     return [];
+  }
+}
+
+// List saved sessions (newest first) with a preview, so /resume can offer a picker.
+export async function listSessions(): Promise<{ file: string; when: number; count: number; preview: string }[]> {
+  try {
+    const files = (await readdir(sessionsDir())).filter((f) => f.endsWith(".json"));
+    const out: { file: string; when: number; count: number; preview: string }[] = [];
+    for (const f of files) {
+      const msgs = await readSession(f);
+      if (!msgs || !msgs.length) continue;
+      const firstUser = msgs.find((m) => m.role === "user");
+      const preview = (firstUser?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      out.push({ file: f, when: Number(f.replace(".json", "")) || 0, count: msgs.length, preview });
+    }
+    return out.sort((a, b) => b.when - a.when);
+  } catch {
+    return [];
+  }
+}
+
+// Load one specific session by filename (validated).
+export async function loadSession(file: string): Promise<Message[]> {
+  return (await readSession(file)) ?? [];
+}
+
+// Per-PROJECT tool pre-approvals (the "always" answer), persisted across restarts but scoped
+// to THIS project's path. Stored in ~/.beecork (the user's own machine) — NOT in the repo — and
+// keyed by the canonical project root, so a cloned/shared repo can't carry a pre-approval.
+function projectApprovalsPath(): string {
+  return join(homedir(), BEECORK, "project-approvals.json");
+}
+export async function loadProjectApprovals(): Promise<string[]> {
+  const all = await readJsonFile(projectApprovalsPath()); // warns on malformed, like the other config readers
+  const list = all?.[projectRoot];
+  return Array.isArray(list) ? list.map(String) : [];
+}
+export async function addProjectApproval(tool: string): Promise<void> {
+  try {
+    const file = projectApprovalsPath();
+    await mkdir(dirname(file), { recursive: true });
+    const all: Record<string, any> = (await readJsonFile(file)) ?? {};
+    const list = new Set<string>(Array.isArray(all[projectRoot]) ? all[projectRoot] : []);
+    list.add(tool);
+    all[projectRoot] = [...list];
+    await writeFile(file, JSON.stringify(all, null, 2), "utf8");
+    await chmod(file, 0o600).catch(() => {});
+  } catch {
+    // best-effort
   }
 }

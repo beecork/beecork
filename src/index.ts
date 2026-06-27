@@ -1,50 +1,41 @@
 // beecork — a CLI coding agent. Entry point: load memory/settings, then run a
 // read-eval loop where each user message becomes one agentic turn.
+//
+// Input: on a TTY we use our own raw-mode editor (src/input.ts) for the live
+// slash menu, command highlighting, history and arrow-key pickers. Off a TTY
+// (piped input) we fall back to Node's readline.
 
+import { writeFile, chmod } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
-import { emitKeypressEvents } from "node:readline";
-import { writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { API_KEY, config } from "./config";
+import { tildify } from "./paths";
+import { API_KEY, KEY_FROM_PROJECT_ENV, config } from "./config";
 import { state, trace, nextMode, modeLabel } from "./state";
 import { color, printBanner } from "./ui";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
-import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig } from "./memory";
-import { handleCommand, completer, isBuiltin } from "./commands";
+import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
+import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
 import { loadSkills, getSkill, expandSkill } from "./skills";
+import { initInput, teardownInput, readPrompt, readChoice, pushKeyHandler } from "./input";
 import type { Message } from "./types";
-
-// Ask a question without echoing the typed answer (for secrets). Best-effort: masks
-// keystrokes via readline's output hook on a TTY, and falls back to a normal prompt
-// if that internal isn't available. Storage is already chmod-600 + excluded from
-// transcripts, so this only guards against shoulder-surfing during entry.
-async function maskedQuestion(rl: ReturnType<typeof createInterface>, query: string): Promise<string> {
-  const i = rl as unknown as { _writeToOutput?: (s: string) => void };
-  const orig = i._writeToOutput?.bind(rl);
-  if (!orig || !process.stdin.isTTY) return rl.question(query);
-  let masking = false;
-  i._writeToOutput = (s: string) => (masking && !/[\r\n]/.test(s) ? orig("*") : orig(s));
-  try {
-    const p = rl.question(query); // writes the prompt synchronously (still visible)
-    masking = true; // …then mask only what the user types
-    return await p;
-  } finally {
-    i._writeToOutput = orig;
-  }
-}
 
 async function main() {
   // Resolve keys from env / .env (config.ts) or ~/.beecork/config.json — no
   // console input needed yet. The Brave key is optional (only web_search needs it).
-  const userCfg = await loadUserConfig();
-  let apiKey = API_KEY || String(userCfg.OPENROUTER_API_KEY ?? "");
+  // These startup loads are independent (none consumes another's result), so run them
+  // together instead of one syscall-chain at a time.
+  const [userCfg, instr, settings, skills, projectApprovals] = await Promise.all([
+    loadUserConfig(),       // ~/.beecork/config.json (API keys)
+    loadInstructions(),     // project memory: cork.md + .beecork/memory.md
+    loadSettings(),         // settings.json (model pref + global alwaysAllow)
+    loadSkills(),           // user-defined slash commands from .beecork/skills/
+    loadProjectApprovals(), // per-project "always" from past sessions
+  ]);
+  const savedKey = String(userCfg.OPENROUTER_API_KEY ?? "");
+  // Precedence: a real shell env var is explicit (wins); but a PROJECT .env is lower-trust
+  // than your saved ~/.beecork key, so it must not override it (a cloned repo could swap the key).
+  let apiKey = KEY_FROM_PROJECT_ENV ? savedKey || API_KEY : API_KEY || savedKey;
   state.braveKey = process.env.BRAVE_API_KEY || String(userCfg.BRAVE_API_KEY ?? "");
-
-  // Load project memory (cork.md) + settings (settings.json) from .beecork.
-  const instr = await loadInstructions();
-  const settings = await loadSettings();
   if (settings.model && !process.env.OPENROUTER_MODEL) state.model = settings.model;
-  const skills = await loadSkills(); // user-defined slash commands from .beecork/skills/
 
   // Trusted (~/.beecork) instructions are authoritative; project files travel with a
   // (possibly cloned) repo, so they're framed as lower-trust context that may set
@@ -62,17 +53,27 @@ async function main() {
   let messages: Message[] = [{ role: "system", content: systemContent }];
 
   const approvedTools = new Set<string>();
-  for (const t of settings.alwaysAllow) approvedTools.add(t);
+  for (const t of settings.alwaysAllow) approvedTools.add(t); // global pre-approvals (~/.beecork/settings.json)
+  for (const t of projectApprovals) approvedTools.add(t); // per-project "always" (loaded above)
 
-  // Create the input interface LATE — just before we might prompt or loop.
-  // (Created earlier, readline swallows piped stdin during the awaits above.)
-  const rl = createInterface({ input: process.stdin, output: process.stdout, completer });
+  // On a TTY we own the keyboard (raw mode). Off a TTY, use readline for piped input.
+  const tty = !!process.stdin.isTTY;
+  if (tty) {
+    initInput();
+    // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
+    // a crash/throw/signal must not leave the shell with a hidden cursor + broken paste.
+    // teardownInput is idempotent and guarded on started/isTTY.
+    process.on("exit", teardownInput);
+    process.on("SIGTERM", () => { teardownInput(); process.exit(143); });
+    process.on("SIGHUP", () => { teardownInput(); process.exit(129); });
+    process.on("uncaughtException", (err) => { teardownInput(); console.error(`[fatal] ${err?.message ?? err}`); process.exit(1); });
+  }
+  const rl = tty ? null : createInterface({ input: process.stdin, output: process.stdout, completer });
 
-  // Show the startup banner FIRST — before any API-key prompt — so the agent
-  // always greets the same way whether or not a key is configured yet.
-  printBanner(state.model, instr.sources.map((s) => s.replace(homedir(), "~")));
+  // Show the startup banner FIRST — before any API-key prompt.
+  printBanner(state.model, instr.sources.map(tildify));
   if (approvedTools.size) {
-    console.log(color.dim(`pre-approved tools (from ~/.beecork/settings.json): ${[...approvedTools].join(", ")}`) + "\n");
+    console.log(color.dim(`pre-approved tools (won't ask this session): ${[...approvedTools].join(", ")}`) + "\n");
   }
   if (settings.projectAlwaysAllowIgnored) {
     console.log(color.yellow("⚠ A project .beecork/settings.json tried to pre-approve tools (alwaysAllow) — ignored. Pre-approval is honored only from ~/.beecork/settings.json.") + "\n");
@@ -81,14 +82,16 @@ async function main() {
     console.log(color.dim(`skills: ${skills.map((s) => "/" + s.name).join(" ")}  (run /<name>)`) + "\n");
   }
 
-  // First run with no key found → prompt for one and save it (interactive only).
-  if (!apiKey && process.stdin.isTTY) {
+  // The input prompt, with a colored tag when not in normal mode.
+  const promptString = () =>
+    (state.mode === "normal" ? "" : color.yellow(`[${modeLabel(state.mode)}] `)) + color.green("you: ");
+  const history: string[] = []; // line-editor history for this session
+
+  // First run with no key found → prompt for one (masked) and save it (TTY only).
+  if (!apiKey && tty) {
     console.log(color.dim("No OpenRouter API key found. Get one at https://openrouter.ai/keys"));
-    try {
-      apiKey = (await maskedQuestion(rl, color.green("Paste your OpenRouter API key: "))).trim();
-    } catch {
-      apiKey = ""; // stdin closed
-    }
+    const r = await readPrompt({ promptString: () => color.green("Paste your OpenRouter API key: "), mask: true });
+    apiKey = r.type === "line" ? r.value.trim() : "";
     if (apiKey) {
       await saveUserConfig({ OPENROUTER_API_KEY: apiKey });
       console.log(color.dim("Saved to ~/.beecork/config.json — you won't be asked again.") + "\n");
@@ -96,62 +99,52 @@ async function main() {
   }
   if (!apiKey) {
     console.error("No OpenRouter API key. Set OPENROUTER_API_KEY, add it to .env, or run interactively to paste one.");
-    rl.close();
+    teardownInput();
+    rl?.close();
     process.exit(1);
   }
   state.apiKey = apiKey;
+  // Warn if the key came from a PROJECT .env — a cloned/untrusted repo could ship its own
+  // key to capture your prompts. (~/.beecork/config.json and real env vars are trusted.)
+  if (KEY_FROM_PROJECT_ENV && apiKey === API_KEY && apiKey) {
+    console.log(color.yellow("⚠ Using the OpenRouter API key from this project's .env — not your saved key. If this repo isn't yours, that key (and your prompts) may not be safe.") + "\n");
+  }
 
-  // Ctrl-C cancels a RUNNING turn (keeping the session alive); at the prompt it
-  // quits. Registered on both process + readline because which one receives the
-  // interrupt depends on whether the terminal is in raw mode at that moment.
+  // How approvals read the user's answer: a single keypress on a TTY, a readline
+  // line off-TTY. askApproval interprets "y"/"a"/anything-else (agent.ts).
+  const ask = tty ? (q: string) => readChoice(q) : (q: string) => rl!.question(q);
+
   let activeTurn: AbortController | null = null;
-  const onInterrupt = () => {
-    if (activeTurn) {
-      activeTurn.abort();
-    } else {
-      console.log();
-      rl.close();
-    }
-  };
-  process.on("SIGINT", onInterrupt);
-  rl.on("SIGINT", onInterrupt);
-
-  // The input prompt, with a colored tag when not in normal mode.
-  const promptString = () =>
-    (state.mode === "normal" ? "" : color.yellow(`[${modeLabel(state.mode)}] `)) + color.green("you: ");
-
-  // Esc cancels a running turn (like Claude Code's stop key); Shift+Tab rotates the
-  // permission mode (normal → auto-approve → read-only). Best-effort: relies on the
-  // TTY being in raw mode, which readline keeps while it's active.
-  if (process.stdin.isTTY) {
-    emitKeypressEvents(process.stdin);
-    process.stdin.on("keypress", (_s, key) => {
-      if (!key) return;
-      if (key.name === "escape" && activeTurn) {
-        activeTurn.abort();
-        return;
-      }
-      if (key.name === "tab" && key.shift) {
-        state.mode = nextMode(state.mode);
-        if (activeTurn) {
-          process.stdout.write("\n" + color.yellow(`▸ mode: ${modeLabel(state.mode)}`) + "\n");
-        } else {
-          rl.setPrompt(promptString()); // redraw the prompt with the new mode tag
-          const r = rl as unknown as { _refreshLine?: () => void };
-          if (typeof r._refreshLine === "function") r._refreshLine();
-        }
-      }
+  // Off-TTY (cooked mode) Ctrl-C arrives as SIGINT; on a TTY it's a keypress,
+  // handled by the line editor (at the prompt) or the turn handler (mid-turn).
+  if (!tty) {
+    process.on("SIGINT", () => {
+      if (activeTurn) activeTurn.abort();
+      else { rl?.close(); process.exit(0); }
     });
   }
 
   while (true) {
     let userInput: string;
-    try {
-      userInput = await rl.question(promptString());
-    } catch {
-      break; // stdin closed (Ctrl+D / piped input ended)
+    if (tty) {
+      const r = await readPrompt({
+        promptString,
+        commands: SLASH_COMMANDS,
+        skills: skills.map((s) => s.name),
+        history,
+        onShiftTab: () => { state.mode = nextMode(state.mode); }, // readPrompt re-renders with the new tag
+      });
+      if (r.type !== "line") break; // quit (Ctrl-C on empty line) or EOF (Ctrl-D)
+      userInput = r.value;
+    } else {
+      try {
+        userInput = await rl!.question(promptString());
+      } catch {
+        break; // stdin closed
+      }
     }
     if (userInput.trim() === "exit") break;
+    if (!userInput.trim()) continue;
 
     if (userInput.startsWith("/")) {
       const cmdName = userInput.trim().split(/\s+/)[0]; // "/foo bar" → "/foo"
@@ -172,20 +165,41 @@ async function main() {
     }
 
     activeTurn = new AbortController();
+    let modeChangedMidTurn = false;
+    // While a turn runs: Esc / Ctrl-C abort it; Shift+Tab rotates the mode.
+    const restoreKeys = tty
+      ? pushKeyHandler((_s, key) => {
+          if (!key) return;
+          if (key.name === "escape" || (key.ctrl && key.name === "c")) activeTurn?.abort();
+          // Change the mode silently mid-turn (printing here could split a half-written tool
+          // action line). The confirmation prints after the turn; the prompt tag also updates.
+          else if (key.name === "tab" && key.shift) {
+            state.mode = nextMode(state.mode);
+            modeChangedMidTurn = true;
+          }
+        })
+      : () => {};
     try {
-      messages = await runTurn(messages, userInput, rl, approvedTools, activeTurn.signal);
+      messages = await runTurn(messages, userInput, ask, approvedTools, activeTurn.signal);
     } finally {
+      restoreKeys();
       activeTurn = null;
+      if (modeChangedMidTurn) console.log(color.yellow(`▸ mode: ${modeLabel(state.mode)}`));
     }
   }
 
+  teardownInput(); // restore the terminal BEFORE any save can fail
+  rl?.close();
   if (messages.length > 1 && !config.traceFile) await saveSession(messages.slice(1));
-  rl.close();
-  if (config.traceFile) await writeFile(config.traceFile, JSON.stringify(trace), "utf8");
+  if (config.traceFile) {
+    await writeFile(config.traceFile, JSON.stringify(trace), "utf8");
+    await chmod(config.traceFile, 0o600).catch(() => {}); // may contain tool output the model read
+  }
   console.log(color.dim("bye!"));
 }
 
 main().catch((err) => {
+  teardownInput(); // restore the terminal on a fatal error too
   console.error(`[fatal] ${(err as Error)?.message ?? err}`);
   process.exit(1);
 });
