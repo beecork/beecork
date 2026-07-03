@@ -11,7 +11,7 @@ import { tildify } from "./paths";
 import { API_KEY, config } from "./config";
 import { checkForUpdate, currentVersion, selfUpdate } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
-import { color, printBanner } from "./ui";
+import { color, printBanner, stripControl } from "./ui";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
@@ -33,7 +33,7 @@ async function main() {
     return;
   }
 
-  // Resolve keys from env / .env (config.ts) or ~/.beecork/config.json — no
+  // Resolve keys from the shell environment (config.ts) or ~/.beecork/config.json — no
   // console input needed yet. The Brave key is optional (only web_search needs it).
   // These startup loads are independent (none consumes another's result), so run them
   // together instead of one syscall-chain at a time.
@@ -70,17 +70,36 @@ async function main() {
   for (const t of settings.alwaysAllow) approvedTools.add(t); // global pre-approvals (~/.beecork/settings.json)
   for (const t of projectApprovals) approvedTools.add(t); // per-project "always" (loaded above)
 
+  // Persist the transcript (or trace) — used on the clean exit AND before an abrupt one
+  // (SIGTERM/SIGHUP/crash) so closing the terminal doesn't discard the conversation. Idempotent.
+  let saved = false;
+  const persist = async () => {
+    if (saved) return;
+    saved = true;
+    try {
+      if (config.traceFile) {
+        await writeFile(config.traceFile, JSON.stringify(trace), "utf8");
+        await chmod(config.traceFile, 0o600).catch(() => {}); // may contain tool output the model read
+      } else if (messages.length > 1) {
+        await saveSession(messages.slice(1));
+      }
+    } catch {
+      // best-effort — never let a save failure mask the real exit reason
+    }
+  };
+
   // On a TTY we own the keyboard (raw mode). Off a TTY, use readline for piped input.
   const tty = !!process.stdin.isTTY;
   if (tty) {
     initInput();
     // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
     // a crash/throw/signal must not leave the shell with a hidden cursor + broken paste.
-    // teardownInput is idempotent and guarded on started/isTTY.
+    // teardownInput is idempotent and guarded on started/isTTY. Also best-effort save the
+    // session so an abrupt exit (terminal close = SIGHUP, kill = SIGTERM, crash) isn't lost.
     process.on("exit", teardownInput);
-    process.on("SIGTERM", () => { teardownInput(); process.exit(143); });
-    process.on("SIGHUP", () => { teardownInput(); process.exit(129); });
-    process.on("uncaughtException", (err) => { teardownInput(); console.error(`[fatal] ${err?.message ?? err}`); process.exit(1); });
+    process.on("SIGTERM", () => { teardownInput(); void persist().finally(() => process.exit(143)); });
+    process.on("SIGHUP", () => { teardownInput(); void persist().finally(() => process.exit(129)); });
+    process.on("uncaughtException", (err) => { teardownInput(); console.error(`[fatal] ${err?.message ?? err}`); void persist().finally(() => process.exit(1)); });
   }
   const rl = tty ? null : createInterface({ input: process.stdin, output: process.stdout, completer });
 
@@ -90,7 +109,7 @@ async function main() {
     // Non-blocking: shows a notice from the LAST cached check; refreshes in the background.
     const version = await currentVersion();
     const newer = await checkForUpdate(version);
-    if (newer) console.log(color.dim(`▸ beecork ${newer} is available (you have ${version}) — update: npm install -g beecork`) + "\n");
+    if (newer) console.log(color.dim(`▸ beecork ${stripControl(newer)} is available (you have ${version}) — update: npm install -g beecork`) + "\n");
   }
   if (approvedTools.size) {
     console.log(color.dim(`pre-approved tools (won't ask this session): ${[...approvedTools].join(", ")}`) + "\n");
@@ -134,8 +153,10 @@ async function main() {
   // handled by the line editor (at the prompt) or the turn handler (mid-turn).
   if (!tty) {
     process.on("SIGINT", () => {
-      if (activeTurn) activeTurn.abort();
-      else { rl?.close(); process.exit(0); }
+      // First Ctrl-C during a turn cancels it; a second (signal already aborted, turn not yet
+      // unwound) or one at the prompt force-exits — so an unresponsive turn can't trap the user.
+      if (activeTurn && !activeTurn.signal.aborted) activeTurn.abort();
+      else { void persist().finally(() => { rl?.close(); process.exit(130); }); }
     });
   }
 
@@ -205,11 +226,7 @@ async function main() {
 
   teardownInput(); // restore the terminal BEFORE any save can fail
   rl?.close();
-  if (messages.length > 1 && !config.traceFile) await saveSession(messages.slice(1));
-  if (config.traceFile) {
-    await writeFile(config.traceFile, JSON.stringify(trace), "utf8");
-    await chmod(config.traceFile, 0o600).catch(() => {}); // may contain tool output the model read
-  }
+  await persist();
   console.log(color.dim("bye!"));
 }
 

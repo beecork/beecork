@@ -22,8 +22,8 @@ export async function currentVersion(): Promise<string> {
   }
 }
 
-// a > b for simple x.y.z versions (prerelease tags ignored — fine for our scheme).
-function isNewer(a: string, b: string): boolean {
+// a > b for simple x.y.z versions (prerelease tags ignored — fine for our scheme). Exported for tests.
+export function isNewer(a: string, b: string): boolean {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < 3; i++) {
@@ -41,7 +41,10 @@ async function fetchLatest(): Promise<string | null> {
     });
     if (!res.ok) return null;
     const v = ((await res.json()) as { version?: string })?.version;
-    return typeof v === "string" ? v : null;
+    // Only accept a clean semver-shaped string. This both rejects garbage and guarantees the
+    // value (later printed to the terminal) carries no control/escape bytes — a registry
+    // response can't smuggle a cursor-move/OSC spoof through the "update available" notice.
+    return typeof v === "string" && /^\d+\.\d+\.\d+[\w.+-]*$/.test(v) ? v : null;
   } catch {
     return null;
   }
@@ -76,13 +79,21 @@ export async function checkForUpdate(current: string): Promise<string | null> {
 // Run `npm install -g beecork@latest` for the user (the `beecork update` command + the /update
 // slash command). User-initiated, so running the install on their behalf is fine; if it fails
 // (a sudo / version-manager permission setup), we hand back the output so they can run it manually.
-export function selfUpdate(): Promise<{ ok: boolean; output: string }> {
+// A timeout kills a hung install so /update can't freeze the REPL indefinitely.
+export function selfUpdate(timeoutMs = 120_000): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn("npm", ["install", "-g", "beecork@latest"], { stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
+    // Windows resolves the binary as `npm.cmd`; a bare "npm" spawn (no shell) ENOENTs there.
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    const child = spawn(npm, ["install", "-g", "beecork@latest"], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", done = false;
+    const finish = (r: { ok: boolean; output: string }) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      finish({ ok: false, output: `${out.trim()}\n(update timed out after ${timeoutMs}ms — run manually: npm install -g beecork@latest)`.trim() });
+    }, timeoutMs);
     child.stdout?.on("data", (d: Buffer) => (out += d));
     child.stderr?.on("data", (d: Buffer) => (out += d));
-    child.on("error", (e) => resolve({ ok: false, output: e.message }));
-    child.on("close", (code) => resolve({ ok: code === 0, output: out.trim() }));
+    child.on("error", (e) => finish({ ok: false, output: e.message }));
+    child.on("close", (code) => finish({ ok: code === 0, output: out.trim() }));
   });
 }

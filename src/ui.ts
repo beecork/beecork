@@ -109,7 +109,7 @@ export function renderToolCall(name: string, a: Record<string, any>): string {
     case "update_todos":
       return color.cyan("plan");
     default:
-      return color.dim(name);
+      return color.dim(stripControl(name)); // model-supplied tool name (unknown tool) — strip escapes
   }
 }
 
@@ -139,15 +139,19 @@ export function diffPreview(diff: string): string {
 export function summarizeResult(name: string, a: Record<string, any>, result: string): string {
   const errored = result.startsWith("Error");
   const sep = (s: string) => color.dim("  ·  ") + s;
+  const failed = sep(color.red("✗ failed")); // a failed call must not read as a success ("0 lines")
   switch (name) {
     case "read_file": {
+      if (errored) return failed;
       if (result.startsWith("(")) return sep(color.dim(result.split("\n")[0].replace(/[()]/g, "")));
       const lines = result.split("\n").filter((l) => /^\s*\d+\s/.test(l)).length;
       return sep(color.dim(`${lines} line${lines === 1 ? "" : "s"}`));
     }
     case "list_dir":
+      if (errored) return failed;
       return sep(color.dim(result.startsWith("(") ? "empty" : `${result.split("\n").length} entries`));
     case "search": {
+      if (errored) return failed;
       if (result.startsWith("No matches")) return sep(color.dim("no matches"));
       const rows = result.split("\n").filter((l) => /:\d+:/.test(l));
       const files = new Set(rows.map((l) => l.slice(0, l.indexOf(":"))));
@@ -236,6 +240,7 @@ export function markLines(width: number): string[] {
 
 // --- Startup banner ---------------------------------------------------------
 export function printBanner(model: string, sources: string[]): void {
+  const safeModel = stripControl(model); // model can come from a lower-trust project settings.json — strip escapes
   const word = [
     "  _                              _    ",
     " | |__   ___  ___  ___ ___  _ __| | __",
@@ -272,7 +277,7 @@ export function printBanner(model: string, sources: string[]): void {
   const rows: [string, string][] = [
     ["", "🐝  a tiny CLI coding agent"],
     ["dir", cwd],
-    ["model", model],
+    ["model", safeModel],
     ["cork.md", cork.length ? cork.join(", ") : "none"],
     ["memory", mem.length ? mem.join(", ") : ".beecork/memory.md (empty)"],
     ["cmds", "/help · Shift+Tab (mode) · exit"],

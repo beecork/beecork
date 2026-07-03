@@ -20,7 +20,7 @@ export function modeLabel(m: Mode): string {
 
 export const state = {
   model: config.defaultModel, // changed at runtime via the /model command
-  apiKey: "", // resolved at startup in index.ts: env/.env → ~/.beecork/config.json → prompt
+  apiKey: "", // resolved at startup in index.ts: shell env → ~/.beecork/config.json → prompt
   braveKey: "", // resolved at startup in index.ts: env / config.json (for web_search)
   // rotated with Shift+Tab; an initial mode can be set headlessly via BEECORK_MODE (for tests/eval)
   mode: (MODES.includes(process.env.BEECORK_MODE as Mode) ? (process.env.BEECORK_MODE as Mode) : "normal"),

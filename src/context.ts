@@ -23,7 +23,9 @@ export function transcript(messages: Message[]): string {
     .map((m) => {
       if (m.role === "tool") return `[tool result] ${m.content ?? ""}`;
       if (m.tool_calls?.length) {
-        return `assistant called: ${m.tool_calls.map((t) => `${t.function.name}(${t.function.arguments})`).join(", ")}`;
+        const called = `assistant called: ${m.tool_calls.map((t) => `${t.function.name}(${t.function.arguments})`).join(", ")}`;
+        // Keep the assistant's accompanying text (its reasoning) — a message can have both.
+        return m.content ? `assistant: ${m.content}\n${called}` : called;
       }
       return `${m.role}: ${m.content ?? ""}`;
     })
@@ -86,8 +88,16 @@ export function compactionStart(messages: Message[], keepRecent: number): number
 export async function compactIfNeeded(messages: Message[], signal?: AbortSignal): Promise<Message[]> {
   if (estimateTokens(messages) <= config.maxContextTokens) return messages;
 
-  const start = compactionStart(messages, config.keepRecent);
-  if (start <= 1) return messages; // nothing old enough to summarize
+  // Normally keep `keepRecent` messages verbatim. But if the recent tail alone is over budget,
+  // shrink how many we keep so compaction still makes progress (rather than sending an
+  // over-budget request that the provider rejects). Floor at 2 so we never drop the newest exchange.
+  let keep = config.keepRecent;
+  let start = compactionStart(messages, keep);
+  while (start <= 1 && keep > 2) {
+    keep = Math.max(2, Math.floor(keep / 2));
+    start = compactionStart(messages, keep);
+  }
+  if (start <= 1) return messages; // truly nothing old enough to summarize (only system + one user)
 
   const system = messages[0];
   const old = messages.slice(1, start);

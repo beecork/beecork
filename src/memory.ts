@@ -111,17 +111,29 @@ export async function loadUserConfig(): Promise<Record<string, any>> {
   return (await readJsonFile(userConfigPath())) ?? {}; // missing/malformed → empty (warned)
 }
 
-// Merge a patch into config.json (so saving a key doesn't clobber other fields),
-// then lock the file to owner-only — it holds secrets.
+// Merge a patch into config.json (so saving a key doesn't clobber other fields). Written
+// atomically via a temp file created owner-only (mode 0600) then renamed — so the secret is
+// never briefly world-readable (default umask) and a crash mid-write can't truncate it.
 export async function saveUserConfig(patch: Record<string, any>): Promise<void> {
   const file = userConfigPath();
   await mkdir(dirname(file), { recursive: true });
   const merged = { ...(await loadUserConfig()), ...patch };
-  await writeFile(file, JSON.stringify(merged, null, 2), "utf8");
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, JSON.stringify(merged, null, 2), { encoding: "utf8", mode: 0o600 });
+  await chmod(tmp, 0o600).catch(() => {}); // enforce owner-only even if umask/pre-existing tmp differed
+  await rename(tmp, file);
+}
+
+// Persist the chosen model to the global settings.json (merge, so alwaysAllow etc. survive), so
+// /model sticks across restarts like /key does. Best-effort — a save failure never breaks the session.
+export async function saveModelPreference(model: string): Promise<void> {
   try {
-    await chmod(file, 0o600); // owner read/write only
+    const file = join(homedir(), BEECORK, "settings.json");
+    await mkdir(dirname(file), { recursive: true });
+    const current = (await readJsonFile(file)) ?? {};
+    await writeFile(file, JSON.stringify({ ...current, model }, null, 2), "utf8");
   } catch {
-    // best-effort (e.g. Windows) — ignore
+    // best-effort
   }
 }
 
@@ -147,7 +159,8 @@ export async function saveSession(messages: Message[]): Promise<void> {
 // Validate + sanitize a restored session. Sessions are saved WITHOUT the system prompt,
 // so a `system` message in a project session file is planted injection — drop it. Reject
 // the whole session if any message has an invalid shape (don't feed garbage to the model).
-function sanitizeSession(raw: unknown): Message[] | null {
+// Exported for the trust-tier regression test (safety-critical: it strips planted system roles).
+export function sanitizeSession(raw: unknown): Message[] | null {
   if (!Array.isArray(raw)) return null;
   const out: Message[] = [];
   for (const m of raw) {
@@ -170,7 +183,10 @@ function sanitizeSession(raw: unknown): Message[] | null {
 // Read + validate one session file by name. Returns null on missing/corrupt/invalid.
 async function readSession(file: string): Promise<Message[] | null> {
   try {
-    return sanitizeSession(JSON.parse(await readFile(join(sessionsDir(), file), "utf8")));
+    const path = join(sessionsDir(), file);
+    const parsed = sanitizeSession(JSON.parse(await readFile(path, "utf8")));
+    await chmod(path, 0o600).catch(() => {}); // lock down sessions written before the 0600 hardening
+    return parsed;
   } catch {
     return null;
   }

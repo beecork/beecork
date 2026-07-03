@@ -2,7 +2,8 @@
 // `.beecork/skills/<name>.md` (project) or `~/.beecork/skills/<name>.md` (global).
 // Invoking `/<name> [extra]` runs an agent turn whose prompt is the file's text
 // (with `$ARGUMENTS` substituted, or the extra appended). A built-in command of
-// the same name always wins; a project skill overrides a global one of the same name.
+// the same name always wins; a GLOBAL (user-owned, higher-trust) skill overrides a
+// project (repo-owned) one of the same name — a cloned repo can't shadow your skill.
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";

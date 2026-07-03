@@ -6,7 +6,7 @@ import { config, RECOMMENDED_MODELS } from "./config";
 import { state } from "./state";
 import { color, stripControl } from "./ui";
 import { estimateTokens } from "./context";
-import { loadLatestSession, listSessions, loadSession, saveUserConfig } from "./memory";
+import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference } from "./memory";
 import { skillNames } from "./skills";
 import { selfUpdate } from "./update";
 import { selectMenu } from "./input";
@@ -25,6 +25,13 @@ export const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: "/help", desc: "show this help" },
 ];
 const COMMANDS = SLASH_COMMANDS.map((c) => c.name);
+
+// Set + persist the active model so the choice sticks across restarts (like /key). Returns the slug.
+function applyModel(slug: string): string {
+  state.model = slug;
+  void saveModelPreference(slug);
+  return slug;
+}
 
 // Short relative time ("3m ago") for the /resume session picker.
 function ago(ms: number): string {
@@ -56,7 +63,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   if (cmd === "/model") {
     if (!arg) await pickModel();
     else if (arg.includes("/")) {
-      state.model = arg; // looks like a full slug (vendor/name) — set it directly
+      applyModel(arg); // looks like a full slug (vendor/name) — set it directly (and persist)
       console.log(color.green(`switched to: ${state.model}`) + "\n");
     } else {
       await searchModels(arg); // a bare term — search the catalog
@@ -133,24 +140,17 @@ export async function handleCommand(input: string, messages: Message[]): Promise
       console.log(color.red(`couldn't save: ${(err as Error).message}`) + "\n");
     }
   } else if (cmd === "/help") {
-    console.log(
-      color.cyan(
-        [
-          "commands (type / to open the menu):",
-          "  /model            switch model — opens a picker; /model <term> searches the catalog",
-          "  /context          show conversation size (tokens)",
-          "  /clear            clear the conversation (keep settings)",
-          "  /key <key>        set + save your OpenRouter API key",
-          "  /resume           resume your last session in this folder",
-          "  /good  /bad       rate this conversation (saves it; bad → eval/failures)",
-          "  /<name>           run a skill from .beecork/skills/<name>.md",
-          "  /help             show this help",
-          "  Shift+Tab         rotate mode: normal → auto-approve → read-only",
-          "  exit              quit",
-          "",
-        ].join("\n"),
-      ),
-    );
+    // Generated from SLASH_COMMANDS (the single source of truth the live menu also uses) so
+    // /help can't drift out of sync, plus the non-command extras (skills, keys) below.
+    const lines = [
+      "commands (type / to open the menu):",
+      ...SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)}  ${c.desc}`),
+      `  ${"/<name>".padEnd(16)}  run a skill from .beecork/skills/<name>.md`,
+      `  ${"Shift+Tab".padEnd(16)}  rotate mode: normal → auto-approve → read-only`,
+      `  ${"exit".padEnd(16)}  quit`,
+      "",
+    ];
+    console.log(color.cyan(lines.join("\n")));
   } else {
     console.log(color.red(`unknown command: ${cmd} (try /help)`) + "\n");
   }
@@ -169,7 +169,7 @@ async function pickModel(): Promise<void> {
       hint: `${m.price}/1M · ${m.note}`,
     })),
   });
-  if (choice) console.log(color.green(`switched to: ${(state.model = choice)}`) + "\n");
+  if (choice) console.log(color.green(`switched to: ${applyModel(choice)}`) + "\n");
 }
 
 function showRecommended(): void {
@@ -204,7 +204,7 @@ async function searchModels(term: string): Promise<void> {
           hint: ((m.supported_parameters ?? []).includes("tools") ? "tools · " : "") + priceOf(m),
         })),
       });
-      if (choice) console.log(color.green(`switched to: ${(state.model = choice)}`) + "\n");
+      if (choice) console.log(color.green(`switched to: ${applyModel(choice)}`) + "\n");
     } else {
       for (const m of matches) {
         const tools = (m.supported_parameters ?? []).includes("tools") ? "🔧" : "  ";

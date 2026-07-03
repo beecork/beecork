@@ -1,10 +1,12 @@
 // The security surface, in one place: what a reviewer must audit to trust the tools.
 // Path confinement gating, secret-file gating, the two-tier shell-command lists +
 // out-of-root detection, and the SSRF private-address check. All pure / near-pure
-// (a resolveInRoot canonicalization is the only IO) and regression-tested in safety.test.ts.
+// (a resolveInRoot canonicalization is the only IO). The pure predicates
+// (bashSafety, isPrivateAddr) and the secret-file gate are regression-tested in safety.test.ts.
 // The tool registry (tools.ts) imports these to wire into each tool's guard.
 
 import { homedir } from "node:os";
+import { basename } from "node:path";
 import { resolveInRoot } from "./paths";
 
 // A file tool whose path lands outside the project root needs explicit approval.
@@ -14,17 +16,34 @@ export function pathGuard(args: Record<string, any>): { needsApproval?: boolean;
 }
 
 // Files whose contents are secrets. read_file/show route these through approval even when
-// in-root, and `search` skips them — so prompt-injected content can't silently read a key
-// and exfiltrate it (e.g. via web_fetch).
-export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[\w.-]*\.(pem|key|secret)|id_(rsa|ed25519|ecdsa|dsa)|credentials|\.npmrc|\.netrc)$/i;
-export function readGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
+// in-root, `search` skips them, and write_file/edit_file route through it too (a planted
+// .npmrc / overwritten .env is as dangerous as a leaked read) — so prompt-injected content
+// can't silently read a key and exfiltrate it (e.g. via web_fetch) or plant credentials.
+// `env` is in the extension group so `prod.env` / `config.env` are covered too, not just the
+// `.env` dotfile; the leading `\.env(\.…)?` still handles `.env` and `.env.local` / `.env.production`.
+export const SECRET_FILE = /(^|\/)(\.env(\.[\w.-]+)?|[\w.-]*\.(env|pem|key|secret|pfx|p12|jks|keystore)|id_(rsa|ed25519|ecdsa|dsa)|credentials|\.git-credentials|\.pgpass|\.npmrc|\.netrc)$/i;
+
+// Does a user-supplied path resolve to a secrets file? Tests the CANONICAL resolved path
+// (resolveInRoot already followed any symlinks), not the raw argument — otherwise an in-root
+// symlink whose name doesn't match (notes.txt → ./prod.env) would slip a real secret past the gate.
+function isSecretPath(userPath: string): boolean {
+  const { abs } = resolveInRoot(userPath);
+  return SECRET_FILE.test(abs) || SECRET_FILE.test(basename(abs)); // basename covers a non-"/" separator
+}
+
+// The gate for reads AND writes/edits: outside-root or secret-file → a per-CALL prompt
+// (never "always"-cached; hard-denied in headless), so no secret is read or clobbered silently.
+export function secretGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
   const p = pathGuard(args);
   if (p.needsApproval) return p;
   const path = String(args.path ?? "");
-  return SECRET_FILE.test(path)
-    ? { needsApproval: true, reason: `this looks like a secrets file (${path}) — approve before reading` }
+  return isSecretPath(path)
+    ? { needsApproval: true, reason: `this looks like a secrets file (${path}) — approve before continuing` }
     : {};
 }
+// Back-compat names used by the tool registry (read vs write are the same policy).
+export const readGuard = secretGuard;
+export const writeGuard = secretGuard;
 
 // Two tiers of shell safety. DANGEROUS_BASH = never-legitimate catastrophes, refused
 // OUTRIGHT (even if a confused human approves). RISKY_BASH = powerful-but-sometimes-
@@ -108,10 +127,17 @@ export function isPrivateAddr(ip: string): boolean {
   if (!g) return true; // unparseable → fail closed
   if (g.every((h) => h === 0)) return true; // :: (unspecified)
   if (g.slice(0, 7).every((h) => h === 0) && g[7] === 1) return true; // ::1 loopback
-  // IPv4-mapped in hex form ::ffff:HHHH:HHHH → check the embedded v4
+  const embeddedV4 = () => `${(g[6] >> 8) & 0xff}.${g[6] & 0xff}.${(g[7] >> 8) & 0xff}.${g[7] & 0xff}`;
+  // IPv4-mapped ::ffff:HHHH:HHHH → check the embedded v4
   if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0xffff) {
-    const v4 = `${(g[6] >> 8) & 0xff}.${g[6] & 0xff}.${(g[7] >> 8) & 0xff}.${g[7] & 0xff}`;
-    return isPrivateAddr(v4);
+    return isPrivateAddr(embeddedV4());
+  }
+  // NAT64 64:ff9b::/96 and the deprecated IPv4-compatible ::/96 also embed an IPv4 in the low
+  // 32 bits — a NAT64 gateway translates the first to that v4 (e.g. 64:ff9b::a9fe:a9fe →
+  // 169.254.169.254 metadata). Vet the embedded address. (:: and ::1 were handled above.)
+  if ((g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) ||
+      (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0)) {
+    return isPrivateAddr(embeddedV4());
   }
   if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
   if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local

@@ -29,6 +29,36 @@ export function openRouterChat(body: object, signal?: AbortSignal): Promise<Resp
   });
 }
 
+// One parsed SSE "data:" line. The PURE parse step (JSON + classify) is split out from the
+// stateful application in callModel's handleLine so it can be unit-tested over fixtures.
+// Returns null for lines to ignore (non-data, [DONE], unparseable, empty delta).
+export type ParsedSSE = { content?: string; toolCalls?: any[]; error?: string; errorCode?: number };
+export function parseSSELine(line: string): ParsedSSE | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return null;
+  const payload = trimmed.slice(5).trim();
+  if (payload === "[DONE]") return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (parsed.error) {
+    // OpenRouter can stream an error object (rate limit, context length, content filter)
+    // instead of choices — surface it rather than swallowing it as an empty completion.
+    const error = typeof parsed.error === "string" ? parsed.error : parsed.error?.message || JSON.stringify(parsed.error);
+    const rawCode = typeof parsed.error === "object" ? (parsed.error?.code ?? parsed.error?.status) : undefined;
+    return { error, errorCode: rawCode != null ? Number(rawCode) : undefined };
+  }
+  const delta = parsed.choices?.[0]?.delta;
+  if (!delta) return null;
+  const out: ParsedSSE = {};
+  if (delta.content) out.content = delta.content;
+  if (delta.tool_calls) out.toolCalls = delta.tool_calls;
+  return out; // may be {} for a delta with neither — handled as a no-op
+}
+
 export async function callModel(messages: Message[], includeTools = true, signal?: AbortSignal): Promise<Message> {
   const body = {
     model: state.model,
@@ -75,6 +105,7 @@ export async function callModel(messages: Message[], includeTools = true, signal
     let printedText = false;
     let streamBroke = false;
     let streamError: string | null = null; // a mid-stream {error:…} event (don't treat it as "empty") // died mid-way with nothing usable → treat as transient
+    let streamErrorCode: number | undefined; // its numeric code/status, for the transient-vs-permanent decision
     const decoder = new TextDecoder();
     let buffer = "";
 
@@ -86,28 +117,18 @@ export async function callModel(messages: Message[], includeTools = true, signal
     // (The spinner is already running — started before the request above — and is
     // stopped the moment the first token or tool call lands.)
 
-    // Process one SSE "data:" line. Extracted so a final line sent WITHOUT a trailing
-    // newline (some providers/proxies) can be flushed after the loop instead of dropped.
+    // Apply one SSE "data:" line to the accumulating stream state. The parse is done by the pure
+    // parseSSELine (tested separately); this handles a final line sent WITHOUT a trailing newline
+    // (some providers/proxies) by being callable on the leftover buffer after the loop.
     const handleLine = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) return;
-      const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") return;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(payload);
-      } catch {
+      const ev = parseSSELine(line);
+      if (!ev) return;
+      if (ev.error !== undefined) {
+        streamError = ev.error;
+        streamErrorCode = ev.errorCode;
         return;
       }
-      if (parsed.error) {
-        // OpenRouter can stream an error object (rate limit, context length, content filter)
-        // instead of choices — surface it rather than swallowing it as an empty completion.
-        streamError = typeof parsed.error === "string" ? parsed.error : parsed.error?.message || JSON.stringify(parsed.error);
-        return;
-      }
-      const delta = parsed.choices?.[0]?.delta;
-      if (!delta) return;
-      if (delta.content) {
+      if (ev.content) {
         stopSpinner();
         if (!printedText) {
           process.stdout.write("\n" + color.cyan("bee: "));
@@ -115,14 +136,14 @@ export async function callModel(messages: Message[], includeTools = true, signal
         }
         // stripControl: the model's text must not carry raw escape sequences to the terminal
         // (the markdown renderer adds its OWN ANSI afterward, on the cleaned text).
-        const safe = stripControl(delta.content);
+        const safe = stripControl(ev.content);
         if (md) md.push(safe);
         else process.stdout.write(safe);
-        content += delta.content; // history keeps the RAW markdown
+        content += ev.content; // history keeps the RAW markdown
       }
-      if (delta.tool_calls) {
+      if (ev.toolCalls) {
         stopSpinner();
-        for (const tc of delta.tool_calls) {
+        for (const tc of ev.toolCalls) {
           const i = tc.index ?? 0;
           toolCalls[i] ??= { id: "", type: "function", function: { name: "", arguments: "" } };
           if (tc.id) toolCalls[i].id = tc.id;
@@ -159,8 +180,19 @@ export async function callModel(messages: Message[], includeTools = true, signal
       else process.stdout.write("\n\n");
     }
 
-    // A mid-stream error event is a real API failure (not a do-nothing turn) — surface it.
-    if (streamError) throw new Error(`OpenRouter stream error: ${streamError}`);
+    // A mid-stream error event is a real API failure (not a do-nothing turn). A TRANSIENT one
+    // (rate limit / 5xx / overloaded) retries with backoff like the HTTP-status path above,
+    // rather than failing the whole turn; a permanent error (bad key, content filter) still throws.
+    if (streamError) {
+      const transient = (streamErrorCode !== undefined && Number.isFinite(streamErrorCode) && isTransientStatus(streamErrorCode)) ||
+        /rate.?limit|overloaded|temporar|timeout|try again|\b(429|500|502|503|504)\b/i.test(streamError);
+      if (transient && attempt < tries) {
+        console.log(color.dim(`   (stream error — retry ${attempt}/${tries - 1})`));
+        await sleep(500 * attempt);
+        continue;
+      }
+      throw new Error(`OpenRouter stream error: ${streamError}`);
+    }
 
     // Retry an empty completion (no content, no tool calls) or a broken stream —
     // the truncated-reasoning case that would otherwise no-op the whole turn.
@@ -172,7 +204,9 @@ export async function callModel(messages: Message[], includeTools = true, signal
     }
 
     const message: Message = { role: "assistant", content: content || null };
-    const calls = toolCalls.filter(Boolean); // drop array holes from a sparse tc.index
+    // Drop array holes from a sparse tc.index; synthesize an id when a provider omits one, so the
+    // assistant tool_call and its tool result don't both carry "" (collisions / provider rejects).
+    const calls = toolCalls.filter(Boolean).map((c, i) => (c.id ? c : { ...c, id: `call_${i}` }));
     if (calls.length > 0) message.tool_calls = calls;
     return message;
   }

@@ -57,8 +57,8 @@ async function askApproval(
     // show raw arguments below
   }
 
-  console.log(color.yellow(`\n⚠️  The agent wants to use: ${call.function.name}`));
-  if (reason) console.log(color.red(`   ⚠ ${reason}`));
+  console.log(color.yellow(`\n⚠️  The agent wants to use: ${stripControl(call.function.name)}`));
+  if (reason) console.log(color.red(`   ⚠ ${stripControl(reason)}`)); // reason embeds the model-supplied path
   if (call.function.name === "run_bash") {
     if (args.explanation) console.log("   " + color.cyan(stripControl(String(args.explanation)))); // what + why, from the model
     console.log(color.yellow(`   $ ${stripControl(String(args.command ?? ""))}`));
@@ -221,7 +221,7 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   // Auto-verify after a file mutation so the model sees what it broke.
   let verifyOut = "";
   if (config.verifyCommand && (call.function.name === "write_file" || call.function.name === "edit_file")) {
-    verifyOut = await runVerify();
+    verifyOut = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
     result += `\n\n[auto-check: ${config.verifyCommand}]\n${verifyOut}`;
   }
   // Cap giant outputs so one read/command can't blow the window.
@@ -298,11 +298,14 @@ export async function runTurn(
     if (!answered) {
       // Hit the step cap — don't die silently. Ask for a final wrap-up (no tools).
       console.log(color.dim(`\n[reached the ${config.maxSteps}-step limit — wrapping up]`));
-      messages.push({
+      // The "no more tools" directive is EPHEMERAL: pass it to THIS call only, never persist it —
+      // otherwise it stays in the conversation and tells the model not to use tools on every later
+      // turn of the session (and in the saved transcript).
+      const wrapPrompt: Message = {
         role: "system",
         content: `You have reached the ${config.maxSteps}-step limit for this turn. Do not call any more tools. Briefly tell the user what you accomplished and what still remains.`,
-      });
-      const wrap = await callModel(messages, false, signal);
+      };
+      const wrap = await callModel([...messages, wrapPrompt], false, signal);
       // Don't persist an empty (content:null, no tools) wrap-up — some providers 400 on it,
       // and it would poison history / /resume (same invariant the per-step loop enforces).
       if (hasContent(wrap)) messages.push(wrap);
