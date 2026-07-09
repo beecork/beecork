@@ -10,7 +10,24 @@ import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModel
 import { skillNames } from "./skills";
 import { selfUpdate } from "./update";
 import { selectMenu } from "./input";
+import { chromeEnabled, chromePick } from "./chrome";
+import { ansi } from "./ansi";
 import type { Message } from "./types";
+
+// One picker abstraction. In the pinned-chrome UI (STATUSLINE=1) it renders in the chrome's OWN
+// dropdown (chromePick) so it never fights the scroll region; otherwise it uses the inline selectMenu.
+// Returns the chosen value, or null if cancelled.
+async function pick<T>(opts: {
+  title: string;
+  initial?: number;
+  items: { label: string; value: T; hint?: string }[];
+}): Promise<T | null> {
+  if (chromeEnabled()) {
+    const v = await chromePick(opts.items.map((it) => ({ label: it.label, hint: it.hint, value: it.value })), opts.initial, opts.title);
+    return v == null ? null : (v as T);
+  }
+  return selectMenu(opts);
+}
 
 // Single source of truth: name + one-line description (shown in the live menu).
 export const SLASH_COMMANDS: { name: string; desc: string }[] = [
@@ -109,14 +126,14 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     }
   } else if (cmd === "/clear") {
     messages.splice(1); // keep the system prompt; drop the conversation history
-    if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback + home
+    if (process.stdout.isTTY) process.stdout.write(ansi.clearScreen + ansi.clearScrollback + ansi.home); // clear screen + scrollback + home
     console.log(color.dim("conversation cleared (kept the system prompt, your model + settings).") + "\n");
   } else if (cmd === "/resume") {
     const sessions = process.stdin.isTTY ? await listSessions() : [];
     let restored: Message[] = [];
     if (sessions.length > 1) {
       // Pick which session to resume.
-      const choice = await selectMenu({
+      const choice = await pick({
         title: "resume which session? — ↑/↓ then Enter (Esc to cancel)",
         items: sessions.map((s) => ({
           label: s.preview || "(no first message)",
@@ -177,7 +194,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
 // plain printed list otherwise.
 async function pickModel(): Promise<void> {
   if (!process.stdin.isTTY) return showRecommended();
-  const choice = await selectMenu({
+  const choice = await pick({
     title: "switch model — ↑/↓ then Enter (Esc to cancel)",
     initial: Math.max(0, RECOMMENDED_MODELS.findIndex((m) => m.slug === state.model)),
     items: RECOMMENDED_MODELS.map((m) => ({
@@ -202,7 +219,7 @@ async function pickEffort(): Promise<void> {
     console.log(color.cyan(`reasoning effort: ${state.reasoningEffort}`) + color.dim(`  (levels: ${EFFORTS.join(" / ")})`) + "\n");
     return;
   }
-  const choice = await selectMenu({
+  const choice = await pick({
     title: "reasoning effort — ↑/↓ then Enter (Esc to cancel)",
     initial: Math.max(0, EFFORTS.indexOf(state.reasoningEffort)),
     items: EFFORTS.map((e) => ({
@@ -241,7 +258,7 @@ async function searchModels(term: string): Promise<void> {
     const priceOf = (m: OpenRouterModel) =>
       m.pricing?.prompt != null ? `$${(parseFloat(m.pricing.prompt) * 1e6).toFixed(2)}/1M` : "?";
     if (process.stdin.isTTY) {
-      const choice = await selectMenu({
+      const choice = await pick({
         title: `models matching "${term}" — ↑/↓ then Enter (Esc to cancel)`,
         items: matches.map((m) => ({
           label: m.id,

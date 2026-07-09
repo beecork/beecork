@@ -9,7 +9,9 @@
 // a turn, which itself runs "on top of" nothing.
 
 import { emitKeypressEvents } from "node:readline";
-import { color, stripAnsi, isPrintableCodePoint, displayWidth } from "./ui";
+import { color, stripAnsi, isPrintableCodePoint } from "./ui";
+import { ansi } from "./ansi";
+import { inputLayout, moveVertIndex } from "./layout";
 
 const out = (s: string) => process.stdout.write(s);
 
@@ -24,16 +26,16 @@ export function initInput(): void {
   if (started || !process.stdin.isTTY) return;
   started = true;
   process.stdin.setRawMode(true);
-  out("\x1b[?2004l"); // DISABLE bracketed paste — some terminals (Apple Terminal) draw visible [ … ]
-                      // brackets around the input line when it's on. Multi-line paste is handled by
-                      // the deferred-Enter heuristic in readPrompt instead.
+  out(ansi.bracketedPasteOff); // DISABLE bracketed paste — some terminals (Apple Terminal) draw visible
+                      // [ … ] brackets around the input line when it's on. Multi-line paste is handled
+                      // by the deferred-Enter burst heuristic in the line editors instead.
   emitKeypressEvents(process.stdin);
   process.stdin.on("keypress", (str: string | undefined, key: Key | undefined) => active?.(str, key));
 }
 
 export function teardownInput(): void {
   if (started && process.stdin.isTTY) {
-    out("\x1b[?2004h\x1b[?25h"); // restore bracketed paste + show the cursor for the shell
+    out(ansi.bracketedPasteOn + ansi.showCursor); // restore bracketed paste + show the cursor for the shell
     process.stdin.setRawMode(false);
     process.stdin.pause(); // release the keep-alive so the process can exit
   }
@@ -111,9 +113,6 @@ export function readPrompt(opts: PromptOpts): Promise<PromptResult> {
 
     let lastCurRow = 0; // cursor's row offset within the block after the previous render (for clearing)
 
-    // Row (newlines before) + column-within-line for a text prefix. The one place this is computed.
-    const rowColOf = (s: string) => ({ row: (s.match(/\n/g) || []).length, col: s.length - (s.lastIndexOf("\n") + 1) });
-
     function drawBlock(): { promptW: number } {
       const prompt = opts.promptString();
       const promptW = stripAnsi(prompt).length;
@@ -128,9 +127,9 @@ export function readPrompt(opts: PromptOpts): Promise<PromptResult> {
       const mm = menu();
       if (sel >= mm.length) sel = Math.max(0, mm.length - 1);
       // Return to the top-left of the previously drawn block, then clear it + everything below.
-      out("\x1b[?25l");
-      if (lastCurRow > 0) out(`\x1b[${lastCurRow}A`);
-      out("\r\x1b[J");
+      out(ansi.hideCursor);
+      if (lastCurRow > 0) out(ansi.up(lastCurRow));
+      out(ansi.cr + ansi.clearToEnd);
 
       const { promptW } = drawBlock();
 
@@ -143,23 +142,14 @@ export function readPrompt(opts: PromptOpts): Promise<PromptResult> {
         out("\n" + (i === sel ? color.green("› " + name) + " " + color.dim(desc) : color.dim("  " + name + " " + desc)));
       }
 
-      // Account for terminal soft-wrap: a logical line wider than `cols` spans multiple PHYSICAL
-      // rows. Width is in DISPLAY columns (wide CJK/emoji = 2), including the prompt/indent (promptW).
+      // Soft-wrap + cursor placement (display-column aware) is computed by the pure layout helper.
       const text = opts.mask ? "*".repeat(buf.length) : buf;
-      const physRows = text.split("\n").map((l) => Math.max(1, Math.ceil((promptW + displayWidth(l)) / cols)));
-      const totalInputPhys = physRows.reduce((a, b) => a + b, 0);
-
-      // Cursor → physical (row, col), measuring the current line's prefix in display columns.
       const before = opts.mask ? text : buf.slice(0, cur);
-      const curLogicalRow = (before.match(/\n/g) || []).length;
-      const curCol = promptW + displayWidth(before.slice(before.lastIndexOf("\n") + 1));
-      const physBefore = physRows.slice(0, curLogicalRow).reduce((a, b) => a + b, 0);
-      const curPhysRow = physBefore + Math.floor(curCol / cols);
-      const curPhysCol = curCol % cols;
+      const { totalPhys, curPhysRow, curPhysCol } = inputLayout(text, before, promptW, cols);
 
-      const lastDrawnRow = totalInputPhys - 1 + mm.length;
-      if (lastDrawnRow > curPhysRow) out(`\x1b[${lastDrawnRow - curPhysRow}A`);
-      out("\r" + (curPhysCol > 0 ? `\x1b[${curPhysCol}C` : "") + "\x1b[?25h");
+      const lastDrawnRow = totalPhys - 1 + mm.length;
+      if (lastDrawnRow > curPhysRow) out(ansi.up(lastDrawnRow - curPhysRow));
+      out(ansi.cr + (curPhysCol > 0 ? ansi.forward(curPhysCol) : "") + ansi.showCursor);
       lastCurRow = curPhysRow;
     }
 
@@ -167,9 +157,9 @@ export function readPrompt(opts: PromptOpts): Promise<PromptResult> {
       restore();
       if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
       pendingRender = false; // don't let a queued burst-flush redraw after we've committed the line
-      out("\x1b[?25l");
-      if (lastCurRow > 0) out(`\x1b[${lastCurRow}A`);
-      out("\r\x1b[J");
+      out(ansi.hideCursor);
+      if (lastCurRow > 0) out(ansi.up(lastCurRow));
+      out(ansi.cr + ansi.clearToEnd);
       drawBlock(); // leave the final (multi-line) input in scrollback; cursor stays HIDDEN
       out("\n");
       if (result.type === "line" && result.value.trim() && !opts.mask) history.push(result.value);
@@ -226,13 +216,9 @@ export function readPrompt(opts: PromptOpts): Promise<PromptResult> {
 
     // Move the cursor up/down one line in a multi-line buffer, keeping the column where possible.
     function moveVert(dir: -1 | 1) {
-      const lines = buf.split("\n");
-      const { row, col } = rowColOf(buf.slice(0, cur));
-      const target = row + dir;
-      if (target < 0 || target >= lines.length) return;
-      let idx = 0;
-      for (let i = 0; i < target; i++) idx += lines[i].length + 1; // +1 for each "\n"
-      cur = idx + Math.min(col, lines[target].length);
+      const idx = moveVertIndex(buf, cur, dir);
+      if (idx === null) return;
+      cur = idx;
       render();
     }
 
@@ -291,9 +277,9 @@ export function selectMenu<T>(opts: SelectOpts<T>): Promise<T | null> {
     let drawn = 0;
 
     function render() {
-      out("\x1b[?25l");
-      if (drawn > 0) out(`\x1b[${drawn}A`);
-      out("\r\x1b[J");
+      out(ansi.hideCursor);
+      if (drawn > 0) out(ansi.up(drawn));
+      out(ansi.cr + ansi.clearToEnd);
       out(color.dim(opts.title) + "\n");
       opts.items.forEach((it, i) => {
         const row = i === sel ? color.green("› " + it.label) : "  " + it.label;
@@ -303,8 +289,8 @@ export function selectMenu<T>(opts: SelectOpts<T>): Promise<T | null> {
     }
     function finish(v: T | null) {
       restore();
-      if (drawn > 0) out(`\x1b[${drawn}A\r\x1b[J`);
-      out("\x1b[?25h");
+      if (drawn > 0) out(ansi.up(drawn) + ansi.cr + ansi.clearToEnd);
+      out(ansi.showCursor);
       resolve(v);
     }
     const restore = pushKeyHandler((_str, key) => {

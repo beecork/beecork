@@ -12,10 +12,11 @@ import { API_KEY, config } from "./config";
 import { checkForUpdate, currentVersion, selfUpdate } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
 import { color, printBanner, stripControl, isPrintableCodePoint, setSteeringActive } from "./ui";
+import { ansi } from "./ansi";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
 import { runtimeContext } from "./env";
 import { killAllTasks, runningTaskCount } from "./tasks";
-import { startStatusline, stopStatusline } from "./statusline";
+import { startChrome, stopChrome, nextLine, beginTurn, endTurn, chromeEnabled } from "./chrome";
 import { estimateTokens } from "./context";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
@@ -103,9 +104,9 @@ async function main() {
   // every deliberate exit below funnels through process.exit(), which fires 'exit'. process.kill is
   // synchronous, so it's safe here (unlike the async persist()).
   process.on("exit", killAllTasks);
-  // Reset the status-line scroll region on every exit (SYNCHRONOUS — safe here; all deliberate exits
+  // Reset the pinned-chrome scroll region on every exit (SYNCHRONOUS — safe here; all deliberate exits
   // funnel through process.exit → 'exit'). Without this a crash could leave the shell's scroll region shrunk.
-  process.on("exit", stopStatusline);
+  process.on("exit", stopChrome);
   if (tty) {
     initInput();
     // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
@@ -119,6 +120,8 @@ async function main() {
   }
   const rl = tty ? null : createInterface({ input: process.stdin, output: process.stdout, completer });
 
+  // Pinned-chrome mode starts from a clean screen (banner scrolls above the pinned input).
+  if (chromeEnabled()) process.stdout.write(ansi.clearScreen + ansi.clearScrollback + ansi.home);
   // Show the startup banner FIRST — before any API-key prompt.
   printBanner(state.model, instr.sources.map(tildify));
   if (config.dangerouslySkipPermissions) {
@@ -181,12 +184,21 @@ async function main() {
     });
   }
 
-  // Start the live bottom status bar (TTY + not disabled). Token size reads the current conversation.
-  startStatusline(() => estimateTokens(messages));
+  // Opt-in pinned bottom chrome (input + rich statusline with mode). Default off; STATUSLINE=1 enables.
+  if (chromeEnabled())
+    startChrome({
+      tokens: () => estimateTokens(messages),
+      items: [...SLASH_COMMANDS, ...skills.map((s) => ({ name: "/" + s.name, desc: "skill" }))],
+      onInterrupt: () => activeTurn?.abort(),
+    });
 
   while (true) {
     let userInput: string;
-    if (tty) {
+    if (chromeEnabled()) {
+      const r = await nextLine(); // pinned bottom input (submit) — chrome owns the keyboard
+      if (r.type === "quit") break;
+      userInput = r.value;
+    } else if (tty) {
       const r = await readPrompt({
         promptString,
         commands: SLASH_COMMANDS,
@@ -215,21 +227,37 @@ async function main() {
         console.log(color.dim(`▸ skill ${skill.name}${skill.source === "global" ? " (global)" : ""}`));
         userInput = expandSkill(skill, extra);
       } else {
+        // Run the command. In chrome mode it stays active: interactive commands (/model, /effort,
+        // /resume) render in the chrome's OWN dropdown via chromePick, and text output flows at the
+        // content cursor — so nothing fights the scroll region.
         try {
           await handleCommand(userInput, messages);
         } catch (err) {
           console.error(color.red(`[command error] ${(err as Error).message}`) + "\n");
         }
-        continue;
+        continue; // next loop → nextLine() re-renders the chrome below the command's output
       }
+    }
+
+    if (chromeEnabled()) {
+      // Pinned chrome owns the keyboard; the bottom input line accepts steering during the turn.
+      activeTurn = new AbortController();
+      const steering = beginTurn();
+      try {
+        messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering);
+      } finally {
+        activeTurn = null;
+        endTurn();
+      }
+      continue;
     }
 
     activeTurn = new AbortController();
     let modeChangedMidTurn = false;
     const steering: string[] = []; // mid-turn steering notes; drained by runTurn between steps
     let typed = "";                // in-progress note (committed on Enter)
-    const redrawSteer = () => process.stdout.write("\r\x1b[2K" + color.cyan("» ") + color.dim(typed));
-    const clearSteer = () => { process.stdout.write("\r\x1b[2K"); setSteeringActive(false); };
+    const redrawSteer = () => process.stdout.write(ansi.cr + ansi.clearLine + color.cyan("» ") + color.dim(typed));
+    const clearSteer = () => { process.stdout.write(ansi.cr + ansi.clearLine); setSteeringActive(false); };
     // While a turn runs: Esc / Ctrl-C abort it; Shift+Tab rotates the mode; typing text + Enter queues
     // a steering note the model picks up on its NEXT step (the turn is NOT cancelled). Ctrl-C/Esc still
     // cancel. During an approval prompt this handler is transiently replaced by readChoice/selectMenu,
@@ -271,6 +299,7 @@ async function main() {
     }
   }
 
+  stopChrome();    // reset the scroll region + clear the pinned chrome's timers (else the process can't exit)
   teardownInput(); // restore the terminal BEFORE any save can fail
   rl?.close();
   await persist();

@@ -15,6 +15,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:ui": "STATUSLINE=1 tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
     "eval": "tsx eval/run.ts",

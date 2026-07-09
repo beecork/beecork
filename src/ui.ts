@@ -2,6 +2,7 @@
 
 import { tildify } from "./paths";
 import { lineDiff } from "./diff";
+import { ansi } from "./ansi";
 import type { TodoItem } from "./types";
 
 // --- Colors -----------------------------------------------------------------
@@ -43,6 +44,10 @@ export const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 // Approximate terminal display columns of a code point: combining/zero-width = 0, East-Asian
 // Wide/Fullwidth + most emoji = 2, everything else = 1. Dependency-free (no wcwidth table file);
 // good enough for cursor placement. Used by displayWidth.
+// KNOWN LIMIT: this is per-CODE-POINT, not per-grapheme. Emoji built from clusters — ZWJ sequences
+// (👨‍👩‍👧), flags (🇬🇪), and base+VS16 (❤️) — render as ONE cell in most terminals but are counted here
+// as several, so the input cursor can drift when such text sits in the buffer. Acceptable for a
+// dependency-free editor; a full grapheme segmenter (Intl.Segmenter) is the fix if it ever matters.
 function charWidth(cp: number): number {
   if (cp === 0) return 0;
   if ((cp >= 0x300 && cp <= 0x36f) || (cp >= 0x200b && cp <= 0x200f) || cp === 0xfeff ||
@@ -198,9 +203,9 @@ export function startSpinner(label: string): () => void {
   let i = 0;
   const draw = () => {
     if (steeringOnScreen) return; // the user is typing a steering note on this line — don't overwrite it
-    process.stdout.write("\r  " + color.brand(SPINNER[i = (i + 1) % SPINNER.length]) + " " + color.dim(label));
+    process.stdout.write(ansi.cr + "  " + color.brand(SPINNER[i = (i + 1) % SPINNER.length]) + " " + color.dim(label));
   };
-  process.stdout.write("\x1b[?25l"); // hide cursor
+  process.stdout.write(ansi.hideCursor);
   draw();
   const timer = setInterval(draw, 80);
   let stopped = false;
@@ -208,7 +213,7 @@ export function startSpinner(label: string): () => void {
     if (stopped) return;
     stopped = true;
     clearInterval(timer);
-    process.stdout.write("\r\x1b[2K"); // clear the line; cursor stays HIDDEN until the next prompt
+    process.stdout.write(ansi.cr + ansi.clearLine); // clear the line; cursor stays HIDDEN until the next prompt
   };
 }
 
