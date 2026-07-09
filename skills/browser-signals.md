@@ -26,14 +26,17 @@ Pull it **on demand** while debugging — don't call it in a loop or on every tu
 The inbox is **shared** across every project that uses beecork, so signals from other apps you
 have open can show up too. Scope to the project you're in:
 
-- Pass **`origin`** — the site this project runs on, e.g.
-  `read_dev_signals({ origin: "http://localhost:8000" })` or `{ origin: "https://app.example.com" }`.
-  Get it from the project itself (the dev script / framework config) or from the user.
-- **It's remembered per folder.** Once you `watch_site` a production URL, beecork saves that origin to
-  `.beecork/skeleton.json`, and later `read_dev_signals` calls in that folder auto-scope to it — no
-  need to pass `origin` again.
-- If you call it unscoped and the feed spans multiple sites, the result says so and lists the origins,
-  so you (or the user) can pick this project's.
+- Pass **`origin`** — the site(s) this project runs on, e.g.
+  `read_dev_signals({ origin: "http://localhost:8000" })`, or comma-separated for several frontends:
+  `{ origin: "http://localhost:3000,http://localhost:3001" }`. Get it from the project itself (dev
+  script / framework config) or from the user.
+- **Production sites are remembered per folder; localhost is not.** Once you `watch_site` a production
+  URL, beecork saves that origin to `.beecork/skeleton.json` and later `read_dev_signals` calls in that
+  folder auto-scope to it. **localhost is deliberately never remembered** — dev ports get reused across
+  projects (`:8000` might be a different app tomorrow), so a saved localhost binding would mis-attribute
+  another app's signals. Pass the localhost `origin` each session instead (you know it from the project).
+- If you call it unscoped and the feed spans multiple sites, the result lists the origins so you (or the
+  user) can pick this project's.
 
 ## Watching an on-demand / production site
 

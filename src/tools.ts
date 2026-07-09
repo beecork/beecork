@@ -979,7 +979,7 @@ export const toolDefs: ToolDef[] = [
         kind: { type: "string", description: 'Filter: "network", "console", "pageError", "log", or "all" (default all).' },
         since_minutes: { type: "number", description: "Only signals from the last N minutes (optional)." },
         limit: { type: "number", description: "Max signals to return (default 30, max 200)." },
-        origin: { type: "string", description: "Scope to one site, e.g. http://localhost:8000 or https://app.example.com (defaults to this project's remembered site if set)." },
+        origin: { type: "string", description: "Scope to one or more sites (comma-separated for several frontends), e.g. http://localhost:8000 or https://app.example.com. Defaults to this project's remembered production site(s) if set; pass localhost explicitly since dev ports aren't remembered." },
       },
       required: [],
     },
@@ -989,10 +989,11 @@ export const toolDefs: ToolDef[] = [
       const kind = args.kind ? String(args.kind) : "";
       const limit = Math.min(Math.max(Number(args.limit) || 30, 1), 200);
       const sinceMin = Number(args.since_minutes) || 0;
-      // Scope to this project's site(s): an explicit `origin` wins, else the project's remembered
-      // origins (.beecork/skeleton.json), else unscoped (show all, but flag it if the feed is mixed).
-      const explicit = args.origin ? toOrigin(String(args.origin)) : "";
-      const scope = explicit ? [explicit] : await loadProjectOrigins();
+      // Scope to this project's site(s): an explicit `origin` wins (comma-separated = several
+      // frontends), else the project's remembered origins (.beecork/skeleton.json), else unscoped
+      // (show all, but flag it if the feed is mixed).
+      const explicit = args.origin ? String(args.origin).split(",").map((s) => toOrigin(s)).filter(Boolean) : [];
+      const scope = explicit.length ? explicit : await loadProjectOrigins();
       // When scoping, over-fetch a bit so client-side filtering (for older bridges) still fills `limit`.
       const params = new URLSearchParams({ limit: String(scope.length ? Math.min(200, limit * 4) : limit) });
       if (kind && kind !== "all") params.set("kind", kind);
@@ -1010,8 +1011,9 @@ export const toolDefs: ToolDef[] = [
       }
       const now = Date.now();
       let signals = (data.signals ?? []).filter((s) => s && s.kind !== "watch"); // drop the meta "watch" lines
-      // Re-apply the origin filter here too, so scoping holds even against an older bridge that ignores ?origin=.
-      if (scope.length) signals = signals.filter((s) => scope.some((o) => String(s.url || "").startsWith(o)));
+      // Re-apply the origin filter here too, so scoping holds even against an older bridge that ignores
+      // ?origin=. Match the TAB origin (s.page) when present, else the request/resource url.
+      if (scope.length) signals = signals.filter((s) => scope.some((o) => String(s.page || s.url || "").startsWith(o)));
       signals = signals.slice(-limit);
       const scopeLabel = scope.length ? ` from ${scope.join(", ")}` : "";
       if (signals.length === 0) {
@@ -1028,7 +1030,7 @@ export const toolDefs: ToolDef[] = [
       // If UNSCOPED and the feed spans multiple sites, nudge toward binding this project's origin.
       let hint = "";
       if (!scope.length) {
-        const distinct = [...new Set(signals.map((s) => toOrigin(String(s.url || ""))).filter(Boolean))];
+        const distinct = [...new Set(signals.map((s) => toOrigin(String(s.page || s.url || ""))).filter(Boolean))];
         if (distinct.length > 1) hint = `\n\n(These span ${distinct.length} sites: ${distinct.join(", ")}. To see only THIS project's, pass origin:"<its site>" — or call watch_site once and I'll remember it for this folder.)`;
       }
       return `${signals.length} browser signal(s)${scopeLabel}, newest last:\n${lines.join("\n")}${hint}`;

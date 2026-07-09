@@ -27,6 +27,18 @@ export function toOrigin(input: string): string {
   }
 }
 
+// Is this a loopback/localhost origin? Such origins are EPHEMERAL — the port is reused across
+// projects (casino on :8000 today, another app tomorrow) — so a localhost binding is not a stable
+// project identity and must never be persisted. They can still be used as a per-call scope filter.
+export function isLoopbackOrigin(origin: string): boolean {
+  const o = toOrigin(origin);
+  if (!o) return false;
+  let host: string;
+  try { host = new URL(o).hostname; } catch { return false; }
+  host = host.replace(/^\[|\]$/g, "").toLowerCase(); // strip IPv6 brackets
+  return host === "localhost" || host.endsWith(".localhost") || host === "0.0.0.0" || host === "::1" || /^127\./.test(host);
+}
+
 // The origins this project is bound to (deduped, normalized). Empty when unset.
 export async function loadProjectOrigins(): Promise<string[]> {
   try {
@@ -38,10 +50,12 @@ export async function loadProjectOrigins(): Promise<string[]> {
   }
 }
 
-// Remember an origin for this project (idempotent). Returns true if it was newly added.
+// Remember an origin for this project (idempotent). Returns true if it was newly added. Refuses
+// loopback/localhost origins — their ports are reused across projects, so persisting one would
+// mis-attribute another app's signals later; localhost is meant to be scoped per-call instead.
 export async function addProjectOrigin(origin: string): Promise<boolean> {
   const o = toOrigin(origin);
-  if (!o) return false;
+  if (!o || isLoopbackOrigin(o)) return false;
   const cur = await loadProjectOrigins();
   if (cur.includes(o)) return false;
   await mkdir(dir(), { recursive: true });

@@ -101,7 +101,9 @@ const server = http.createServer((req, res) => {
     let items = buffer.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     if (kind && kind !== "all") items = items.filter((s) => s.kind === kind);
     if (since) items = items.filter((s) => (s.ts || 0) >= since);
-    if (origins.length) items = items.filter((s) => origins.some((o) => String(s.url || "").startsWith(o)));
+    // Match the TAB the signal came from (s.page) when present, else the request/resource url. Keying
+    // on the tab origin is what makes scoping correct for cross-origin API calls a page makes.
+    if (origins.length) items = items.filter((s) => origins.some((o) => String(s.page || s.url || "").startsWith(o)));
     items = items.slice(-limit);
     return void res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ signals: items }));
   }

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
+import { toOrigin, isLoopbackOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
 
 test("toOrigin: normalizes URLs + bare host:port, rejects junk (no 'null' origin leak)", () => {
   assert.equal(toOrigin("https://app.example.com/checkout?x=1"), "https://app.example.com");
@@ -17,7 +17,14 @@ test("toOrigin: normalizes URLs + bare host:port, rejects junk (no 'null' origin
   assert.equal(toOrigin(""), "");
 });
 
-test("loadProjectOrigins empty when unset; addProjectOrigin persists, normalizes, dedups", async () => {
+test("isLoopbackOrigin: localhost/loopback are ephemeral (not stable project IDs)", () => {
+  for (const l of ["http://localhost:8000", "localhost:3000", "http://127.0.0.1:5000", "http://[::1]:9000", "http://0.0.0.0:8080", "http://app.localhost:3000"])
+    assert.equal(isLoopbackOrigin(l), true, l);
+  for (const p of ["https://app.example.com", "http://192.168.1.5:3000", "https://staging.foo.com"])
+    assert.equal(isLoopbackOrigin(p), false, p);
+});
+
+test("loadProjectOrigins empty when unset; addProjectOrigin persists PUBLIC origins, never localhost", async () => {
   const saved = process.cwd();
   const proj = await mkdtemp(join(tmpdir(), "bk-sites-"));
   try {
@@ -26,12 +33,13 @@ test("loadProjectOrigins empty when unset; addProjectOrigin persists, normalizes
 
     assert.equal(await addProjectOrigin("https://app.example.com/foo"), true);  // stored as origin only
     assert.equal(await addProjectOrigin("https://app.example.com/bar"), false); // same origin → no-op
-    assert.equal(await addProjectOrigin("localhost:8000"), true);               // bare host:port accepted
+    assert.equal(await addProjectOrigin("http://localhost:8000"), false);       // localhost → NEVER persisted
+    assert.equal(await addProjectOrigin("127.0.0.1:5000"), false);              // loopback → NEVER persisted
     assert.equal(await addProjectOrigin("garbage url"), false);                 // junk → not stored
 
-    assert.deepEqual(await loadProjectOrigins(), ["https://app.example.com", "http://localhost:8000"]);
+    assert.deepEqual(await loadProjectOrigins(), ["https://app.example.com"]); // only the stable public one
     const raw = JSON.parse(await readFile(join(proj, ".beecork", "skeleton.json"), "utf8"));
-    assert.deepEqual(raw.origins, ["https://app.example.com", "http://localhost:8000"]);
+    assert.deepEqual(raw.origins, ["https://app.example.com"]);
   } finally {
     process.chdir(saved);
   }
