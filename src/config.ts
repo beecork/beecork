@@ -13,15 +13,18 @@ export const API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 // (config), not in the presentation module.
 export const RECOMMENDED_MODELS: { slug: string; price: string; note: string }[] = [
   { slug: "deepseek/deepseek-v4-flash", price: "$0.09", note: "cheap + fast daily driver (default)" },
+  { slug: "qwen/qwen3-coder-next", price: "$0.11", note: "cheap coding specialist (Qwen)" },
+  { slug: "qwen/qwen3.6-flash", price: "$0.19", note: "fast Qwen — great value (thinking)" },
   { slug: "openai/gpt-5.4-nano", price: "$0.20", note: "cheap OpenAI" },
   { slug: "google/gemini-3.1-flash-lite", price: "$0.25", note: "cheap Google" },
-  { slug: "z-ai/glm-4.7", price: "$0.40", note: "strong coder, great value" },
+  { slug: "qwen/qwen3.7-plus", price: "$0.32", note: "strong Qwen (thinking)" },
   { slug: "deepseek/deepseek-v4-pro", price: "$0.43", note: "stronger DeepSeek" },
-  { slug: "z-ai/glm-5.2", price: "$0.95", note: "top agentic coder" },
+  { slug: "z-ai/glm-5", price: "$0.60", note: "strong coder, great value" },
+  { slug: "z-ai/glm-5.2", price: "$0.93", note: "top agentic coder" },
   { slug: "anthropic/claude-haiku-4.5", price: "$1.00", note: "fast Claude" },
-  { slug: "x-ai/grok-4.3", price: "$1.25", note: "xAI Grok" },
   { slug: "google/gemini-3.5-flash", price: "$1.50", note: "capable Google" },
-  { slug: "anthropic/claude-sonnet-4.6", price: "$3.00", note: "top quality (premium)" },
+  { slug: "anthropic/claude-sonnet-5", price: "$2.00", note: "top quality (premium)" },
+  { slug: "x-ai/grok-4.5", price: "$2.00", note: "xAI Grok (latest)" },
   { slug: "openai/gpt-5.5", price: "$5.00", note: "OpenAI flagship (premium)" },
 ];
 
@@ -52,7 +55,7 @@ export function normalizeEffort(raw: string | undefined | null): ReasoningEffort
 // Advanced escape hatch: arbitrary extra params merged into every request body
 // (temperature, top_p, seed, provider routing, …). Malformed JSON → {} (ignored), so a
 // typo can never break every request. Read ONLY from the real shell env, like every knob.
-function parseExtra(raw: string | undefined): Record<string, unknown> {
+export function parseExtra(raw: string | undefined): Record<string, unknown> { // exported for tests
   if (!raw || !raw.trim()) return {};
   try {
     const parsed = JSON.parse(raw);

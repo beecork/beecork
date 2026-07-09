@@ -44,7 +44,8 @@ async function summarize(old: Message[], signal?: AbortSignal): Promise<string> 
         role: "system",
         content:
           "You are compacting a long coding session to fit the context window. Summarize the transcript below into structured notes the assistant can continue from WITHOUT losing important context. Use exactly these headings:\n" +
-          "- Goal: what the user ultimately wants (and any explicit instructions/preferences).\n" +
+          "- Rules: any standing rule or constraint the user set for the whole session (e.g. 'always …', 'never …', a required format/naming/convention). Copy each one VERBATIM — they are STILL BINDING and MUST be applied to everything you do next. Write 'none' only if there truly are none.\n" +
+          "- Goal: what the user ultimately wants (and any other preferences).\n" +
           "- Done: key steps taken, decisions made, and files created or edited — keep the essential code/exact changes.\n" +
           "- Facts: important things discovered about the codebase (structure, conventions, file contents that matter).\n" +
           "- Errors & fixes: problems hit and how they were resolved, plus any user corrections.\n" +

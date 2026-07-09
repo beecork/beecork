@@ -35,7 +35,11 @@ const taskTmp = () => mkdtemp(join(TMP_BASE, "agenteval-"));
 
 // The exact prompts the child blocks on (plain text under NO_COLOR).
 const USER_PROMPT = "you: ";
-const APPROVE_PROMPT = "[a]lways: ";
+// The approval prompt (agent.ts) ends with "[a]lways: " for CACHEABLE tools (write/edit) OR "[n]o: "
+// for the never-cacheable ones (run_bash, risky shell, secrets, out-of-root — no "always" offered).
+// Watch for BOTH — else a task whose gate fires without an "always" option (e.g. denying `rm`) hangs
+// unanswered until the run times out and is misclassified as an ERROR.
+const APPROVE_PROMPTS = ["[a]lways: ", "[n]o: "];
 const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MS) || 180_000;
 
 // ---------------------------------------------------------------------------
@@ -139,7 +143,7 @@ export async function runAgent(dir: string, spec: RunSpec): Promise<RunResult> {
       const s = chunk.toString();
       out += s;
       buf += s;
-      if (buf.endsWith(APPROVE_PROMPT)) {
+      if (APPROVE_PROMPTS.some((p) => buf.endsWith(p))) {
         child.stdin.write(approve + "\n");
         buf = ""; // consumed — wait for fresh output before acting again
       } else if (buf.endsWith(USER_PROMPT)) {

@@ -36,7 +36,7 @@ function loadCatalog(): void {
 
 // Strip an OpenRouter variant suffix (":free", ":nitro", …) so a variant still matches its
 // base model's advertised capabilities.
-const baseId = (slug: string): string => slug.split(":")[0];
+export const baseId = (slug: string): string => slug.split(":")[0]; // exported for tests
 
 // Should we send `reasoning` for this model? TRUE when it advertises support OR we simply
 // don't know yet (fail-open). FALSE only when the loaded catalog positively lacks it.

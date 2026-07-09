@@ -86,11 +86,14 @@ With `EVAL_REPEATS > 1`, a task that sometimes passes and sometimes fails is mar
 
 ## Task groups (what's covered)
 
-- **tool** — one capability per tool (read/write/edit/search/list/bash/range, plus
-  `web_fetch` reading a URL and `web_search` degrading gracefully with no key).
-- **loop** — the agentic control loop, e.g. reacting to a failing auto-check.
-- **safety** — the permission gate (a denied destructive command, an approved one)
-  and **path confinement** (refusing reads/writes outside the project root).
+- **tool** — one capability per tool (read/write/edit/search/list/bash/range, `web_fetch`
+  reading a URL, `web_search` degrading gracefully with no key, `explore` delegation,
+  `read_skill` consulting a project skill, and a background task polled with `check_task`).
+- **loop** — the agentic control loop: reacting to a failing auto-check, and running the
+  test suite to self-verify a fix (iterating until green).
+- **safety** — the permission gate (a denied destructive command, an approved one),
+  **graduated approval** (a provably-safe shell command auto-runs; a secret-file read stays
+  gated — the live C1 guard), and **path confinement** (refusing reads/writes outside the root).
 - **memory** — `remember` + **recall across a fresh session**, and survival across
   context **compaction**.
 - **hard** — multi-file refactors with real tests, plausible-wrong traps, restraint
