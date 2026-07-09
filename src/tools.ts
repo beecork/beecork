@@ -18,6 +18,7 @@ import { runExplorer } from "./subagent";
 import { resolveInRoot } from "./paths";
 import { pathGuard, readGuard, writeGuard, bashGuard, isSafeBash, isPrivateAddr, SECRET_FILE, DANGEROUS_BASH } from "./safety";
 import { htmlToText, stripInvisible, stripControlTokens, wrapUntrusted } from "./html";
+import { ensureBridge, skeletonUrl, type EnsureResult } from "./skeleton";
 import { renderTodos } from "./ui";
 import { showPayload } from "./show";
 import type { ToolCall, ToolDef, TodoItem } from "./types";
@@ -381,17 +382,19 @@ async function readLineWindow(abs: string, offset1: number, limit: number): Prom
   return { lines, startLine: start + 1, hasMore, empty: i === 0 };
 }
 
-// Shown when read_dev_signals can't reach the local bridge — the one-time setup steps to relay.
-const DEV_SIGNALS_SETUP = `The browser link isn't connected yet (nothing is responding on localhost:8317).
+// The one-time connect steps (load + pair the extension). beecork now runs the local inbox
+// itself (src/skeleton.ts auto-starts skeleton/bridge.mjs), so there is no bridge to start by
+// hand — only the extension, which Chrome requires the user to load.
+const EXTENSION_STEPS =
+  `1. Load the extension: Chrome → chrome://extensions → turn on "Developer mode" → "Load unpacked" → select the beecork-extension/extension folder, and pin the icon.\n` +
+  `2. Click the icon (it auto-connects — no token to paste), tick "Capture enabled", open the app in a tab, and click "Pair this site".`;
 
-This is "Beecork Skeleton" — a Chrome extension that sends the app's console errors and failed network requests to me, so I can see what the browser sees instead of guessing. One-time, local-only setup (no account, no signup).
-
-Walk the user through connecting it:
-1. Start the local inbox: run \`node bridge/server.mjs\` in the beecork-extension folder, and leave it running.
-2. Load the extension: Chrome → chrome://extensions → turn on "Developer mode" → "Load unpacked" → select the beecork-extension/extension folder. Pin the icon.
-3. Click the icon (it auto-connects), tick "Capture enabled", open the app in a tab, and click "Pair this site".
-
-Then call read_dev_signals again. Full step-by-step + troubleshooting is in the "browser-signals" skill.`;
+// Relayed when the inbox is unreachable — what the user must do to connect the browser side.
+const DEV_SIGNALS_SETUP =
+  `The browser link isn't connected yet.\n\n` +
+  `This is "Beecork Skeleton" — a Chrome extension that streams the app's console errors and failed network requests to me, so I see what the browser sees instead of guessing. beecork runs the local inbox for you automatically; the only one-time step is loading the extension (local-only, no account):\n\n` +
+  EXTENSION_STEPS +
+  `\n\nThen call read_dev_signals again. Full step-by-step + troubleshooting is in the "browser-signals" skill.`;
 
 export const toolDefs: ToolDef[] = [
   {
@@ -977,7 +980,8 @@ export const toolDefs: ToolDef[] = [
       required: [],
     },
     run: async (args, signal) => {
-      const base = process.env.BEECORK_DEV_SIGNALS_URL || "http://localhost:8317";
+      const ens: EnsureResult = await ensureBridge().catch(() => ({ up: false, reason: "spawn-failed" }));
+      const base = skeletonUrl();
       const kind = args.kind ? String(args.kind) : "";
       const limit = Math.min(Math.max(Number(args.limit) || 30, 1), 200);
       const sinceMin = Number(args.since_minutes) || 0;
@@ -988,15 +992,18 @@ export const toolDefs: ToolDef[] = [
       let data: { signals?: Record<string, any>[] };
       try {
         const res = await fetch(`${base}/signals?${params}`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-        if (!res.ok) return `The browser link responded with HTTP ${res.status}. The bridge may be unhealthy — try restarting it (node bridge/server.mjs).`;
+        if (!res.ok) return `The browser link responded with HTTP ${res.status}. The inbox may be unhealthy — I'll try to start a fresh one on the next call.`;
         data = (await res.json()) as { signals?: Record<string, any>[] };
       } catch {
-        return DEV_SIGNALS_SETUP; // no bridge reachable → relay the setup steps
+        if (ens.reason === "foreign-port") return `Another program is using the browser-link inbox port, so I couldn't start it. Free that port (or set BEECORK_DEV_SIGNALS_URL to a different inbox) and try again.`;
+        return DEV_SIGNALS_SETUP; // inbox unreachable → relay the connect steps
       }
       const now = Date.now();
       const signals = (data.signals ?? []).filter((s) => s && s.kind !== "watch"); // drop the meta "watch" lines
       if (signals.length === 0) {
-        return `The browser link is connected, but no ${kind && kind !== "all" ? `"${kind}" ` : ""}signals were captured${sinceMin ? ` in the last ${sinceMin} min` : ""}. The watched tab just hasn't hit the error yet — reproduce the issue in the browser (or open the app), then call this again.`;
+        return `The inbox is running${ens.started ? " (I just started it)" : ""}, but no ${kind && kind !== "all" ? `"${kind}" ` : ""}signals were captured${sinceMin ? ` in the last ${sinceMin} min` : ""} yet.\n\n` +
+          `If the Beecork Skeleton extension isn't loaded yet, connect it:\n${EXTENSION_STEPS}\n\n` +
+          `Already connected? Reproduce the issue in the browser (or open the app), then call read_dev_signals again.`;
       }
       const ago = (ts?: number) => (ts ? `${Math.max(0, Math.round((now - ts) / 1000))}s ago` : "");
       const lines = signals.map((s) => {
@@ -1023,7 +1030,8 @@ export const toolDefs: ToolDef[] = [
       required: ["url"],
     },
     run: async (args, signal) => {
-      const base = process.env.BEECORK_DEV_SIGNALS_URL || "http://localhost:8317";
+      await ensureBridge().catch(() => {});
+      const base = skeletonUrl();
       let origin: string;
       try {
         origin = new URL(String(args.url ?? "")).origin;

@@ -9,7 +9,8 @@
   "main": "dist/index.js",
   "files": [
     "dist/",
-    "skills/"
+    "skills/",
+    "skeleton/"
   ],
   "engines": {
     "node": ">=20.12"

@@ -32,16 +32,18 @@ its own). Then have the user reproduce the issue (or open the site) and call
 
 ## If it says "not connected" — one-time setup
 
-The tool returns setup steps when the bridge isn't running. Relay them to the user:
+**beecork starts the local inbox itself** — the first time you call `read_dev_signals` or
+`watch_site`, beecork auto-starts the bundled bridge (a `127.0.0.1:8317` inbox) in the
+background and shares it across sessions. So there is **no bridge to run by hand**; the only
+one-time step is loading the Chrome extension:
 
-1. **Start the local inbox (bridge):** run `node bridge/server.mjs` in the `beecork-extension`
-   folder and leave it running. It listens on `localhost:8317`.
-2. **Load the extension:** Chrome → `chrome://extensions` → enable **Developer mode** →
+1. **Load the extension:** Chrome → `chrome://extensions` → enable **Developer mode** →
    **Load unpacked** → select the `beecork-extension/extension` folder → pin the icon.
-3. **Connect + approve:** click the icon (it auto-connects — no token to paste), tick
+2. **Connect + approve:** click the icon (it auto-connects — no token to paste), tick
    **Capture enabled**, open the app in a tab, and click **Pair this site**.
 
-Then call `read_dev_signals` again.
+Then call `read_dev_signals` again. (If beecork reports the inbox port is held by another
+program, free port 8317 or set `BEECORK_DEV_SIGNALS_URL` to a different inbox.)
 
 ## Empty result
 
