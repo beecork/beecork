@@ -103,6 +103,52 @@ export function bashGuard(args: Record<string, any>): { needsApproval?: boolean;
   return {};
 }
 
+// Graduated approval (deny-first): commands that are PROVABLY safe to run without asking — read-only,
+// in-root, single, no shell metacharacters. Everything else falls through to the normal prompt. This
+// only ever REMOVES a prompt for a demonstrably harmless command; it never grants a risky one.
+const SAFE_BASH_COMMANDS = new Set([
+  "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "tree", "du", "nl", "column",
+  "grep", "egrep", "fgrep", "rg", // NOTE: `find` is deliberately excluded — it can WRITE via -fprint/-fls
+  "which", "type", "echo", "printf", "basename", "dirname", "realpath", "readlink", "true", "test",
+]);
+// git is safe ONLY for these subcommands — they have no write form regardless of flags. (Deliberately
+// excludes branch/tag/remote/config/stash/reflog, which all have mutating variants.)
+const SAFE_GIT_READ = new Set(["status", "diff", "log", "show", "blame", "shortlog", "ls-files", "rev-parse", "describe", "cat-file", "whatchanged"]);
+
+export function isSafeBash(cmd: string): boolean {
+  const c = cmd.trim();
+  if (!c) return false;
+  // Reject anything that could chain, pipe, redirect, substitute, background, escape, or span lines.
+  // (A "safe" `cat` must not be able to become `cat x > /etc/y` or `cat $(evil)`.)
+  if (/[|&;<>`$(){}\n\r\\!]/.test(c)) return false;
+  const s = bashSafety(c); // belt-and-suspenders: never auto-approve a risky/dangerous/out-of-root call
+  if (s.dangerous || s.risky || s.outsideRoot) return false;
+  const tokens = c.split(/\s+/);
+  const cmd0 = tokens[0];
+  const args = tokens.slice(1);
+  if (cmd0 === "git") {
+    const sub = args.find((t) => !t.startsWith("-")); // first non-flag token = the subcommand
+    if (!sub || !SAFE_GIT_READ.has(sub)) return false;
+    // Even a read subcommand can WRITE a file via --output/-o — reject those.
+    if (args.some((t) => /^(--output(-directory)?(=|$)|-o$|-O$)/.test(t))) return false;
+  } else if (!SAFE_BASH_COMMANDS.has(cmd0)) {
+    return false;
+  }
+  // Every non-flag argument must resolve IN-ROOT and not name a secret file. This backstops the
+  // refsOutsideRoot heuristic's embedded-`..` gap (which the human prompt used to catch) and closes the
+  // secret-read hole — secretGuard covers read_file/edit_file, NOT run_bash. A search pattern is treated
+  // as a path too: this over-rejects a few odd cases to a PROMPT (deny-first), never under-rejects. An
+  // unexpanded glob can't be resolved statically (`cat *`/`cat .*` could pull a secret), so reject it.
+  for (const t of args) {
+    if (t.startsWith("-")) continue; // a flag
+    if (/[*?[\]]/.test(t)) return false;
+    const r = resolveInRoot(t);
+    if (!r.inRoot) return false;
+    if (SECRET_FILE.test(t) || SECRET_FILE.test(r.abs) || SECRET_FILE.test(basename(r.abs))) return false;
+  }
+  return true;
+}
+
 // Inspection seam for the shell-safety predicates (regression-tested in safety.test.ts).
 export function bashSafety(cmd: string): { dangerous: boolean; risky: boolean; outsideRoot: boolean } {
   return {

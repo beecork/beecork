@@ -23,6 +23,7 @@ export const ansi = {
   clearToEnd: CSI + "J",        // cursor → end of screen
   clearScreen: CSI + "2J",      // whole viewport
   clearScrollback: CSI + "3J",  // scrollback buffer (xterm extension)
+  clearAndHome: CSI + "2J" + CSI + "3J" + CSI + "H", // clear viewport + scrollback, cursor to top-left
   cr: "\r",                     // carriage return (column 1, same row)
   home: CSI + "H",              // row 1, col 1
 

@@ -1,7 +1,8 @@
 // Tests for skill expansion + parsing. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { expandSkill, parseSkill, skillsPrompt, type Skill } from "./skills";
+import { expandSkill, parseSkill, skillsPrompt, loadSkills, getSkill, type Skill } from "./skills";
+import { toolDefs } from "./tools";
 
 const skill = (content: string): Skill => ({
   name: "x", content, description: "", modelInvocable: true, path: "/x.md", source: "project",
@@ -55,4 +56,18 @@ test("skillsPrompt: advertises invocable skills, excludes opted-out ones, tags p
 
 test("skillsPrompt: no invocable skills → empty string (nothing injected)", () => {
   assert.equal(skillsPrompt([{ name: "x", content: "", description: "d", modelInvocable: false, path: "/x", source: "project" }]), "");
+});
+
+test("read_skill: returns the body, strips a leading slash, labels project skills, errors on unknown", async () => {
+  await loadSkills(); // loads this repo's .beecork/skills (+ any global)
+  const rs = toolDefs.find((t) => t.name === "read_skill")!;
+  assert.match(await rs.run({ name: "no-such-skill-xyz" }), /Error: no skill/);
+  assert.match(await rs.run({ name: "" }), /Error/);
+  const check = getSkill("check"); // the repo ships .beecork/skills/check.md
+  if (check) {
+    const body = await rs.run({ name: "check" });
+    assert.ok(body.endsWith(check.content), "returns the skill body");
+    assert.equal(await rs.run({ name: "/check" }), body, "leading slash stripped");
+    if (check.source === "project") assert.match(body, /LOWER TRUST/); // M3 trust label on repo skills
+  }
 });

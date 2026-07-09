@@ -110,6 +110,12 @@ export const config = {
   statuslineEnabled: !["0", "false", "off", "no"].includes((process.env.STATUSLINE ?? "").trim().toLowerCase()),
   statuslineRefreshMs: num("STATUSLINE_REFRESH_MS", 2000), // bar refresh interval
 
+  // Graduated approval: auto-approve provably-safe, read-only, in-root shell commands (no metacharacters)
+  // so `ls`/`cat`/`git status` don't prompt like `rm` does — cutting the approval fatigue that makes the
+  // gate unreliable. Deny-first: anything not provably safe still asks. Default on; SAFE_BASH_APPROVE=0
+  // reverts to prompting for every shell command.
+  safeBashAutoApprove: !["0", "false", "off", "no"].includes((process.env.SAFE_BASH_APPROVE ?? "").trim().toLowerCase()),
+
   // Integrations / modes
   verifyCommand: process.env.VERIFY_COMMAND ?? "", // auto-run after edits (e.g. "npm run typecheck")
   traceFile: process.env.TRACE_FILE ?? "", // record tool calls for the eval

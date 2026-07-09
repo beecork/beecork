@@ -8,11 +8,11 @@
 // is what caused the banner-loss/flicker bugs. Here the input is ONE row (long lines scroll
 // horizontally) and everything is drawn with ABSOLUTE positioning against a fixed region — robust.
 
-import { color, stripAnsi, isPrintableCodePoint } from "./ui";
+import { color, stripAnsi, stripControl, isPrintableCodePoint } from "./ui";
 import { ansi } from "./ansi";
-import { windowStart } from "./layout";
+import { windowStart, windowEnd } from "./layout";
 import { execFile } from "node:child_process";
-import { state, nextMode } from "./state";
+import { state, nextMode, modeLabel } from "./state";
 import { config } from "./config";
 import { runningTaskCount } from "./tasks";
 import { pushKeyHandler } from "./input";
@@ -69,19 +69,21 @@ const PW = 2; // display width of the marker
 
 // --- rich, colorful statusline (with MODE) ----------------------------------
 function modeSegment(): string {
-  return state.mode === "auto" ? color.yellow("auto-approve")
-    : state.mode === "readonly" ? color.cyan("read-only")
-    : color.green("normal");
+  // Label text is owned by modeLabel() (single source of truth); this only maps mode → color.
+  const paint = state.mode === "auto" ? color.yellow : state.mode === "normal" ? color.green : color.cyan;
+  return paint(modeLabel(state.mode));
 }
-function statusText(): string {
-  const model = state.model.split("/").pop() ?? state.model;
+export function statusText(): string { // exported for the sanitization regression test
+  // stripControl: state.model can come from a lower-trust project settings.json, and branch from git —
+  // both are repo-influenced; sanitize before printing so they can't emit cursor/escape/OSC sequences.
+  const model = stripControl(state.model.split("/").pop() ?? state.model);
   const tok = tokensOf();
   const ctxK = Math.round(config.maxContextTokens / 1000);
   const parts = [
     modeSegment(),
     color.cyan(model),
     color.dim(state.reasoningEffort),
-    ...(branch ? [color.green(branch)] : []),
+    ...(branch ? [color.green(stripControl(branch))] : []),
     color.dim(`~${Math.round(tok / 1000)}k/${ctxK}k`),
   ];
   const bg = runningTaskCount();
@@ -127,8 +129,9 @@ const flat = (s: string) => s.replace(/\n/g, "⏎");
 // content position, so output never leaves a gap). Empty → dim placeholder hint.
 function drawInput(): void {
   const disp = flat(buf);
-  const start = windowStart(disp, cur, Math.max(1, cols() - PW));
-  const shown = disp.slice(start);
+  const avail = Math.max(1, cols() - PW);
+  const start = windowStart(disp, cur, avail);
+  const shown = disp.slice(start, windowEnd(disp, start, avail)); // clip BOTH edges so the one row can't wrap
   const ci = cur - start;
   let body: string;
   if (!buf) {

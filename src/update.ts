@@ -40,8 +40,10 @@ function runningPkgRoot(): string {
 export function prefixFromPkgRoot(pkgRoot: string): string | null {
   const nm = dirname(pkgRoot); // …/node_modules  (or repo/.. in dev)
   if (basename(nm) !== "node_modules") return null;
-  const up = dirname(nm); // <prefix>/lib  or  <prefix>
-  return basename(up) === "lib" ? dirname(up) : up;
+  const up = dirname(nm); // <prefix>/lib (unix)  or  <prefix> (Windows)
+  // Only unix nests the install under <prefix>/lib/node_modules; Windows global is <prefix>/node_modules.
+  // Gating on platform avoids mis-stripping a Windows prefix that happens to end in a dir named "lib".
+  return process.platform !== "win32" && basename(up) === "lib" ? dirname(up) : up;
 }
 export function installPrefix(): string | null {
   return prefixFromPkgRoot(runningPkgRoot());

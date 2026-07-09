@@ -8,14 +8,16 @@ import type { TraceEntry } from "./types";
 //   normal    — ask before each edit / command (default)
 //   auto      — auto-approve edits & commands, BUT the per-CALL hard guard
 //               (out-of-root paths, risky/destructive shell) STILL asks
-//   readonly  — block all edits/commands; read, search and web only (safe explore)
-export type Mode = "normal" | "auto" | "readonly";
-const MODES: Mode[] = ["normal", "auto", "readonly"];
+//   readonly  — block all edits/commands; read, search and web only (safe explore, zero shell)
+//   plan      — like readonly for mutations, but provably-safe read-only shell is allowed so the agent
+//               can explore, then present a plan for approval (Explore-Plan-Act). Flip to normal to run it.
+export type Mode = "normal" | "auto" | "readonly" | "plan";
+const MODES: Mode[] = ["normal", "auto", "readonly", "plan"];
 export function nextMode(m: Mode): Mode {
   return MODES[(MODES.indexOf(m) + 1) % MODES.length];
 }
 export function modeLabel(m: Mode): string {
-  return m === "auto" ? "auto-approve" : m === "readonly" ? "read-only" : "normal";
+  return m === "auto" ? "auto-approve" : m === "readonly" ? "read-only" : m === "plan" ? "plan" : "normal";
 }
 
 export const state = {

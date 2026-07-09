@@ -54,3 +54,19 @@ export function windowStart(text: string, cur: number, avail: number): number {
     while (start < cur && displayWidth(text.slice(start, cur)) >= avail) start++;
   return start;
 }
+
+// Last visible code-unit index for the same box: clip the RIGHT edge so the drawn slice `text[start:end]`
+// never exceeds `avail` display columns. The pinned chrome input is one physical row, so an unclipped
+// long line would wrap onto the border/status rows and corrupt the layout. Pairs with windowStart (which
+// guarantees the cursor sits within `avail` of `start`, so it stays inside this window).
+export function windowEnd(text: string, start: number, avail: number): number {
+  let end = start, w = 0;
+  while (end < text.length) {
+    const ch = String.fromCodePoint(text.codePointAt(end)!);
+    const cw = displayWidth(ch);
+    if (w + cw > avail) break;
+    w += cw;
+    end += ch.length; // advance by UTF-16 units (astral chars = 2)
+  }
+  return end;
+}

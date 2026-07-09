@@ -57,7 +57,14 @@ function killTask(task: BgTask): void {
 
 // Spawn a detached background command; return its id immediately (does NOT await). Enforces the
 // per-session cap. On failure returns { error } (the caller prefixes "Error:").
+const MAX_EXITED = 20; // finished-task tombstones kept for a final check_task; older ones are evicted
+function evictOldExited(): void {
+  const exited = [...tasks.values()].filter((t) => t.status === "exited").sort((a, b) => a.startedAt - b.startedAt);
+  for (const t of exited.slice(0, Math.max(0, exited.length - MAX_EXITED))) tasks.delete(t.id);
+}
+
 export function startTask(command: string): { id?: string; error?: string } {
+  evictOldExited(); // keep the map from accumulating finished-task tombstones for the whole session
   const running = [...tasks.values()].filter((t) => t.status === "running").length;
   if (running >= config.maxBackgroundTasks) {
     return { error: `too many background tasks (${running}/${config.maxBackgroundTasks}) — stop one with stop_task first.` };

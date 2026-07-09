@@ -109,8 +109,55 @@ wrapUntrusted strips them on the non-HTML path).
 
 ---
 
+---
+
+# From the 2026 harness-engineering deep-dive
+
+A later internet search of mid-2026 CLI-agent best practice (the "12 agentic harness patterns", the
+compaction research, Anthropic's Claude Code auto-mode writeup) mostly *validated* beecork's design, and
+surfaced three more worth building.
+
+## 5. Graduated approval (deterministic) — DONE (openclaw / Claude Code pattern #10)
+
+**Why.** The data: users approve ~93% of permission prompts → approval fatigue makes the gate
+unreliable. beecork asked for *every* shell command in normal mode (`ls` prompted like `rm`).
+
+**Now.** `isSafeBash()` (`safety.ts`) auto-approves a shell command **only** if it's provably safe —
+first word in a small read-only allow-list (`ls cat head tail wc grep rg find pwd stat …`, or `git`
+with a pure-read subcommand `status/diff/log/show/blame/…`), **no shell metacharacters at all**
+(`| & ; < > ` $ ( ) { } \ !` / newlines), and not matched by `RISKY_BASH`/`DANGEROUS_BASH`/out-of-root.
+Wired as a new `ToolDef.safeAutoApprove` hook honored in `decideApproval` **after** the hard guard, so a
+risky/out-of-root call still asks. Deny-first: anything uncertain falls through to the normal prompt.
+
+**Deliberately NOT the LLM classifier** that Claude Code uses (it reports a 17% false-negative rate and
+adds a model call per command) — a weaker/cheaper model would miss *more*. The deterministic allow-list
+has zero calls and no new attack surface. Opt out with `SAFE_BASH_APPROVE=0`. Tests: `safety.test.ts`
+(safe vs unsafe corpus), `approval.test.ts` (wiring: safe→run, risky-guard-wins, readonly-blocks).
+
+## 6. Plan mode (Explore-Plan-Act) — DONE (pattern #6)
+
+**Why.** Separating read-only exploration from editing measurably improves decisions — and you approve
+the approach before any file changes.
+
+**Now.** A 4th mode in the `Shift+Tab` rotation (normal → auto → read-only → **plan**). In plan mode the
+gate blocks everything that mutates (like read-only) but **allows provably-safe read-only shell** (via
+the graduated-approval check above), so the agent can explore with `git log`/`grep`, then a per-turn
+directive tells it to present a numbered plan and stop. Flip to normal to execute. `state.ts` (mode +
+rotation + label), `decideApproval` (plan gate, safe-shell allowed / mutations denied — a floor that
+holds even under `--dangerously-skip`), `index.ts` (`PLAN_DIRECTIVE` injected per plan-mode turn),
+`chrome.ts` (statusline segment). Read-only mode stays **strict** (zero shell) on purpose. Tests:
+`approval.test.ts` (plan blocks mutations, allows safe shell, reads run).
+
+## 7. Staged compaction — SKIPPED (pattern #5)
+
+beecork's compaction is already lean 2-tier (keep ~12 recent messages verbatim, collapse the rest into
+one structured summary). "Staged" compaction deliberately *retains more* history at graduated detail —
+which for a token-economical agent that already compacts hard is arguably worse (more tokens / more
+context-rot), at the cost of multiple-summary-pass complexity. Skipped by the "not-much-value +
+complexity" rule; the aggressive 2-tier approach is the right shape for beecork.
+
 ## Status
 
-Shortlist worked through: **#1, #2, #4 built** (tested, unshipped — batched for one release); **#3
-skipped**; **#5 (reducing-script) demoted** (run_bash already covers the core, the rest needs the RPC
-machinery we won't add).
+Original shortlist: **#1, #2, #4 built**, **#3 skipped**, **#5 (reducing-script) demoted**. Deep-dive
+add-ons: **graduated approval + plan mode built**, **staged compaction skipped** (beecork's lean
+compaction is already right).

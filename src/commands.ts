@@ -129,7 +129,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     }
   } else if (cmd === "/clear") {
     messages.splice(1); // keep the system prompt; drop the conversation history
-    if (process.stdout.isTTY) process.stdout.write(ansi.clearScreen + ansi.clearScrollback + ansi.home); // clear screen + scrollback + home
+    if (process.stdout.isTTY) process.stdout.write(ansi.clearAndHome); // clear screen + scrollback + home
     console.log(color.dim("conversation cleared (kept the system prompt, your model + settings).") + "\n");
   } else if (cmd === "/resume") {
     const sessions = process.stdin.isTTY ? await listSessions() : [];
@@ -183,7 +183,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
       "commands (type / to open the menu):",
       ...SLASH_COMMANDS.map((c) => `  ${c.name.padEnd(16)}  ${c.desc}`),
       `  ${"/<name>".padEnd(16)}  run a skill from .beecork/skills/<name>.md`,
-      `  ${"Shift+Tab".padEnd(16)}  rotate mode: normal → auto-approve → read-only`,
+      `  ${"Shift+Tab".padEnd(16)}  rotate mode: normal → auto-approve → read-only → plan`,
       `  ${"exit".padEnd(16)}  quit`,
       "",
     ];

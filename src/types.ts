@@ -37,6 +37,11 @@ export type ToolDef = {
   // makes an "always" answer stick for THIS key (e.g. one out-of-root path) for the session
   // only — never persisted. Absent (secrets, risky shell) → never cacheable.
   guard?: (args: Record<string, any>) => { needsApproval?: boolean; reason?: string; cacheKey?: string };
+  // Graduated approval: return true when THIS specific call is provably safe to run without asking
+  // (e.g. a read-only, in-root shell command with no metacharacters). Deny-first — anything not
+  // provably safe returns false and falls through to the normal prompt. Checked AFTER the hard guard,
+  // so a risky/out-of-root call still asks. Does not apply in read-only mode.
+  safeAutoApprove?: (args: Record<string, any>) => boolean;
 };
 
 export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed" };

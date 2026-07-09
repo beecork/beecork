@@ -104,10 +104,19 @@ export function decideApproval(
   // Read-only mode: refuse anything that writes/edits/runs (reads/search/web still pass). This is a
   // capability mode (an explicit runtime choice), so it holds even under --dangerously-skip-permissions.
   if (ctx.mode === "readonly" && (tool?.needsApproval || tool?.mutates)) {
-    return { action: "deny", kind: "readonly", reason: "read-only mode" };
+    return { action: "deny", kind: "readonly", reason: "read-only mode" }; // strict: zero shell, no classifier dependency
   }
-  // DANGER bypass: skip the entire approval gate (out-of-root + risky shell just run). Placed AFTER
-  // readonly (orthogonal) — the catastrophic-pattern refusal in run_bash.run still fires as a floor.
+  // Graduated approval: a provably-safe call (a read-only, in-root shell command with no metacharacters)
+  // runs without a prompt — in normal, auto, AND plan mode. It changes nothing, so it's safe even while
+  // planning; read-only mode above stays strict on purpose (blocks even this).
+  if (tool?.safeAutoApprove?.(args)) return { action: "run" };
+  // Plan mode: like read-only for anything that mutates — investigate + present a plan first — but the
+  // safe read-only shell above is allowed so the agent can explore freely. Flip to normal to execute.
+  if (ctx.mode === "plan" && (tool?.needsApproval || tool?.mutates)) {
+    return { action: "deny", kind: "readonly", reason: "plan mode — investigate read-only, then present a plan for approval" };
+  }
+  // DANGER bypass: skip the entire approval gate (out-of-root + risky shell just run). Placed AFTER the
+  // capability modes (they're floors that hold even here) — the catastrophic refusal in run_bash still fires.
   if (ctx.dangerouslySkip) return { action: "run" };
   // per-CALL hard guard (out-of-root path / risky shell). A guard with a cacheKey (an out-of-root
   // PATH) can be blessed for the session with "always" — scoped to that key, never persisted. Guards

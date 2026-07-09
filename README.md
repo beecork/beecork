@@ -58,7 +58,7 @@ outside (or any shell command) goes through a permission gate.
 ### Tools
 
 `read_file` · `show` · `write_file` · `edit_file` · `list_dir` · `search` · `run_bash` ·
-`web_fetch` · `web_search` · `update_todos` · `remember` · `ask_user` · `check_task` · `stop_task` · `explore`
+`web_fetch` · `web_search` · `update_todos` · `remember` · `read_skill` · `ask_user` · `check_task` · `stop_task` · `explore`
 
 ### Background tasks
 
@@ -83,6 +83,15 @@ On an interactive terminal, beecork pins a persistent input box and a rich statu
 (`mode · model · effort · git branch · ~tokens · background tasks`) to the bottom, with the
 conversation scrolling above (Claude-Code style). Shift+Tab rotates the mode. This is **on by default**;
 opt out with `STATUSLINE=0` to use the classic inline editor. Piped/non-TTY input is unaffected either way.
+
+### Modes
+
+Shift+Tab cycles four permission modes: **normal** (ask before each edit/command) → **auto-approve**
+(auto-approve edits & commands; the hard guard for out-of-root/risky shell still asks) → **read-only**
+(block all mutation — explore with reads/search only) → **plan** (read-only for mutations, but
+provably-safe read-only shell like `git log`/`grep` is allowed, so the agent can investigate and present
+a plan; flip back to normal to execute it). Provably-safe read-only shell commands (`ls`, `cat`,
+`git status`…) auto-run without a prompt in normal mode — opt out with `SAFE_BASH_APPROVE=0`.
 
 ### Skipping permissions (danger)
 
@@ -125,6 +134,7 @@ All variables are read from the real shell environment only (never a project fil
 | `BRAVE_API_KEY` | Brave Search key (for `web_search`) | — |
 | `VERIFY_COMMAND` | Command auto-run after edits (e.g. `npm run typecheck`) | — |
 | `AUTO_APPROVE` | Headless: skip approval prompts (out-of-root/risky shell are still hard-denied) | off |
+| `SAFE_BASH_APPROVE` | Auto-approve provably-safe read-only shell (`ls`/`cat`/`git status`…); set `0` to prompt for all | on |
 | `BEECORK_DANGEROUSLY_SKIP_PERMISSIONS` | Sandbox-only: skip the whole gate (also `--dangerously-skip-permissions`) | off |
 | `STATUSLINE` / `STATUSLINE_REFRESH_MS` | Pinned UI + status bar (set `0` to opt out) · refresh interval | on · `2000` |
 | `NO_UPDATE_NOTIFIER` / `CI` | Disable the "update available" check | off |
@@ -133,7 +143,7 @@ All variables are read from the real shell environment only (never a project fil
 | `WEB_TIMEOUT_MS` | `web_fetch` / `web_search` timeout | `20000` |
 | `MAX_CONTEXT_TOKENS` | Compact the conversation above this | `128000` |
 
-Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`) are defined in `src/config.ts`.
+Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`, `MEMORY_MAX_CHARS`, `MEMORY_NUDGE_INTERVAL`, `SAFE_BASH_APPROVE`) are defined in `src/config.ts`.
 
 ## Development
 

@@ -31,6 +31,14 @@ const MEMORY_NUDGE =
   "up that you haven't saved yet — a lasting preference, a project convention, a fact worth keeping — " +
   "save it now with the remember tool, one short line. If there's nothing worth saving, ignore this.";
 
+// Injected while in PLAN mode (Explore-Plan-Act). Enforcement (no mutations) is guaranteed by
+// decideApproval regardless; this tells the model to plan instead of trying edits it can't make.
+const PLAN_DIRECTIVE =
+  "You are in PLAN mode. Investigate the task read-only — reading, searching, and safe read-only shell " +
+  "(e.g. ls, cat, grep, git status/diff/log) are available; editing, writing, and mutating commands are " +
+  "BLOCKED. When you understand the task, present a concise, numbered plan of the changes you would make, " +
+  "then STOP. Do not attempt edits — the user reviews your plan and switches you to normal mode to execute.";
+
 async function main() {
   // `beecork update` — self-update from the shell, no key/REPL needed.
   if (process.argv[2] === "update") {
@@ -121,21 +129,22 @@ async function main() {
   // Reset the pinned-chrome scroll region on every exit (SYNCHRONOUS — safe here; all deliberate exits
   // funnel through process.exit → 'exit'). Without this a crash could leave the shell's scroll region shrunk.
   process.on("exit", stopChrome);
+  // Save the session + restore the terminal on an abrupt exit (terminal close = SIGHUP, kill = SIGTERM,
+  // crash) — registered UNCONDITIONALLY. An unhandled SIGTERM/SIGHUP terminates without firing 'exit',
+  // so off-TTY (headless/CI) these must be here too, or detached background tasks orphan (killAllTasks
+  // runs on 'exit') and the session is lost. teardownInput is a guarded no-op off-TTY; process.exit()
+  // fires 'exit' → killAllTasks + stopChrome run.
+  process.on("SIGTERM", () => { teardownInput(); void persist().finally(() => process.exit(143)); });
+  process.on("SIGHUP", () => { teardownInput(); void persist().finally(() => process.exit(129)); });
+  process.on("uncaughtException", (err) => { teardownInput(); console.error(`[fatal] ${err?.message ?? err}`); void persist().finally(() => process.exit(1)); });
   if (tty) {
     initInput();
-    // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
-    // a crash/throw/signal must not leave the shell with a hidden cursor + broken paste.
-    // teardownInput is idempotent and guarded on started/isTTY. Also best-effort save the
-    // session so an abrupt exit (terminal close = SIGHUP, kill = SIGTERM, crash) isn't lost.
-    process.on("exit", teardownInput);
-    process.on("SIGTERM", () => { teardownInput(); void persist().finally(() => process.exit(143)); });
-    process.on("SIGHUP", () => { teardownInput(); void persist().finally(() => process.exit(129)); });
-    process.on("uncaughtException", (err) => { teardownInput(); console.error(`[fatal] ${err?.message ?? err}`); void persist().finally(() => process.exit(1)); });
+    process.on("exit", teardownInput); // restore cursor / bracketed paste / cooked mode (TTY-only relevance)
   }
   const rl = tty ? null : createInterface({ input: process.stdin, output: process.stdout, completer });
 
   // Pinned-chrome mode starts from a clean screen (banner scrolls above the pinned input).
-  if (chromeEnabled()) process.stdout.write(ansi.clearScreen + ansi.clearScrollback + ansi.home);
+  if (chromeEnabled()) process.stdout.write(ansi.clearAndHome);
   // Show the startup banner FIRST — before any API-key prompt. Include the running version so it's
   // obvious which build you're on (and whether an update actually took).
   const version = await currentVersion();
@@ -258,10 +267,13 @@ async function main() {
     // Light memory nudge: every N user turns, re-surface a reminder to save durable facts (only when
     // writes are allowed). Keep just the freshest one so reminders don't pile up in history. 0 = off.
     userTurns++;
-    if (config.memoryNudgeInterval > 0 && userTurns % config.memoryNudgeInterval === 0 && state.mode !== "readonly") {
+    if (config.memoryNudgeInterval > 0 && userTurns % config.memoryNudgeInterval === 0 && !["readonly", "plan"].includes(state.mode)) {
       messages = messages.filter((m) => m.content !== MEMORY_NUDGE);
       messages.push({ role: "system", content: MEMORY_NUDGE });
     }
+    // Plan mode: keep the plan directive present (dropped automatically when you leave plan mode).
+    messages = messages.filter((m) => m.content !== PLAN_DIRECTIVE);
+    if (state.mode === "plan") messages.push({ role: "system", content: PLAN_DIRECTIVE });
 
     if (chromeEnabled()) {
       // Pinned chrome owns the keyboard; the bottom input line accepts steering during the turn.

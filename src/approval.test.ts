@@ -10,9 +10,11 @@ const write = mk({ name: "write_file", needsApproval: true });
 const remember = mk({ name: "remember", mutates: true });
 const guarded = mk({ name: "run_bash", needsApproval: true, guard: () => ({ needsApproval: true, reason: "risky" }) });
 const bash = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true }); // a non-risky shell call
+const bashSafe = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true, guard: () => ({}), safeAutoApprove: () => true });
+const bashUnsafe = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true, guard: () => ({}), safeAutoApprove: () => false });
 
 // Decide with sensible defaults; toolName always matches the tool.
-const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string>; approvedGuardKeys?: Set<string>; dangerouslySkip?: boolean } = {}) =>
+const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly" | "plan"; autoApprove?: boolean; approvedTools?: Set<string>; approvedGuardKeys?: Set<string>; dangerouslySkip?: boolean } = {}) =>
   decideApproval(tool, {}, { mode: "normal", autoApprove: false, approvedTools: new Set<string>(), toolName: tool.name, ...over });
 
 test("a read-only tool runs in every mode (incl. read-only)", () => {
@@ -92,4 +94,30 @@ test("askUserMessage: selected / dismissed / headless", () => {
   assert.match(askUserMessage("Q?", { label: "npm", description: "uses lockfile" }, true), /selected: "npm" — uses lockfile/);
   assert.match(askUserMessage("Q?", null, true), /dismissed/);
   assert.match(askUserMessage("Q?", null, false), /headless|proceed/i);
+});
+
+test("graduated approval: a provably-safe shell call runs without asking (normal mode)", () => {
+  assert.deepEqual(decide(bashSafe), { action: "run" });
+});
+test("graduated approval: a non-safe shell call still asks", () => {
+  assert.equal(decide(bashUnsafe).action, "ask");
+});
+test("graduated approval: a non-safe risky command still hits the guard (asks)", () => {
+  // isSafeBash internally excludes risky/dangerous/out-of-root, so a risky command's safeAutoApprove is
+  // always false → it falls through to the guard. (A tool can't legitimately be both "safe" and "risky".)
+  const risky = mk({ name: "run_bash", needsApproval: true, guard: () => ({ needsApproval: true, reason: "risky" }), safeAutoApprove: () => false });
+  assert.deepEqual(decide(risky), { action: "ask", cacheable: false, reason: "risky" });
+});
+test("graduated approval: read-only mode still blocks even a safe shell call", () => {
+  assert.equal(decide(bashSafe, { mode: "readonly" }).action, "deny");
+});
+
+test("plan mode: reads run, mutations are blocked (like read-only)", () => {
+  assert.deepEqual(decide(read, { mode: "plan" }), { action: "run" });   // exploration reads work
+  assert.equal(decide(write, { mode: "plan" }).action, "deny");
+  assert.equal(decide(remember, { mode: "plan" }).action, "deny");
+  assert.equal(decide(bashUnsafe, { mode: "plan" }).action, "deny");     // a non-safe shell command is blocked
+});
+test("plan mode: provably-safe read-only shell is allowed (so the agent can explore)", () => {
+  assert.deepEqual(decide(bashSafe, { mode: "plan" }), { action: "run" });
 });

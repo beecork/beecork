@@ -2,10 +2,10 @@
 // ROOT; the machinery (memory.md, settings.json, sessions/) lives in each folder's
 // .beecork/. We read+merge those plus the global ~/.beecork, with session save/restore.
 
-import { readFile, writeFile, readdir, mkdir, chmod, rename } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir, chmod, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { color } from "./ui";
+import { color, stripControl } from "./ui";
 import { normalizeEffort } from "./config";
 import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
@@ -176,9 +176,18 @@ export async function saveSession(messages: Message[]): Promise<void> {
     await writeFile(tmp, JSON.stringify(messages), "utf8");
     await chmod(tmp, 0o600).catch(() => {});
     await rename(tmp, file);
+    await pruneSessions(dir).catch(() => {}); // keep .beecork/sessions/ bounded; best-effort
   } catch {
     // best-effort — ignore save errors
   }
+}
+
+const MAX_SESSIONS = 50; // per project; /resume rarely needs more, and the dir shouldn't grow forever
+async function pruneSessions(dir: string): Promise<void> {
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
+  if (files.length <= MAX_SESSIONS) return;
+  // Filenames are `${Date.now()}.json` (fixed-width ms) → lexical sort == chronological. Drop the oldest.
+  for (const f of files.sort().slice(0, files.length - MAX_SESSIONS)) await unlink(join(dir, f)).catch(() => {});
 }
 
 // Validate + sanitize a restored session. Sessions are saved WITHOUT the system prompt,
@@ -262,7 +271,9 @@ export async function listSessions(): Promise<{ file: string; when: number; coun
       const msgs = await readSession(f);
       if (!msgs || !msgs.length) continue;
       const firstUser = msgs.find((m) => m.role === "user");
-      const preview = (firstUser?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      // stripControl: session files are repo-controlled — a planted session must not inject terminal
+      // escapes through the /resume picker label.
+      const preview = stripControl(firstUser?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
       out.push({ file: f, when: Number(f.replace(".json", "")) || 0, count: msgs.length, preview });
     }
     return out.sort((a, b) => b.when - a.when);
