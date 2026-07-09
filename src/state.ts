@@ -20,6 +20,7 @@ export function modeLabel(m: Mode): string {
 
 export const state = {
   model: config.defaultModel, // changed at runtime via the /model command
+  reasoningEffort: config.reasoningEffort, // "thinking" depth; changed live via /effort, persisted like /model
   apiKey: "", // resolved at startup in index.ts: shell env → ~/.beecork/config.json → prompt
   braveKey: "", // resolved at startup in index.ts: env / config.json (for web_search)
   // rotated with Shift+Tab; an initial mode can be set headlessly via BEECORK_MODE (for tests/eval)

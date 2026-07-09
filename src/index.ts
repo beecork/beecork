@@ -11,8 +11,10 @@ import { tildify } from "./paths";
 import { API_KEY, config } from "./config";
 import { checkForUpdate, currentVersion, selfUpdate } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
-import { color, printBanner, stripControl } from "./ui";
+import { color, printBanner, stripControl, isPrintableCodePoint, setSteeringActive } from "./ui";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
+import { runtimeContext } from "./env";
+import { killAllTasks, runningTaskCount } from "./tasks";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
 import { loadSkills, getSkill, expandSkill } from "./skills";
@@ -37,12 +39,13 @@ async function main() {
   // console input needed yet. The Brave key is optional (only web_search needs it).
   // These startup loads are independent (none consumes another's result), so run them
   // together instead of one syscall-chain at a time.
-  const [userCfg, instr, settings, skills, projectApprovals] = await Promise.all([
+  const [userCfg, instr, settings, skills, projectApprovals, runtimeCtx] = await Promise.all([
     loadUserConfig(),       // ~/.beecork/config.json (API keys)
     loadInstructions(),     // project memory: cork.md + .beecork/memory.md
     loadSettings(),         // settings.json (model pref + global alwaysAllow)
     loadSkills(),           // user-defined slash commands from .beecork/skills/
     loadProjectApprovals(), // per-project "always" from past sessions
+    runtimeContext(),       // real environment facts (date, git state, tool availability)
   ]);
   // Key precedence: a real shell env var (explicit), else your saved ~/.beecork key. If neither,
   // we prompt for it below and save it to ~/.beecork. (A project's .env is never consulted.)
@@ -50,11 +53,13 @@ async function main() {
   let apiKey = API_KEY || savedKey;
   state.braveKey = process.env.BRAVE_API_KEY || String(userCfg.BRAVE_API_KEY ?? "");
   if (settings.model && !process.env.OPENROUTER_MODEL) state.model = settings.model;
+  // Effort precedence mirrors model: a real env var wins; else the saved /effort preference.
+  if (settings.reasoningEffort && !process.env.REASONING_EFFORT) state.reasoningEffort = settings.reasoningEffort;
 
   // Trusted (~/.beecork) instructions are authoritative; project files travel with a
   // (possibly cloned) repo, so they're framed as lower-trust context that may set
   // conventions but cannot authorize bypassing safety.
-  let systemContent = SYSTEM_PROMPT;
+  let systemContent = `${SYSTEM_PROMPT}\n\n${runtimeCtx}`;
   if (instr.trusted) {
     systemContent += `\n\n# Your conventions & memory (from ~/.beecork — follow these)\n\n${instr.trusted}`;
   }
@@ -90,6 +95,11 @@ async function main() {
 
   // On a TTY we own the keyboard (raw mode). Off a TTY, use readline for piped input.
   const tty = !!process.stdin.isTTY;
+  // Background tasks are DETACHED — one we stop awaiting SURVIVES us unless explicitly group-killed.
+  // Kill them all synchronously on 'exit'. Registered unconditionally (tasks can run headless too);
+  // every deliberate exit below funnels through process.exit(), which fires 'exit'. process.kill is
+  // synchronous, so it's safe here (unlike the async persist()).
+  process.on("exit", killAllTasks);
   if (tty) {
     initInput();
     // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
@@ -202,25 +212,48 @@ async function main() {
 
     activeTurn = new AbortController();
     let modeChangedMidTurn = false;
-    // While a turn runs: Esc / Ctrl-C abort it; Shift+Tab rotates the mode.
+    const steering: string[] = []; // mid-turn steering notes; drained by runTurn between steps
+    let typed = "";                // in-progress note (committed on Enter)
+    const redrawSteer = () => process.stdout.write("\r\x1b[2K" + color.cyan("» ") + color.dim(typed));
+    const clearSteer = () => { process.stdout.write("\r\x1b[2K"); setSteeringActive(false); };
+    // While a turn runs: Esc / Ctrl-C abort it; Shift+Tab rotates the mode; typing text + Enter queues
+    // a steering note the model picks up on its NEXT step (the turn is NOT cancelled). Ctrl-C/Esc still
+    // cancel. During an approval prompt this handler is transiently replaced by readChoice/selectMenu,
+    // so `typed` survives in the closure but capture pauses — correct.
     const restoreKeys = tty
-      ? pushKeyHandler((_s, key) => {
-          if (!key) return;
-          if (key.name === "escape" || (key.ctrl && key.name === "c")) activeTurn?.abort();
-          // Change the mode silently mid-turn (printing here could split a half-written tool
-          // action line). The confirmation prints after the turn; the prompt tag also updates.
-          else if (key.name === "tab" && key.shift) {
-            state.mode = nextMode(state.mode);
-            modeChangedMidTurn = true;
+      ? pushKeyHandler((str, key) => {
+          if (key && (key.name === "escape" || (key.ctrl && key.name === "c"))) { activeTurn?.abort(); return; }
+          // Change the mode silently mid-turn (printing here could split a half-written tool action
+          // line). The confirmation prints after the turn; the prompt tag also updates.
+          if (key && key.name === "tab" && key.shift) { state.mode = nextMode(state.mode); modeChangedMidTurn = true; return; }
+          if (key && (key.name === "return" || key.name === "enter")) {
+            const note = typed.trim();
+            typed = "";
+            clearSteer();
+            if (note) { steering.push(note); console.log(color.dim(`» queued for next step: ${note}`)); }
+            return;
+          }
+          if (key && (key.name === "backspace" || key.name === "delete")) {
+            if (typed) { typed = typed.slice(0, -1); typed ? redrawSteer() : clearSteer(); }
+            return;
+          }
+          // Printable char → accumulate + echo. Same guard the line editor uses (single printable rune).
+          if (str && !key?.ctrl && !key?.meta && [...str].length === 1 && isPrintableCodePoint(str.codePointAt(0)!)) {
+            typed += str;
+            setSteeringActive(true); // mute the spinner so it doesn't clobber the echo line
+            redrawSteer();
           }
         })
       : () => {};
     try {
-      messages = await runTurn(messages, userInput, ask, approvedTools, activeTurn.signal);
+      messages = await runTurn(messages, userInput, ask, approvedTools, activeTurn.signal, steering);
     } finally {
       restoreKeys();
+      setSteeringActive(false); // always reset — an uncommitted note must not leave the spinner muted next turn
       activeTurn = null;
       if (modeChangedMidTurn) console.log(color.yellow(`▸ mode: ${modeLabel(state.mode)}`));
+      const bg = runningTaskCount();
+      if (bg > 0) console.log(color.dim(`▸ ${bg} background task${bg === 1 ? "" : "s"} running — check_task / stop_task`));
     }
   }
 

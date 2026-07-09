@@ -2,11 +2,11 @@
 // tab-completion data, and the menu metadata used by the live slash menu.
 
 import { writeFile, mkdir, chmod } from "node:fs/promises";
-import { config, RECOMMENDED_MODELS } from "./config";
+import { config, RECOMMENDED_MODELS, EFFORTS, normalizeEffort } from "./config";
 import { state } from "./state";
 import { color, stripControl } from "./ui";
 import { estimateTokens } from "./context";
-import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference } from "./memory";
+import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference } from "./memory";
 import { skillNames } from "./skills";
 import { selfUpdate } from "./update";
 import { selectMenu } from "./input";
@@ -15,6 +15,7 @@ import type { Message } from "./types";
 // Single source of truth: name + one-line description (shown in the live menu).
 export const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: "/model", desc: "switch model (menu; /model <term> searches)" },
+  { name: "/effort", desc: "set reasoning effort (off/low/medium/high/max)" },
   { name: "/context", desc: "conversation size in tokens" },
   { name: "/clear", desc: "clear the conversation" },
   { name: "/key", desc: "set + save your OpenRouter API key" },
@@ -31,6 +32,12 @@ function applyModel(slug: string): string {
   state.model = slug;
   void saveModelPreference(slug);
   return slug;
+}
+
+// Set + persist the reasoning effort so /effort sticks across restarts (like /model).
+function applyEffort(level: string): void {
+  state.reasoningEffort = level as (typeof EFFORTS)[number];
+  void saveReasoningPreference(level);
 }
 
 // Short relative time ("3m ago") for the /resume session picker.
@@ -67,6 +74,16 @@ export async function handleCommand(input: string, messages: Message[]): Promise
       console.log(color.green(`switched to: ${state.model}`) + "\n");
     } else {
       await searchModels(arg); // a bare term — search the catalog
+    }
+  } else if (cmd === "/effort") {
+    if (!arg) await pickEffort();
+    else {
+      const level = normalizeEffort(arg);
+      if (!level) console.log(color.red(`unknown effort "${arg}" — use: ${EFFORTS.join(" / ")}`) + "\n");
+      else {
+        applyEffort(level);
+        console.log(color.green(`reasoning effort: ${level}`) + (level === "off" ? color.dim(" (thinking disabled)") : "") + "\n");
+      }
     }
   } else if (cmd === "/key") {
     if (!arg) {
@@ -172,6 +189,34 @@ async function pickModel(): Promise<void> {
   if (choice) console.log(color.green(`switched to: ${applyModel(choice)}`) + "\n");
 }
 
+// /effort with no arg: an arrow-key picker over the effort levels (TTY); a plain line otherwise.
+const EFFORT_NOTES: Record<string, string> = {
+  off: "no thinking — fastest, cheapest",
+  low: "a light nudge to think first",
+  medium: "balanced (default)",
+  high: "deeper reasoning, more tokens",
+  max: "maximum reasoning depth",
+};
+async function pickEffort(): Promise<void> {
+  if (!process.stdin.isTTY) {
+    console.log(color.cyan(`reasoning effort: ${state.reasoningEffort}`) + color.dim(`  (levels: ${EFFORTS.join(" / ")})`) + "\n");
+    return;
+  }
+  const choice = await selectMenu({
+    title: "reasoning effort — ↑/↓ then Enter (Esc to cancel)",
+    initial: Math.max(0, EFFORTS.indexOf(state.reasoningEffort)),
+    items: EFFORTS.map((e) => ({
+      label: (e === state.reasoningEffort ? "● " : "  ") + e,
+      value: e,
+      hint: EFFORT_NOTES[e],
+    })),
+  });
+  if (choice) {
+    applyEffort(choice);
+    console.log(color.green(`reasoning effort: ${choice}`) + (choice === "off" ? color.dim(" (thinking disabled)") : "") + "\n");
+  }
+}
+
 function showRecommended(): void {
   console.log(color.cyan("recommended models (all support tools):") + "\n");
   for (const m of RECOMMENDED_MODELS) {
@@ -226,6 +271,11 @@ export function isBuiltin(cmd: string): boolean {
 export function completer(line: string): [string[], string] {
   if (line.startsWith("/model ")) {
     const all = RECOMMENDED_MODELS.map((m) => `/model ${m.slug}`);
+    const hits = all.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : all, line];
+  }
+  if (line.startsWith("/effort ")) {
+    const all = EFFORTS.map((e) => `/effort ${e}`);
     const hits = all.filter((c) => c.startsWith(line));
     return [hits.length ? hits : all, line];
   }

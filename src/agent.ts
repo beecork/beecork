@@ -6,6 +6,7 @@ import { config } from "./config";
 import { state, trace } from "./state";
 import type { Mode } from "./state";
 import { color, renderToolCall, summarizeResult, stripControl, diffPreview } from "./ui";
+import { selectMenu } from "./input";
 import { renderShow } from "./show";
 import { callModel } from "./api";
 import { compactIfNeeded } from "./context";
@@ -17,13 +18,10 @@ import type { Message, ToolCall, ToolDef } from "./types";
 
 export const SYSTEM_PROMPT = `You are beecork, a coding assistant working in a terminal on the user's machine.
 
-Environment:
-- Working directory: ${process.cwd()}
-- Platform: ${process.platform}
-
 # How to work
 - For multi-step tasks, call \`update_todos\` to write a short plan, then work through it — mark each item in_progress when you start it and completed when done. Keep the list current.
 - Keep going until the task is FULLY complete. Don't stop after one step or hand back a half-finished task to ask what's next — unless you are genuinely blocked or need a real decision from the user.
+- When you genuinely need a decision (an ambiguous request, or several valid approaches with different outcomes) and can't pick a sensible default, call \`ask_user\` with 2–4 concrete options instead of guessing. Use it SPARINGLY — for low-stakes choices, just proceed with a reasonable default.
 - Work in small steps and VERIFY: after changes, run the relevant test/build/command. An automatic check may also run after each edit — if it reports FAILED, fix the problem before continuing. Read the output and fix anything that broke.
 - Use your tools to find facts instead of guessing.
 - When the user shares a durable preference, project convention, or fact worth keeping across sessions, call \`remember\` to save it.
@@ -132,6 +130,43 @@ type TurnDeps = {
   signal?: AbortSignal;             // user cancel (Ctrl-C)
 };
 
+// The message handed back to the model after ask_user. PURE (no IO) so it can be unit-tested.
+export function askUserMessage(
+  question: string,
+  choice: { label: string; description?: string } | null,
+  interactive: boolean,
+): string {
+  if (!interactive) {
+    return `No interactive user is available (headless run). Proceed with the most reasonable option for "${question}" and state the assumption you made.`;
+  }
+  if (!choice) {
+    return `The user dismissed "${question}" without choosing. Use your best judgment to proceed, or ask again only if you are truly blocked.`;
+  }
+  return `The user selected: "${choice.label}"${choice.description ? ` — ${choice.description}` : ""}. Continue with this choice.`;
+}
+
+// Interactive glue for ask_user: validate, show beecork's native picker on a TTY, return the
+// model-facing result. Per the AUTO_APPROVE decision (option A), we ask whenever a human is at the
+// terminal — AUTO_APPROVE only skips SAFETY prompts, not a genuine product decision.
+async function handleAskUser(args: Record<string, any>): Promise<string> {
+  const question = String(args.question ?? "").trim();
+  const raw = Array.isArray(args.options) ? args.options : [];
+  const options = raw
+    .map((o: any) => ({ label: String(o?.label ?? "").trim(), description: o?.description ? String(o.description) : "" }))
+    .filter((o: { label: string }) => o.label);
+  if (!question || options.length === 0) {
+    return `Error: ask_user needs a "question" and a non-empty "options" array (2–4 concrete choices, each with a label).`;
+  }
+  if (!process.stdin.isTTY) return askUserMessage(question, null, false); // headless → proceed autonomously
+  console.log();
+  const choice = await selectMenu({
+    title: stripControl(question), // question is model-supplied — never let it carry raw escapes
+    items: options.map((o) => ({ label: stripControl(o.label), value: o, hint: o.description ? stripControl(o.description) : undefined })),
+  });
+  if (choice) console.log(color.green(`  → ${stripControl(choice.label)}`) + "\n");
+  return askUserMessage(question, choice, true);
+}
+
 // Run ONE tool call to completion: loop-detect → decide + gate approval → execute →
 // render/summarize → push exactly one tool result into `messages`. Every path ends in one
 // pushTool, so the return is void. Extracted from runTurn to keep the turn loop readable.
@@ -158,6 +193,14 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     callArgs = JSON.parse(call.function.arguments);
   } catch {
     // runTool will report the bad JSON
+  }
+
+  // ask_user needs the keyboard (normal tools don't get it) and never mutates — intercept it here,
+  // before the approval gate, and drive beecork's native picker. See handleAskUser.
+  if (call.function.name === "ask_user") {
+    if (config.traceFile) trace.push({ tool: call.function.name, args: call.function.arguments, step });
+    pushTool(await handleAskUser(callArgs));
+    return;
   }
 
   // Approval policy: pure decision in decideApproval(), prompts/messages mapped here.
@@ -196,9 +239,10 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
 
   const isTodo = call.function.name === "update_todos";
   const isShow = call.function.name === "show";
+  const isExplore = call.function.name === "explore"; // narrates multiple lines during its run
   // Readable action line (no raw JSON). Printed before the tool runs; the result summary
-  // completes the SAME line afterwards (todos + show render below).
-  process.stdout.write("  " + renderToolCall(call.function.name, callArgs) + (isTodo || isShow ? "\n" : ""));
+  // completes the SAME line afterwards (todos + show + explore render their own lines below).
+  process.stdout.write("  " + renderToolCall(call.function.name, callArgs) + (isTodo || isShow || isExplore ? "\n" : ""));
 
   let result = await runTool(call, signal); // pass the cancel signal so Ctrl-C kills a running tool
 
@@ -242,15 +286,37 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   pushTool(result);
 }
 
+const STEER_PREAMBLE =
+  "[The user sent this while you were working — treat it as additional guidance and keep going on the current task too, don't discard the work in progress]\n";
+
+// Fold mid-turn steering notes into the conversation. PURE (no IO) so it can be unit-tested. Injects
+// the notes as a role:"user" message (it genuinely IS the user speaking — persists correctly into
+// /resume, and is the strongest signal to the model). Called only at the TOP of a loop step, where the
+// previous step's assistant→tool group is always complete, so appending a user message never splits a
+// tool-call pairing. If the last message is already a user turn (a rare step-0 race), merge into it so
+// we never emit two consecutive user messages (which some providers reject).
+export function applySteering(messages: Message[], notes: string[]): Message[] {
+  if (notes.length === 0) return messages;
+  const content = STEER_PREAMBLE + notes.join("\n");
+  const last = messages[messages.length - 1];
+  if (last?.role === "user") {
+    return [...messages.slice(0, -1), { ...last, content: `${last.content ?? ""}\n\n${content}` }];
+  }
+  return [...messages, { role: "user", content }];
+}
+
 // Run one full turn. Returns the updated conversation (or the pre-turn snapshot
 // if the turn failed). The conversation may be reassigned by compaction, which
 // is why this returns it rather than only mutating in place.
+// `steering` is a live queue the caller's key handler appends to WHILE the turn runs (mid-turn
+// steering); it's drained at the top of each step, mirroring how `signal` is threaded + checked.
 export async function runTurn(
   messages: Message[],
   userInput: string,
   ask: (q: string) => Promise<string>,
   approvedTools: Set<string>,
   signal?: AbortSignal,
+  steering?: string[],
 ): Promise<Message[]> {
   messages.push({ role: "user", content: userInput });
   const snapshot = messages.slice(); // roll back to here (keeping the user's message) on failure
@@ -269,6 +335,10 @@ export async function runTurn(
         console.error(color.red(`\n[compaction failed: ${(err as Error).message} — continuing]`) + "\n");
       }
 
+      // Drain any mid-turn steering the user typed since the last step, injecting it before this
+      // model call so the model acts on it now. splice(0) empties the queue atomically.
+      if (steering?.length) messages = applySteering(messages, steering.splice(0));
+
       const message = await callModel(messages, true, signal);
       messages.push(message);
 
@@ -286,7 +356,10 @@ export async function runTurn(
           await handleToolCall(call, messages, step, deps);
         }
       } else {
-        answered = true; // text was already streamed live
+        // Text answer — done, UNLESS the user just steered mid-answer: loop once more so the note
+        // gets delivered on the next step (the maxSteps cap still guarantees termination). Off-TTY
+        // `steering` is undefined → `!(undefined?.length)` is true → unchanged behavior.
+        answered = !(steering?.length);
       }
     }
 

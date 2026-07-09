@@ -12,6 +12,8 @@ import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { config } from "./config";
 import { state } from "./state";
+import { startTask, checkTask, stopTask } from "./tasks";
+import { runExplorer } from "./subagent";
 import { resolveInRoot } from "./paths";
 import { pathGuard, readGuard, writeGuard, bashGuard, isPrivateAddr, SECRET_FILE, DANGEROUS_BASH } from "./safety";
 import { htmlToText } from "./html";
@@ -81,6 +83,149 @@ async function atomicWrite(abs: string, content: string): Promise<void> {
     // target didn't exist — new file gets the default mode
   }
   await rename(tmp, abs);
+}
+
+// --- edit_file matching (self-healing) ---------------------------------------
+// beecork pairs cheap models (which drift on whitespace) with a strict exact-match edit tool, so a
+// slightly-off `old_text` costs a wasted step + a re-read every time. resolveEdit recovers the two
+// SAFE, unambiguous formatting mismatches — a pasted read_file line-number prefix, and a UNIFORM
+// indentation / trailing-whitespace shift — by matching against the file's REAL bytes; on a genuine
+// mismatch it points the model at the closest actual text so it retries once instead of re-reading
+// blindly. It never fuzzy-matches different code and never changes WHICH region is edited (only
+// whether the match lands), so a heal can't corrupt the wrong place. The exact-match happy path is
+// byte-identical to before. Pure → unit-tested (see tools.test.ts).
+export type EditResolution =
+  | { ok: true; start: number; end: number; after: string; healedVia: "exact" | "prefix" | "whitespace" }
+  | { ok: false; reason: "not_found" | "ambiguous"; count?: number; closest?: string };
+
+// read_file prints each line as `padStart(5) number + two spaces + content`; this matches that prefix.
+const READ_PREFIX = /^ *\d+ {2}/;
+
+function allIndexOf(hay: string, needle: string): number[] {
+  const out: number[] = [];
+  let i = hay.indexOf(needle);
+  while (i !== -1) { out.push(i); i = hay.indexOf(needle, i + 1); }
+  return out;
+}
+
+// If EVERY non-blank line carries read_file's line-number prefix, return the text with prefixes
+// removed (the model pasted numbered output); else null — not a prefix paste, so don't touch it.
+function stripReadPrefix(text: string): string | null {
+  const lines = text.split("\n");
+  const nonBlank = lines.filter((l) => l.trim() !== "");
+  if (nonBlank.length === 0 || !nonBlank.every((l) => READ_PREFIX.test(l))) return null;
+  return lines.map((l) => l.replace(READ_PREFIX, "")).join("\n");
+}
+
+const leadWs = (l: string): string => (l.match(/^[ \t]*/) as RegExpMatchArray)[0];
+
+// Byte offset where each line begins, so a line-range match maps back to exact offsets (CRLF-safe —
+// we never rebuild the region from split lines).
+function lineOffsets(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
+  return starts;
+}
+
+// Tier 3: match ignoring per-line whitespace, but ONLY heal when the leading-whitespace difference
+// is a single UNIFORM shift (the same string added to — or stripped from — every non-blank line).
+// Then new_text is reindented by that same shift, which provably preserves structure. Anything less
+// clean (mixed indentation, tab↔space guessing) returns null → the feedback path, never a guess.
+function matchWhitespace(file: string, oldText: string, newText: string): EditResolution | null {
+  const fileLines = file.split("\n");
+  const oldLines = oldText.split("\n");
+  const n = oldLines.length;
+  const trim = (l: string) => l.trim();
+  const oldTrim = oldLines.map(trim);
+  const starts: number[] = [];
+  for (let s = 0; s + n <= fileLines.length; s++) {
+    let hit = true;
+    for (let i = 0; i < n; i++) if (trim(fileLines[s + i]) !== oldTrim[i]) { hit = false; break; }
+    if (hit) starts.push(s);
+  }
+  if (starts.length === 0) return null;
+  if (starts.length > 1) return { ok: false, reason: "ambiguous", count: starts.length };
+
+  const s = starts[0];
+  let shift: string | null = null;
+  let mode: "add" | "strip" | "same" = "same";
+  for (let i = 0; i < n; i++) {
+    if (oldTrim[i] === "") continue; // blank line — no indentation to compare
+    const fLead = leadWs(fileLines[s + i]);
+    const oLead = leadWs(oldLines[i]);
+    let thisShift: string, thisMode: "add" | "strip" | "same";
+    if (fLead === oLead) { thisShift = ""; thisMode = "same"; }
+    else if (fLead.endsWith(oLead)) { thisShift = fLead.slice(0, fLead.length - oLead.length); thisMode = "add"; } // file = shift + old
+    else if (oLead.endsWith(fLead)) { thisShift = oLead.slice(0, oLead.length - fLead.length); thisMode = "strip"; } // old = shift + file
+    else return null; // leading whitespace differs non-uniformly — too risky, hand to feedback
+    if (shift === null) { shift = thisShift; mode = thisMode; }
+    else if (thisShift !== shift || (thisMode !== mode && thisShift !== "")) return null; // not uniform across the block
+  }
+  shift = shift ?? "";
+
+  const reindented = newText.split("\n").map((l) => {
+    if (l.trim() === "") return l; // leave blank lines blank
+    if (mode === "add") return shift + l;
+    if (mode === "strip") return l.startsWith(shift as string) ? l.slice((shift as string).length) : l;
+    return l;
+  }).join("\n");
+
+  const offs = lineOffsets(file);
+  const start = offs[s];
+  const end = s + n < offs.length ? offs[s + n] - 1 : file.length; // drop the "\n" after the block
+  return { ok: true, start, end, after: reindented, healedVia: "whitespace" };
+}
+
+// Feedback for a genuine mismatch: point the model at the closest real text so it retries once.
+// Anchor on old_text's first non-blank line. This is a HINT only — never used to apply an edit — so
+// a loose match here carries zero correctness risk; it just saves the model a blind re-read.
+function closestRegion(file: string, oldText: string): string | undefined {
+  const anchor = oldText.split("\n").map((l) => l.trim()).find((l) => l !== "");
+  if (!anchor) return undefined;
+  const fileLines = file.split("\n");
+  const fmt = (i: number) => `${String(i + 1).padStart(5)}  ${fileLines[i]}`;
+  // 1. Exact trimmed-line matches (strongest signal — usually an indentation or prefix drift).
+  const exact: string[] = [];
+  for (let i = 0; i < fileLines.length && exact.length < 3; i++) {
+    if (fileLines[i].trim() === anchor) exact.push(fmt(i));
+  }
+  if (exact.length) return exact.join("\n");
+  // 2. Else the single line sharing the most words with the anchor (a near-miss / typo). Require at
+  //    least half the anchor's words (and ≥2) to overlap so we don't point at a random line.
+  const words = anchor.split(/\W+/).filter((w) => w.length >= 2);
+  if (words.length === 0) return undefined;
+  let best = -1;
+  let bestScore = 0;
+  for (let i = 0; i < fileLines.length; i++) {
+    let score = 0;
+    for (const w of words) if (fileLines[i].includes(w)) score++;
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  return best >= 0 && bestScore >= Math.max(2, Math.ceil(words.length / 2)) ? fmt(best) : undefined;
+}
+
+// Resolve where (if anywhere) old_text should be replaced, healing the two safe formatting mismatches.
+export function resolveEdit(file: string, oldText: string, newText: string): EditResolution {
+  if (oldText === "") return { ok: false, reason: "not_found" };
+  // 1. exact — the byte-identical happy path.
+  const exact = allIndexOf(file, oldText);
+  if (exact.length === 1) return { ok: true, start: exact[0], end: exact[0] + oldText.length, after: newText, healedVia: "exact" };
+  if (exact.length > 1) return { ok: false, reason: "ambiguous", count: exact.length };
+  // 2. line-number prefix strip (both old and new — the model pasted numbered read_file output).
+  const strippedOld = stripReadPrefix(oldText);
+  if (strippedOld !== null && strippedOld !== oldText) {
+    const hits = allIndexOf(file, strippedOld);
+    if (hits.length === 1) {
+      const strippedNew = newText.split("\n").map((l) => l.replace(READ_PREFIX, "")).join("\n");
+      return { ok: true, start: hits[0], end: hits[0] + strippedOld.length, after: strippedNew, healedVia: "prefix" };
+    }
+    if (hits.length > 1) return { ok: false, reason: "ambiguous", count: hits.length };
+  }
+  // 3. uniform whitespace / indentation shift.
+  const ws = matchWhitespace(file, oldText, newText);
+  if (ws) return ws;
+  // 4. genuine mismatch — hand back the closest real text for a one-shot retry.
+  return { ok: false, reason: "not_found", closest: closestRegion(file, oldText) };
 }
 
 // Brave web-search result shape (only the fields we read).
@@ -435,17 +580,30 @@ export const toolDefs: ToolDef[] = [
       try {
         const { abs } = resolveInRoot(String(args.path ?? "."));
         const original = await readFile(abs, "utf8");
-        const count = original.split(args.old_text).length - 1; // count occurrences → refuse ambiguity
-        if (count === 0) {
-          return `Error: old_text not found in ${args.path}. Re-read the file and copy the exact text (including whitespace/indentation).`;
+        const res = resolveEdit(original, String(args.old_text ?? ""), String(args.new_text ?? ""));
+        if (!res.ok) {
+          if (res.reason === "ambiguous") {
+            return `Error: old_text matches ${res.count} places in ${args.path}. Include more surrounding context so it matches exactly once.`;
+          }
+          // A genuine mismatch: hand back the closest real text so the model fixes it in ONE retry.
+          return (
+            `Error: old_text not found in ${args.path}. ` +
+            (res.closest
+              ? `The closest matching text in the file is (copy it EXACTLY, without the line-number prefix):\n${res.closest}`
+              : `Re-read the file and copy the exact text (including whitespace/indentation).`)
+          );
         }
-        if (count > 1) {
-          return `Error: old_text appears ${count} times in ${args.path}. Include more surrounding context so it matches exactly once.`;
+        // Slice-and-splice inserts new_text LITERALLY (no $-expansion) at exact byte offsets — so a
+        // healed match writes the file's real region, not the model's slightly-off copy.
+        if (original.slice(res.start, res.end) === res.after) {
+          return `Error: old_text and new_text are identical in ${args.path} — nothing to change.`;
         }
-        // A FUNCTION replacer inserts new_text literally. A plain-string replacement
-        // would interpret $$, $&, $`, $' inside new_text and silently corrupt the edit.
-        await atomicWrite(abs, original.replace(args.old_text, () => String(args.new_text)));
-        return `Edited ${args.path} — replaced 1 occurrence.`;
+        await atomicWrite(abs, original.slice(0, res.start) + res.after + original.slice(res.end));
+        const healed =
+          res.healedVia === "prefix" ? " (auto-healed: stripped read_file line-number prefixes)"
+          : res.healedVia === "whitespace" ? " (auto-healed: normalized whitespace/indentation)"
+          : "";
+        return `Edited ${args.path} — replaced 1 occurrence.${healed}`;
       } catch (err) {
         return fail("editing file", err);
       }
@@ -488,6 +646,7 @@ export const toolDefs: ToolDef[] = [
       properties: {
         command: { type: "string", description: "The shell command to run." },
         explanation: { type: "string", description: "One sentence: WHAT this command does and WHY you need it now. Shown to the user before they approve." },
+        background: { type: "boolean", description: "Run detached in the background (dev servers, watchers, long tasks). Returns a task id immediately; poll it with check_task and stop it with stop_task. Do NOT use for commands whose output you need right now." },
       },
       required: ["command", "explanation"],
     },
@@ -495,6 +654,13 @@ export const toolDefs: ToolDef[] = [
       const danger = DANGEROUS_BASH.find((re) => re.test(String(args.command)));
       if (danger) {
         return `Error: refused — the command matches a known-catastrophic pattern (${danger}). If this is genuinely intended, the user must run it manually.`;
+      }
+      if (args.background) {
+        // Detached, non-blocking. Still gated above (DANGEROUS refusal) and by the run_bash approval.
+        const { id, error } = startTask(String(args.command));
+        return error
+          ? `Error: ${error}`
+          : `Started background task ${id} — running detached. Poll new output with check_task("${id}"), stop it with stop_task("${id}"). Stop it once you no longer need it.`;
       }
       try {
         const { stdout, stderr } = await runShell(args.command, { timeout: config.execTimeoutMs, maxBuffer: config.maxToolBuffer, signal });
@@ -657,6 +823,87 @@ export const toolDefs: ToolDef[] = [
       }
     },
   },
+  {
+    name: "check_task",
+    description:
+      "Read status + new output from a background task started by run_bash (background:true). Returns " +
+      "only output produced since your last check. Use to see if a dev server started, a build finished, etc.",
+    parameters: {
+      type: "object",
+      properties: { task_id: { type: "string", description: "The bg_… id returned by run_bash." } },
+      required: ["task_id"],
+    },
+    run: async (args) => checkTask(String(args.task_id ?? "")),
+  },
+  {
+    name: "stop_task",
+    description:
+      "Stop (kill) a background task started by run_bash (background:true). Stop tasks you no longer need.",
+    parameters: {
+      type: "object",
+      properties: { task_id: { type: "string", description: "The bg_… id to stop." } },
+      required: ["task_id"],
+    },
+    run: async (args) => stopTask(String(args.task_id ?? "")),
+  },
+  {
+    name: "explore",
+    description:
+      "Delegate a focused, READ-ONLY investigation to a sub-agent. It explores on its own (reading, " +
+      "searching, listing, and browsing the web) and returns a concise written summary — so open-ended " +
+      "questions ('how does X work', 'where is Y handled', 'trace Z', 'research library W') get answered " +
+      "in a SEPARATE context, keeping yours clean. It cannot modify anything, run commands, or ask questions.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "What to find out — one clear, self-contained question." },
+        focus: { type: "string", description: "Optional starting point: files, directories, symbols, or a URL to look at first." },
+      },
+      required: ["task"],
+    },
+    run: async (args, signal) => {
+      const task = String(args.task ?? "").trim();
+      if (!task) return 'Error: explore needs a non-empty "task".';
+      return runExplorer(task, args.focus ? String(args.focus) : undefined, signal);
+    },
+  },
+  {
+    name: "ask_user",
+    description:
+      "Ask the user to choose between concrete options when the task is genuinely ambiguous or has " +
+      "several valid approaches with different outcomes AND you can't pick a sensible default. Provide " +
+      "2–4 clear options. Use SPARINGLY — for low-stakes choices, just proceed with a reasonable default.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "One specific question to ask." },
+        options: {
+          type: "array",
+          description: "2–4 concrete choices.",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string", description: "Short label for the choice." },
+              description: { type: "string", description: "Optional one-line explanation of this choice." },
+            },
+            required: ["label"],
+          },
+        },
+      },
+      required: ["question", "options"],
+    },
+    // The turn loop intercepts ask_user to show beecork's native picker on a TTY (tools don't get
+    // the keyboard). Reaching run() means no interactive session (headless / a direct call), so we
+    // just validate and tell the model to proceed on its own.
+    run: async (args) => {
+      const options = Array.isArray(args.options) ? args.options : [];
+      const question = String(args.question ?? "").trim();
+      if (!question || options.length === 0) {
+        return `Error: ask_user needs a "question" and a non-empty "options" array (2–4 concrete choices, each with a label).`;
+      }
+      return `No interactive user is available (headless run). Proceed with the most reasonable option for "${question}" and state the assumption you made.`;
+    },
+  },
 ];
 
 // Derived: the schema list sent to the model, and the dispatch map.
@@ -666,9 +913,11 @@ export const TOOLS = toolDefs.map((t) => ({
 }));
 export const toolsByName = new Map(toolDefs.map((t) => [t.name, t]));
 
-// Look up + run a tool call. Errors come back as strings so the model can react.
-export async function runTool(call: ToolCall, signal?: AbortSignal): Promise<string> {
-  const tool = toolsByName.get(call.function.name);
+// Look up + run a tool call. Errors come back as strings so the model can react. `byName` defaults to
+// the full registry; a sub-agent passes a RESTRICTED map so it's the dispatch ALLOW-LIST — a tool the
+// child isn't allowed (e.g. an emitted write_file) resolves to "unknown tool" and never runs.
+export async function runTool(call: ToolCall, signal?: AbortSignal, byName: Map<string, ToolDef> = toolsByName): Promise<string> {
+  const tool = byName.get(call.function.name);
   if (!tool) return `Error: unknown tool "${call.function.name}".`;
   let args: Record<string, any>;
   try {

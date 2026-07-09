@@ -6,6 +6,8 @@ import { readFile, writeFile, readdir, mkdir, chmod, rename } from "node:fs/prom
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { color } from "./ui";
+import { normalizeEffort } from "./config";
+import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
 import type { Message } from "./types";
 
@@ -84,21 +86,23 @@ async function readJsonFile(path: string): Promise<Record<string, any> | null> {
 // it is honored ONLY from the user's global ~/.beecork/settings.json — never from a
 // project file that travels with a (possibly cloned) repo. A project file that tries
 // is flagged so the user is warned, not silently exposed.
-export async function loadSettings(): Promise<{ model?: string; alwaysAllow: string[]; projectAlwaysAllowIgnored: boolean }> {
+export async function loadSettings(): Promise<{ model?: string; reasoningEffort?: ReasoningEffort; alwaysAllow: string[]; projectAlwaysAllowIgnored: boolean }> {
   const paths = beecorkPaths("settings.json"); // [0] = global ~/.beecork, rest = project tree
   let model: string | undefined;
+  let reasoningEffort: ReasoningEffort | undefined;
   let alwaysAllow: string[] = [];
   let projectAlwaysAllowIgnored = false;
   for (let i = 0; i < paths.length; i++) {
     const parsed = await readJsonFile(paths[i]);
     if (!parsed) continue; // missing → skip; malformed → warned by readJsonFile
     if (typeof parsed.model === "string") model = parsed.model; // later/more-specific wins
+    if (typeof parsed.reasoningEffort === "string") reasoningEffort = normalizeEffort(parsed.reasoningEffort) ?? reasoningEffort; // ignore a garbage value
     if (Array.isArray(parsed.alwaysAllow)) {
       if (i === 0) alwaysAllow = parsed.alwaysAllow.map(String); // global only
       else projectAlwaysAllowIgnored = true; // a project file tried → ignored + warned
     }
   }
-  return { model, alwaysAllow, projectAlwaysAllowIgnored };
+  return { model, reasoningEffort, alwaysAllow, projectAlwaysAllowIgnored };
 }
 
 // ~/.beecork/config.json — the user's own machine-level config (their API key,
@@ -132,6 +136,19 @@ export async function saveModelPreference(model: string): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const current = (await readJsonFile(file)) ?? {};
     await writeFile(file, JSON.stringify({ ...current, model }, null, 2), "utf8");
+  } catch {
+    // best-effort
+  }
+}
+
+// Persist the chosen reasoning effort to the global settings.json (merge), so /effort sticks
+// across restarts like /model. Best-effort — a save failure never breaks the session.
+export async function saveReasoningPreference(reasoningEffort: string): Promise<void> {
+  try {
+    const file = join(homedir(), BEECORK, "settings.json");
+    await mkdir(dirname(file), { recursive: true });
+    const current = (await readJsonFile(file)) ?? {};
+    await writeFile(file, JSON.stringify({ ...current, reasoningEffort }, null, 2), "utf8");
   } catch {
     // best-effort
   }

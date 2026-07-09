@@ -189,10 +189,17 @@ export function summarizeResult(name: string, a: Record<string, any>, result: st
 // or reasoning-heavy model never looks frozen. TTY-only — never pollutes piped
 // or eval output. The returned stop() is idempotent.
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// While the user is typing a mid-turn steering note, the spinner yields the bottom line so it doesn't
+// clobber the echo. Set by index.ts's steering key handler.
+let steeringOnScreen = false;
+export function setSteeringActive(on: boolean): void { steeringOnScreen = on; }
 export function startSpinner(label: string): () => void {
   if (!process.stdout.isTTY || !useColor) return () => {};
   let i = 0;
-  const draw = () => process.stdout.write("\r  " + color.brand(SPINNER[i = (i + 1) % SPINNER.length]) + " " + color.dim(label));
+  const draw = () => {
+    if (steeringOnScreen) return; // the user is typing a steering note on this line — don't overwrite it
+    process.stdout.write("\r  " + color.brand(SPINNER[i = (i + 1) % SPINNER.length]) + " " + color.dim(label));
+  };
   process.stdout.write("\x1b[?25l"); // hide cursor
   draw();
   const timer = setInterval(draw, 80);

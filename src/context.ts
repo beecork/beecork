@@ -43,7 +43,13 @@ async function summarize(old: Message[], signal?: AbortSignal): Promise<string> 
       {
         role: "system",
         content:
-          "You compress conversations. Summarize the transcript into concise notes that preserve key facts, decisions, file contents discovered, and the user's goals, so the assistant can continue seamlessly.",
+          "You are compacting a long coding session to fit the context window. Summarize the transcript below into structured notes the assistant can continue from WITHOUT losing important context. Use exactly these headings:\n" +
+          "- Goal: what the user ultimately wants (and any explicit instructions/preferences).\n" +
+          "- Done: key steps taken, decisions made, and files created or edited — keep the essential code/exact changes.\n" +
+          "- Facts: important things discovered about the codebase (structure, conventions, file contents that matter).\n" +
+          "- Errors & fixes: problems hit and how they were resolved, plus any user corrections.\n" +
+          "- Pending: what still remains to do.\n" +
+          "Be concise but specific — keep names, signatures, and paths; omit chit-chat.",
       },
       { role: "user", content: transcript(old) },
     ],

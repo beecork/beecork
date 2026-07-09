@@ -58,11 +58,37 @@ outside (or any shell command) goes through a permission gate.
 ### Tools
 
 `read_file` · `show` · `write_file` · `edit_file` · `list_dir` · `search` · `run_bash` ·
-`web_fetch` · `web_search` · `update_todos` · `remember`
+`web_fetch` · `web_search` · `update_todos` · `remember` · `ask_user` · `check_task` · `stop_task` · `explore`
+
+### Background tasks
+
+`run_bash` can run a command **in the background** (dev servers, watchers, long builds): the agent gets
+a task id immediately and polls it with `check_task` / stops it with `stop_task`. Background tasks stay
+up across turns and are all killed when beecork exits.
+
+### Mid-turn steering
+
+While the agent is working, just **type a message and press Enter** — it's queued and picked up on the
+next step, without cancelling the turn ("also update the README", "no, use pnpm"). Ctrl-C still cancels.
+
+### Sub-agents (`explore`)
+
+The agent can delegate an open-ended investigation to a **read-only sub-agent** that explores on its own
+(reading, searching, browsing the web) in a separate context and returns just a summary — keeping the
+main conversation clean. It cannot modify anything, run commands, or recurse.
 
 ### Slash commands
 
-`/model` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
+`/model` · `/effort` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
+
+### Reasoning ("thinking")
+
+For models that support it, beecork can ask the model to reason before answering. Set the depth
+with `/effort <off|low|medium|high|max>` (persists across restarts) or the `REASONING_EFFORT` env
+var; default is `medium`. It uses OpenRouter's unified `reasoning` parameter, so it works across
+every provider (deepseek, GLM, Gemini, Claude, OpenAI, …), and is only sent to models that advertise
+support. The thinking streams dimly, distinct from the answer. Note: reasoning tokens bill as output
+tokens.
 
 ### Memory
 
@@ -78,6 +104,8 @@ All variables are read from the real shell environment only (never a project fil
 |---|---|---|
 | `OPENROUTER_API_KEY` | OpenRouter API key (required) | — |
 | `OPENROUTER_MODEL` | Model id | `deepseek/deepseek-v4-flash` |
+| `REASONING_EFFORT` | Reasoning depth: `off`/`low`/`medium`/`high`/`max` | `medium` |
+| `OPENROUTER_EXTRA` | Advanced: JSON of extra request-body params (`temperature`, `seed`, provider routing, …) | — |
 | `BRAVE_API_KEY` | Brave Search key (for `web_search`) | — |
 | `VERIFY_COMMAND` | Command auto-run after edits (e.g. `npm run typecheck`) | — |
 | `AUTO_APPROVE` | Headless: skip approval prompts (out-of-root/risky shell are still hard-denied) | off |
@@ -87,7 +115,7 @@ All variables are read from the real shell environment only (never a project fil
 | `WEB_TIMEOUT_MS` | `web_fetch` / `web_search` timeout | `20000` |
 | `MAX_CONTEXT_TOKENS` | Compact the conversation above this | `128000` |
 
-Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`) are defined in `src/config.ts`.
+Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`) are defined in `src/config.ts`.
 
 ## Development
 

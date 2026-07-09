@@ -37,6 +37,31 @@ const num = (name: string, fallback: number) => {
 // AUTO_APPROVE=false (or =0) as true — failing OPEN, the opposite of what a user means.
 const bool = (name: string) => ["1", "true", "yes", "on"].includes((process.env[name] ?? "").trim().toLowerCase());
 
+// Reasoning ("thinking") effort. "off" disables thinking; low→max dial how deep the
+// model reasons before answering. Sent via OpenRouter's UNIFIED `reasoning` param, so it
+// works across every provider (deepseek/glm/gemini/claude/openai), not just one.
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
+export const EFFORTS: ReasoningEffort[] = ["off", "low", "medium", "high", "max"];
+// Parse a user-supplied effort (env/settings/command). Returns undefined for anything
+// invalid so callers can fall back to the default rather than send a bad value.
+export function normalizeEffort(raw: string | undefined | null): ReasoningEffort | undefined {
+  const v = (raw ?? "").trim().toLowerCase();
+  return (EFFORTS as string[]).includes(v) ? (v as ReasoningEffort) : undefined;
+}
+
+// Advanced escape hatch: arbitrary extra params merged into every request body
+// (temperature, top_p, seed, provider routing, …). Malformed JSON → {} (ignored), so a
+// typo can never break every request. Read ONLY from the real shell env, like every knob.
+function parseExtra(raw: string | undefined): Record<string, unknown> {
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const config = {
   apiUrl: "https://openrouter.ai/api/v1/chat/completions",
   modelsUrl: "https://openrouter.ai/api/v1/models",
@@ -61,6 +86,17 @@ export const config = {
   searchMaxResults: num("SEARCH_MAX_RESULTS", 100), // search match cap
   searchTimeoutMs: num("SEARCH_TIMEOUT_MS", 5_000), // overall search traversal budget
   searchMaxFileBytes: num("SEARCH_MAX_FILE_BYTES", 2_000_000), // skip files larger than this
+
+  // Reasoning / thinking
+  reasoningEffort: normalizeEffort(process.env.REASONING_EFFORT) ?? ("medium" as ReasoningEffort), // startup default; changed live via /effort
+  openRouterExtra: parseExtra(process.env.OPENROUTER_EXTRA), // advanced: extra request-body params (sampling, provider routing, …)
+
+  // Background tasks (run_bash background:true → check_task / stop_task)
+  maxBackgroundTasks: num("MAX_BG_TASKS", 5), // per-session cap on concurrent background commands
+  backgroundTailChars: num("BG_TAIL_CHARS", 100_000), // rolling tail buffer per task (drops oldest)
+
+  // Sub-agent (explore tool)
+  subAgentMaxSteps: num("SUBAGENT_MAX_STEPS", 15), // child explorer's step budget (bounds cost/latency)
 
   // Integrations / modes
   verifyCommand: process.env.VERIFY_COMMAND ?? "", // auto-run after edits (e.g. "npm run typecheck")

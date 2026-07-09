@@ -1,7 +1,7 @@
 // Tests for the pure approval-policy decision (the security-critical gate). Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideApproval } from "./agent";
+import { decideApproval, askUserMessage } from "./agent";
 import type { ToolDef } from "./types";
 
 const mk = (over: Partial<ToolDef>): ToolDef => ({ name: "t", description: "", parameters: {}, run: async () => "", ...over });
@@ -55,4 +55,18 @@ test("alwaysAsk (run_bash) re-asks every time — never cached, even after 'alwa
   // auto mode + headless still skip it (the user opted out of prompts there)
   assert.deepEqual(decide(bash, { mode: "auto" }), { action: "run" });
   assert.deepEqual(decide(bash, { autoApprove: true }), { action: "run" });
+});
+
+test("sub-agent gate: readonly + autoApprove denies a guarded out-of-root read, allows in-root", () => {
+  // This is exactly how the explorer confines its child (subagent.ts): the SAME tested gate.
+  const guardedRead = mk({ name: "read_file", guard: (a) => (String(a.path).includes("..") ? { needsApproval: true, reason: "outside root" } : {}) });
+  const child = (args: object) => decideApproval(guardedRead, args, { mode: "readonly", autoApprove: true, approvedTools: new Set<string>(), toolName: "read_file" });
+  assert.equal(child({ path: "src/x.ts" }).action, "run"); // in-root → runs
+  assert.equal(child({ path: "../../etc/passwd" }).action, "deny"); // out-of-root → hard deny, no prompt
+});
+
+test("askUserMessage: selected / dismissed / headless", () => {
+  assert.match(askUserMessage("Q?", { label: "npm", description: "uses lockfile" }, true), /selected: "npm" — uses lockfile/);
+  assert.match(askUserMessage("Q?", null, true), /dismissed/);
+  assert.match(askUserMessage("Q?", null, false), /headless|proceed/i);
 });

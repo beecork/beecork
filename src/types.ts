@@ -11,6 +11,14 @@ export type Message = {
   content: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  // The model's reasoning ("thinking") for THIS assistant message, captured from the stream.
+  // Some providers (e.g. Anthropic) require the thinking block be resent alongside the
+  // tool_calls it produced, or the follow-up request in a multi-step turn errors — so we keep
+  // it here and replay it for the current turn's tool chain (pruned from older turns to save
+  // tokens; see pruneReasoningForSend in api.ts). `reasoning` is the plaintext; `reasoning_details`
+  // is the structured form that MUST be resent verbatim (it carries provider signatures).
+  reasoning?: string;
+  reasoning_details?: unknown[];
 };
 
 // A tool: the schema the model sees + the function that runs it.
