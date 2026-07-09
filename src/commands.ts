@@ -14,7 +14,7 @@ import { chromeEnabled, chromePick } from "./chrome";
 import { ansi } from "./ansi";
 import type { Message } from "./types";
 
-// One picker abstraction. In the pinned-chrome UI (STATUSLINE=1) it renders in the chrome's OWN
+// One picker abstraction. In the pinned-chrome UI it renders in the chrome's OWN
 // dropdown (chromePick) so it never fights the scroll region; otherwise it uses the inline selectMenu.
 // Returns the chosen value, or null if cancelled.
 async function pick<T>(opts: {

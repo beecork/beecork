@@ -188,7 +188,7 @@ async function main() {
     });
   }
 
-  // Opt-in pinned bottom chrome (input + rich statusline with mode). Default off; STATUSLINE=1 enables.
+  // Pinned bottom chrome (input + rich statusline with mode). On by default for TTYs; STATUSLINE=0 opts out.
   if (chromeEnabled())
     startChrome({
       tokens: () => estimateTokens(messages),

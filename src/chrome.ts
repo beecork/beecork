@@ -1,4 +1,4 @@
-// Pinned bottom "chrome" (opt-in via STATUSLINE=1): a persistent input line + a rich statusline are
+// Pinned bottom "chrome" (on by default for TTYs; opt out with STATUSLINE=0): a persistent input line + a rich statusline are
 // pinned to the terminal's bottom rows via a DECSTBM scroll region, so the conversation scrolls ABOVE
 // them (Claude-Code style). The SAME input line is used at the prompt AND for mid-turn steering, so
 // steering looks like normal input. Self-contained minimal line editor (the classic inline editor in

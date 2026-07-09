@@ -77,11 +77,12 @@ The agent can delegate an open-ended investigation to a **read-only sub-agent** 
 (reading, searching, browsing the web) in a separate context and returns just a summary — keeping the
 main conversation clean. It cannot modify anything, run commands, or recurse.
 
-### Status line
+### Pinned UI + status line
 
-An optional bar on the terminal's bottom row shows `model · effort · git branch · ~tokens · background
-tasks`. It's **off by default** while a proper pinned-input version is built; opt into the interim one
-with `STATUSLINE=1`.
+On an interactive terminal, beecork pins a persistent input box and a rich status line
+(`mode · model · effort · git branch · ~tokens · background tasks`) to the bottom, with the
+conversation scrolling above (Claude-Code style). Shift+Tab rotates the mode. This is **on by default**;
+opt out with `STATUSLINE=0` to use the classic inline editor. Piped/non-TTY input is unaffected either way.
 
 ### Skipping permissions (danger)
 
@@ -125,7 +126,7 @@ All variables are read from the real shell environment only (never a project fil
 | `VERIFY_COMMAND` | Command auto-run after edits (e.g. `npm run typecheck`) | — |
 | `AUTO_APPROVE` | Headless: skip approval prompts (out-of-root/risky shell are still hard-denied) | off |
 | `BEECORK_DANGEROUSLY_SKIP_PERMISSIONS` | Sandbox-only: skip the whole gate (also `--dangerously-skip-permissions`) | off |
-| `STATUSLINE` / `STATUSLINE_REFRESH_MS` | Bottom status bar on/off · refresh interval | on · `2000` |
+| `STATUSLINE` / `STATUSLINE_REFRESH_MS` | Pinned UI + status bar (set `0` to opt out) · refresh interval | on · `2000` |
 | `NO_UPDATE_NOTIFIER` / `CI` | Disable the "update available" check | off |
 | `MAX_STEPS` | Max tool steps per turn | `50` |
 | `EXEC_TIMEOUT_MS` | `run_bash` timeout | `30000` |
