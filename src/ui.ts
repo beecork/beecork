@@ -251,8 +251,9 @@ export function markLines(width: number): string[] {
 }
 
 // --- Startup banner ---------------------------------------------------------
-export function printBanner(model: string, sources: string[]): void {
+export function printBanner(model: string, version: string, sources: string[]): void {
   const safeModel = stripControl(model); // model can come from a lower-trust project settings.json — strip escapes
+  const safeVersion = stripControl(version);
   const word = [
     "  _                              _    ",
     " | |__   ___  ___  ___ ___  _ __| | __",
@@ -287,7 +288,7 @@ export function printBanner(model: string, sources: string[]): void {
   const mem = sources.filter((s) => s.endsWith("memory.md")); // memory (beecork writes)
   const cwd = tildify(process.cwd());
   const rows: [string, string][] = [
-    ["", "🐝  a tiny CLI coding agent"],
+    ["", `🐝  a tiny CLI coding agent  ·  v${safeVersion}`],
     ["dir", cwd],
     ["model", safeModel],
     ["cork.md", cork.length ? cork.join(", ") : "none"],

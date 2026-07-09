@@ -3,9 +3,10 @@
 // NOTIFIES — never auto-installs (self-updating a global npm CLI is fragile: the process often
 // can't write its own install, and swapping the binary mid-run is wrong). Opt out: NO_UPDATE_NOTIFIER.
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename, delimiter } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
@@ -20,6 +21,67 @@ export async function currentVersion(): Promise<string> {
   } catch {
     return "0.0.0";
   }
+}
+
+// The directory holding the running install's package.json. For a global npm install that's
+// <prefix>/lib/node_modules/beecork (unix) or <prefix>/node_modules/beecork (Windows); in dev
+// (`npm run dev`) it's the repo root. import.meta.url resolves in both the bundle and tsx.
+function runningPkgRoot(): string {
+  return fileURLToPath(new URL("..", import.meta.url));
+}
+
+// The npm PREFIX that owns the running install, or null when we're not in a node_modules layout (dev
+// or an unrecognized install). `beecork update` passes this to `npm install -g --prefix` so the update
+// lands on the copy you're actually running — not whatever prefix npm defaults to when you have
+// several Node installs. That mismatch is the usual cause of "I updated but still see the old version".
+// Pure derivation (exported for tests): given the install's package root, return the npm prefix, or
+// null if the layout isn't a node_modules install (dev). Handles both <prefix>/lib/node_modules/beecork
+// (unix) and <prefix>/node_modules/beecork (Windows).
+export function prefixFromPkgRoot(pkgRoot: string): string | null {
+  const nm = dirname(pkgRoot); // …/node_modules  (or repo/.. in dev)
+  if (basename(nm) !== "node_modules") return null;
+  const up = dirname(nm); // <prefix>/lib  or  <prefix>
+  return basename(up) === "lib" ? dirname(up) : up;
+}
+export function installPrefix(): string | null {
+  return prefixFromPkgRoot(runningPkgRoot());
+}
+
+// Other beecork executables on PATH that resolve to a DIFFERENT install than the one running. A stale
+// copy earlier in PATH silently shadows a successful update ("I updated but still see the old version"),
+// so `beecork update` warns about these. Best-effort + unix-focused: it resolves each bin symlink to
+// its package.json and skips anything it can't read.
+export async function findShadowingInstalls(): Promise<{ bin: string; version: string }[]> {
+  let running: string;
+  try { running = await realpath(runningPkgRoot()); } catch { running = runningPkgRoot(); }
+  const names = process.platform === "win32" ? ["beecork.cmd", "beecork"] : ["beecork"];
+  const seenRoots = new Set<string>([running]);
+  const others: { bin: string; version: string }[] = [];
+  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    for (const name of names) {
+      try {
+        const bin = join(dir, name);
+        const root = dirname(dirname(await realpath(bin))); // …/beecork/dist/index.js → …/beecork
+        if (seenRoots.has(root)) continue;
+        seenRoots.add(root);
+        const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+        if (String(pkg.name) === "beecork") others.push({ bin, version: String(pkg.version ?? "?").replace(/[^\w.+-]/g, "") });
+      } catch { /* no resolvable beecork here — skip */ }
+    }
+  }
+  return others;
+}
+
+// A ready-to-print warning if another beecork on PATH will shadow the one just updated, else null.
+export async function shadowWarning(): Promise<string | null> {
+  const others = await findShadowingInstalls();
+  if (!others.length) return null;
+  return (
+    "⚠ Another beecork is on your PATH and may shadow the version you just installed:\n" +
+    others.map((o) => `    ${o.bin}  (v${o.version})`).join("\n") +
+    "\n  Remove the stale one(s) so `beecork` always runs the newest install (may need sudo):\n" +
+    others.map((o) => `    rm ${o.bin}`).join("\n")
+  );
 }
 
 // a > b for simple x.y.z versions (prerelease tags ignored — fine for our scheme). Exported for tests.
@@ -84,7 +146,11 @@ export function selfUpdate(timeoutMs = 120_000): Promise<{ ok: boolean; output: 
   return new Promise((resolve) => {
     // Windows resolves the binary as `npm.cmd`; a bare "npm" spawn (no shell) ENOENTs there.
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawn(npm, ["install", "-g", "beecork@latest"], { stdio: ["ignore", "pipe", "pipe"] });
+    // Target the running install's prefix when we can derive it, so the update lands on the copy you're
+    // actually running (not npm's default prefix). Falls back to a plain global install otherwise.
+    const prefix = installPrefix();
+    const args = ["install", "-g", "beecork@latest", ...(prefix ? ["--prefix", prefix] : [])];
+    const child = spawn(npm, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", done = false;
     const finish = (r: { ok: boolean; output: string }) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
     const timer = setTimeout(() => {

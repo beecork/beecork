@@ -9,7 +9,7 @@ import { writeFile, chmod } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { tildify } from "./paths";
 import { API_KEY, config } from "./config";
-import { checkForUpdate, currentVersion, selfUpdate } from "./update";
+import { checkForUpdate, currentVersion, selfUpdate, shadowWarning } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
 import { color, printBanner, stripControl, isPrintableCodePoint, setSteeringActive } from "./ui";
 import { ansi } from "./ansi";
@@ -29,8 +29,11 @@ async function main() {
   if (process.argv[2] === "update") {
     console.log("Updating beecork…");
     const { ok, output } = await selfUpdate();
-    if (ok) console.log(color.green("✓ beecork updated. Run `beecork` to use the new version."));
-    else {
+    if (ok) {
+      console.log(color.green("✓ beecork updated. Run `beecork` to use the new version."));
+      const w = await shadowWarning();
+      if (w) console.log("\n" + color.yellow(w));
+    } else {
       console.error(color.red("Update failed:") + "\n" + output);
       console.error(color.dim("\nTry manually: npm install -g beecork  (you may need sudo, or your Node version manager)."));
       process.exitCode = 1;
@@ -122,8 +125,10 @@ async function main() {
 
   // Pinned-chrome mode starts from a clean screen (banner scrolls above the pinned input).
   if (chromeEnabled()) process.stdout.write(ansi.clearScreen + ansi.clearScrollback + ansi.home);
-  // Show the startup banner FIRST — before any API-key prompt.
-  printBanner(state.model, instr.sources.map(tildify));
+  // Show the startup banner FIRST — before any API-key prompt. Include the running version so it's
+  // obvious which build you're on (and whether an update actually took).
+  const version = await currentVersion();
+  printBanner(state.model, version, instr.sources.map(tildify));
   if (config.dangerouslySkipPermissions) {
     console.log(color.red("⚠  --dangerously-skip-permissions is ON: the approval gate is OFF. Out-of-root paths and risky") + "\n" +
       color.red("   shell commands will RUN unprompted. Use only in a disposable sandbox. (read-only mode + catastrophic-") + "\n" +
@@ -131,7 +136,6 @@ async function main() {
   }
   if (tty) {
     // Non-blocking: shows a notice from the LAST cached check; refreshes in the background.
-    const version = await currentVersion();
     const newer = await checkForUpdate(version);
     if (newer) console.log(color.dim(`▸ beecork ${stripControl(newer)} is available (you have ${version}) — update: npm install -g beecork`) + "\n");
   }

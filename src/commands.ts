@@ -8,7 +8,7 @@ import { color, stripControl } from "./ui";
 import { estimateTokens } from "./context";
 import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference } from "./memory";
 import { skillNames } from "./skills";
-import { selfUpdate } from "./update";
+import { selfUpdate, shadowWarning } from "./update";
 import { selectMenu } from "./input";
 import { chromeEnabled, chromePick } from "./chrome";
 import { ansi } from "./ansi";
@@ -119,8 +119,11 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   } else if (cmd === "/update") {
     console.log(color.dim("updating beecork… (npm install -g beecork@latest)"));
     const { ok, output } = await selfUpdate();
-    if (ok) console.log(color.green("✓ updated — restart beecork to use the new version.") + "\n");
-    else {
+    if (ok) {
+      console.log(color.green("✓ updated — restart beecork to use the new version.") + "\n");
+      const w = await shadowWarning();
+      if (w) console.log(color.yellow(w) + "\n");
+    } else {
       console.log(color.red("update failed: ") + output.split("\n").filter(Boolean).slice(-1)[0]);
       console.log(color.dim("  run manually: npm install -g beecork  (may need sudo / your version manager)") + "\n");
     }
