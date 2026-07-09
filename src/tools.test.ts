@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { runTool, resolveEdit } from "./tools";
+import { createServer } from "node:http";
+import { runTool, resolveEdit, toolDefs } from "./tools";
 import { projectRoot } from "./paths";
 import type { ToolCall } from "./types";
 
@@ -122,4 +123,51 @@ test("ask_user run(): headless proceed message + validation", async () => {
   // Missing options → an Error the model can react to.
   const bad = await runTool(call("ask_user", { question: "which?", options: [] }));
   assert.match(bad, /^Error/);
+});
+
+const devSignals = () => toolDefs.find((t) => t.name === "read_dev_signals")!;
+
+test("read_dev_signals: relays setup steps when no bridge is reachable", async () => {
+  const prev = process.env.BEECORK_DEV_SIGNALS_URL;
+  process.env.BEECORK_DEV_SIGNALS_URL = "http://127.0.0.1:59237"; // nothing listening → ECONNREFUSED
+  try {
+    const out = await devSignals().run({});
+    assert.match(out, /Beecork Skeleton/);
+    assert.match(out, /Pair this site/);
+    assert.doesNotMatch(out, /^Error/); // it's guidance to relay, not a tool failure
+  } finally {
+    if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
+    else process.env.BEECORK_DEV_SIGNALS_URL = prev;
+  }
+});
+
+test("read_dev_signals: formats connected signals and drops meta 'watch' lines", async () => {
+  const now = Date.now();
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        signals: [
+          { kind: "watch", text: "watching tab 1", ts: now },
+          { kind: "network", method: "GET", url: "https://app/api/x", status: 500, ts: now - 2000 },
+          { kind: "console", text: "boom", url: "https://app/", ts: now - 1000 },
+        ],
+      }),
+    );
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  const prev = process.env.BEECORK_DEV_SIGNALS_URL;
+  process.env.BEECORK_DEV_SIGNALS_URL = `http://127.0.0.1:${port}`;
+  try {
+    const out = await devSignals().run({});
+    assert.match(out, /2 browser signal/); // the "watch" line is dropped → 2, not 3
+    assert.match(out, /\[network\] GET https:\/\/app\/api\/x → 500/);
+    assert.match(out, /\[console\] boom/);
+    assert.doesNotMatch(out, /watching tab/);
+  } finally {
+    server.close();
+    if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
+    else process.env.BEECORK_DEV_SIGNALS_URL = prev;
+  }
 });

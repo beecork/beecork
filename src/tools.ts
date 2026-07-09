@@ -381,6 +381,18 @@ async function readLineWindow(abs: string, offset1: number, limit: number): Prom
   return { lines, startLine: start + 1, hasMore, empty: i === 0 };
 }
 
+// Shown when read_dev_signals can't reach the local bridge — the one-time setup steps to relay.
+const DEV_SIGNALS_SETUP = `The browser link isn't connected yet (nothing is responding on localhost:8317).
+
+This is "Beecork Skeleton" — a Chrome extension that sends the app's console errors and failed network requests to me, so I can see what the browser sees instead of guessing. One-time, local-only setup (no account, no signup).
+
+Walk the user through connecting it:
+1. Start the local inbox: run \`node bridge/server.mjs\` in the beecork-extension folder, and leave it running.
+2. Load the extension: Chrome → chrome://extensions → turn on "Developer mode" → "Load unpacked" → select the beecork-extension/extension folder. Pin the icon.
+3. Click the icon (it auto-connects), tick "Capture enabled", open the app in a tab, and click "Pair this site".
+
+Then call read_dev_signals again. Full step-by-step + troubleshooting is in the "browser-signals" skill.`;
+
 export const toolDefs: ToolDef[] = [
   {
     name: "read_file",
@@ -945,6 +957,54 @@ export const toolDefs: ToolDef[] = [
         return `Error: ask_user needs a "question" and a non-empty "options" array (2–4 concrete choices, each with a label).`;
       }
       return `No interactive user is available (headless run). Proceed with the most reasonable option for "${question}" and state the assumption you made.`;
+    },
+  },
+  {
+    name: "read_dev_signals",
+    description:
+      "Read the browser's recent console errors and failed network requests for the user's app " +
+      "(localhost or production), captured live by the Beecork Skeleton extension — so you can SEE " +
+      "what's actually happening instead of guessing. Call this whenever the user reports a bug a " +
+      "browser would surface (blank page, broken button, failed save, a 500, a visual glitch). If it " +
+      "isn't connected yet it returns setup steps to relay to the user. Pull on demand; don't spam it.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", description: 'Filter: "network", "console", "pageError", "log", or "all" (default all).' },
+        since_minutes: { type: "number", description: "Only signals from the last N minutes (optional)." },
+        limit: { type: "number", description: "Max signals to return (default 30, max 200)." },
+      },
+      required: [],
+    },
+    run: async (args, signal) => {
+      const base = process.env.BEECORK_DEV_SIGNALS_URL || "http://localhost:8317";
+      const kind = args.kind ? String(args.kind) : "";
+      const limit = Math.min(Math.max(Number(args.limit) || 30, 1), 200);
+      const sinceMin = Number(args.since_minutes) || 0;
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (kind && kind !== "all") params.set("kind", kind);
+      if (sinceMin > 0) params.set("since", String(Date.now() - sinceMin * 60_000));
+      const timeout = AbortSignal.timeout(Math.min(config.webTimeoutMs, 5_000));
+      let data: { signals?: Record<string, any>[] };
+      try {
+        const res = await fetch(`${base}/signals?${params}`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+        if (!res.ok) return `The browser link responded with HTTP ${res.status}. The bridge may be unhealthy — try restarting it (node bridge/server.mjs).`;
+        data = (await res.json()) as { signals?: Record<string, any>[] };
+      } catch {
+        return DEV_SIGNALS_SETUP; // no bridge reachable → relay the setup steps
+      }
+      const now = Date.now();
+      const signals = (data.signals ?? []).filter((s) => s && s.kind !== "watch"); // drop the meta "watch" lines
+      if (signals.length === 0) {
+        return `The browser link is connected, but no ${kind && kind !== "all" ? `"${kind}" ` : ""}signals were captured${sinceMin ? ` in the last ${sinceMin} min` : ""}. The watched tab just hasn't hit the error yet — reproduce the issue in the browser (or open the app), then call this again.`;
+      }
+      const ago = (ts?: number) => (ts ? `${Math.max(0, Math.round((now - ts) / 1000))}s ago` : "");
+      const lines = signals.map((s) => {
+        if (s.kind === "network") return `[network] ${s.method || "GET"} ${s.url ?? ""} → ${s.status || s.text || "failed"}  (${ago(s.ts)})`;
+        const text = String(s.text ?? "").replace(/\s+/g, " ").slice(0, 300);
+        return `[${s.kind}] ${text}${s.url ? `  @ ${s.url}` : ""}  (${ago(s.ts)})`;
+      });
+      return `${signals.length} browser signal(s), newest last:\n${lines.join("\n")}`;
     },
   },
 ];

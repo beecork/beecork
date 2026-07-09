@@ -6,7 +6,8 @@
 // project (repo-owned) one of the same name — a cloned repo can't shadow your skill.
 
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { color, stripControl } from "./ui";
 
@@ -16,7 +17,7 @@ export type Skill = {
   description: string;        // one-line summary advertised to the model
   modelInvocable: boolean;    // false → user-invocable via /name only, hidden from the model
   path: string;
-  source: "project" | "global";
+  source: "project" | "global" | "bundled";
 };
 
 // Parse an optional leading frontmatter block (--- … ---) for a one-line `description` and a
@@ -61,9 +62,15 @@ export function getSkill(name: string): Skill | undefined {
 // missing folder or unreadable file is skipped, never fatal.
 export async function loadSkills(): Promise<Skill[]> {
   registry.clear();
-  const dirs: [string, "project" | "global"][] = [
+  // Highest precedence first: a global (user-owned) skill wins over a project
+  // (repo-owned) one, which wins over a bundled default that SHIPS with beecork —
+  // so a user can always override a shipped skill. The bundled dir is resolved
+  // relative to this module, so it works from src (dev) and the published bundle.
+  const bundledDir = join(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+  const dirs: [string, Skill["source"]][] = [
     [join(homedir(), ".beecork", "skills"), "global"],
     [join(process.cwd(), ".beecork", "skills"), "project"],
+    [bundledDir, "bundled"],
   ];
   for (const [dir, source] of dirs) {
     let entries;
@@ -76,15 +83,15 @@ export async function loadSkills(): Promise<Skill[]> {
       if (!e.isFile() || !e.name.endsWith(".md")) continue;
       const name = e.name.slice(0, -3);
       if (!/^[a-z0-9][a-z0-9_-]*$/i.test(name)) continue; // safe slug only (it becomes /name)
+      // A higher-precedence dir already defined this name → keep it. A project skill
+      // shadowed by a global one is flagged; overriding a bundled default is normal (silent).
+      if (registry.has(name)) {
+        if (source === "project") console.error(color.yellow(`⚠ project skill /${name} ignored — a global skill of that name takes precedence`));
+        continue;
+      }
       try {
         const raw = (await readFile(join(dir, e.name), "utf8")).trim();
         if (!raw) continue;
-        // Global (user-owned) skills are higher-trust than project (repo-owned) ones — a
-        // global skill wins on a name clash, and the shadowed project skill is flagged.
-        if (source === "project" && registry.has(name)) {
-          console.error(color.yellow(`⚠ project skill /${name} ignored — a global skill of that name takes precedence`));
-          continue;
-        }
         const { description, modelInvocable, body } = parseSkill(raw);
         registry.set(name, { name, content: body, description, modelInvocable, path: join(dir, e.name), source });
       } catch {

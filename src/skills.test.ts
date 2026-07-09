@@ -71,3 +71,11 @@ test("read_skill: returns the body, strips a leading slash, labels project skill
     if (check.source === "project") assert.match(body, /LOWER TRUST/); // M3 trust label on repo skills
   }
 });
+
+test("bundled skills ship with beecork and load at lowest precedence", async () => {
+  await loadSkills(); // reads global + project + the bundled skills/ dir
+  const bs = getSkill("browser-signals"); // shipped in skills/browser-signals.md
+  assert.ok(bs, "the bundled browser-signals skill loads");
+  assert.equal(bs!.source, "bundled");
+  assert.ok(bs!.description.length > 0, "advertises a one-line description");
+});
