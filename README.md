@@ -77,6 +77,18 @@ The agent can delegate an open-ended investigation to a **read-only sub-agent** 
 (reading, searching, browsing the web) in a separate context and returns just a summary — keeping the
 main conversation clean. It cannot modify anything, run commands, or recurse.
 
+### Status line
+
+A live bar on the terminal's bottom row shows `model · effort · git branch · ~tokens · background tasks`,
+refreshed every couple seconds. Disable with `STATUSLINE=0`.
+
+### Skipping permissions (danger)
+
+For **disposable sandboxes / CI only**, `beecork --dangerously-skip-permissions` (or
+`BEECORK_DANGEROUSLY_SKIP_PERMISSIONS=1`) turns off the approval gate — out-of-root paths and risky
+shell run unprompted, with a red warning. Two floors still hold: an explicit read-only mode still blocks
+writes, and catastrophic commands (`rm -rf /`, fork bombs, `mkfs`, …) are still refused.
+
 ### Slash commands
 
 `/model` · `/effort` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
@@ -93,8 +105,10 @@ tokens.
 ### Memory
 
 beecork reads `cork.md` and `.beecork/memory.md` from `~/.beecork/` (your global,
-authoritative memory) and from the project tree (project context). Sessions are saved
-under `.beecork/sessions/` for `/resume`.
+authoritative memory) and from the project tree (project context). It also reads the
+cross-tool standard **`AGENTS.md`** (and `CLAUDE.md`) if a repo ships one, as lower-trust
+project instructions — so beecork "just works" in repos set up for other agents. Sessions
+are saved under `.beecork/sessions/` for `/resume`.
 
 ## Configuration reference
 
@@ -109,6 +123,8 @@ All variables are read from the real shell environment only (never a project fil
 | `BRAVE_API_KEY` | Brave Search key (for `web_search`) | — |
 | `VERIFY_COMMAND` | Command auto-run after edits (e.g. `npm run typecheck`) | — |
 | `AUTO_APPROVE` | Headless: skip approval prompts (out-of-root/risky shell are still hard-denied) | off |
+| `BEECORK_DANGEROUSLY_SKIP_PERMISSIONS` | Sandbox-only: skip the whole gate (also `--dangerously-skip-permissions`) | off |
+| `STATUSLINE` / `STATUSLINE_REFRESH_MS` | Bottom status bar on/off · refresh interval | on · `2000` |
 | `NO_UPDATE_NOTIFIER` / `CI` | Disable the "update available" check | off |
 | `MAX_STEPS` | Max tool steps per turn | `50` |
 | `EXEC_TIMEOUT_MS` | `run_bash` timeout | `30000` |

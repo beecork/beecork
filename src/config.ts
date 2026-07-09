@@ -98,8 +98,19 @@ export const config = {
   // Sub-agent (explore tool)
   subAgentMaxSteps: num("SUBAGENT_MAX_STEPS", 15), // child explorer's step budget (bounds cost/latency)
 
+  // Live status line (bottom row: model · effort · git branch · ~tokens · bg tasks)
+  statuslineEnabled: !["0", "false", "off", "no"].includes((process.env.STATUSLINE ?? "").trim().toLowerCase()), // default on; STATUSLINE=0 disables
+  statuslineRefreshMs: num("STATUSLINE_REFRESH_MS", 2000), // bar refresh interval
+
   // Integrations / modes
   verifyCommand: process.env.VERIFY_COMMAND ?? "", // auto-run after edits (e.g. "npm run typecheck")
   traceFile: process.env.TRACE_FILE ?? "", // record tool calls for the eval
   autoApprove: bool("AUTO_APPROVE"), // headless: skip permission prompts (explicit truthy only)
+
+  // DANGER: skip the ENTIRE approval gate — out-of-root paths and risky shell just RUN, unprompted.
+  // Claude-Code-style, for disposable sandboxes/CI only. Two floors still hold: an explicit read-only
+  // mode still blocks writes, and the catastrophic-pattern refusal (rm -rf /, fork bomb, …) still fires.
+  // Set via the --dangerously-skip-permissions CLI flag OR the env var; off by default.
+  dangerouslySkipPermissions:
+    bool("BEECORK_DANGEROUSLY_SKIP_PERMISSIONS") || process.argv.includes("--dangerously-skip-permissions"),
 };

@@ -36,6 +36,14 @@ function beecorkPaths(name: string): string[] {
   return [join(homedir(), BEECORK, name), ...ancestorDirs().map((d) => join(d, BEECORK, name))];
 }
 
+// Standard, cross-tool project instructions: AGENTS.md (the emerging convention any agent CLI reads)
+// and CLAUDE.md (Claude Code's). Project tree ONLY — these are repo files, so they're read at the
+// lower-trust "project" tier (like project cork.md), never as authoritative. Lets beecork "just work"
+// in repos that ship them, instead of needing a beecork-specific file.
+function standardInstructionPaths(): string[] {
+  return ancestorDirs().flatMap((d) => [join(d, "AGENTS.md"), join(d, "CLAUDE.md")]);
+}
+
 // Read cork.md + memory.md for the system prompt, SPLIT by trust: files under the
 // global ~/.beecork are the user's own (authoritative); files in the project tree
 // travel with a (possibly cloned) repo, so they're returned separately and framed
@@ -51,7 +59,7 @@ export async function loadInstructions(): Promise<{ trusted: string; project: st
   const MAX_FILE = 8_000;
   const MAX_TOTAL = 24_000;
   let total = 0;
-  for (const file of [...corkPaths(), ...beecorkPaths("memory.md")]) {
+  for (const file of [...corkPaths(), ...standardInstructionPaths(), ...beecorkPaths("memory.md")]) {
     try {
       let content = (await readFile(file, "utf8")).trim();
       if (!content) continue;
@@ -194,7 +202,28 @@ export function sanitizeSession(raw: unknown): Message[] | null {
     if (typeof tcid === "string") msg.tool_call_id = tcid;
     out.push(msg);
   }
-  return out;
+  return dropIncompleteToolTail(out);
+}
+
+// A crash / SIGTERM / SIGHUP *during* a turn bypasses runTurn's abort-rollback and can persist the
+// conversation mid-tool-group — a trailing assistant with tool_calls whose tool results weren't all
+// pushed yet. Resuming that would send an assistant→tool group with a missing result, which providers
+// reject. So drop the trailing incomplete group (rollback-style, matching runTurn's snapshot behavior —
+// discard the incomplete turn rather than backfill placeholder results). Exported for the test.
+export function dropIncompleteToolTail(messages: Message[]): Message[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.tool_calls?.length) {
+      const unanswered = new Set(m.tool_calls.map((t) => t.id));
+      for (let j = i + 1; j < messages.length; j++) {
+        const mj = messages[j];
+        if (mj.role === "tool" && mj.tool_call_id) unanswered.delete(mj.tool_call_id);
+        else break; // a non-tool message ends this tool group
+      }
+      return unanswered.size > 0 ? messages.slice(0, i) : messages; // incomplete → drop from this assistant on
+    }
+  }
+  return messages;
 }
 
 // Read + validate one session file by name. Returns null on missing/corrupt/invalid.

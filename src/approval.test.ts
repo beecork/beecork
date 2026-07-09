@@ -12,7 +12,7 @@ const guarded = mk({ name: "run_bash", needsApproval: true, guard: () => ({ need
 const bash = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true }); // a non-risky shell call
 
 // Decide with sensible defaults; toolName always matches the tool.
-const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string> } = {}) =>
+const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string>; dangerouslySkip?: boolean } = {}) =>
   decideApproval(tool, {}, { mode: "normal", autoApprove: false, approvedTools: new Set<string>(), toolName: tool.name, ...over });
 
 test("a read-only tool runs in every mode (incl. read-only)", () => {
@@ -55,6 +55,16 @@ test("alwaysAsk (run_bash) re-asks every time — never cached, even after 'alwa
   // auto mode + headless still skip it (the user opted out of prompts there)
   assert.deepEqual(decide(bash, { mode: "auto" }), { action: "run" });
   assert.deepEqual(decide(bash, { autoApprove: true }), { action: "run" });
+});
+
+test("--dangerously-skip-permissions runs everything, but readonly + catastrophic floors hold", () => {
+  // Bypass: the guarded/risky shell and needsApproval tools all just run.
+  assert.deepEqual(decide(guarded, { dangerouslySkip: true }), { action: "run" });
+  assert.deepEqual(decide(write, { dangerouslySkip: true }), { action: "run" });
+  assert.deepEqual(decide(bash, { dangerouslySkip: true }), { action: "run" });
+  // Floor 1: an explicit read-only mode STILL blocks mutations even under the bypass (orthogonal).
+  assert.equal(decide(write, { dangerouslySkip: true, mode: "readonly" }).action, "deny");
+  // (Floor 2 — the catastrophic-pattern refusal — lives in run_bash.run, not the gate.)
 });
 
 test("sub-agent gate: readonly + autoApprove denies a guarded out-of-root read, allows in-root", () => {

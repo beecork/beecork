@@ -181,3 +181,23 @@ start→check→exit, `stopTask` kill, unknown-id → Error; live orphan-reaping
 *Mid-turn steering and Sub-agents (the `explore` tool) were also shipped in this batch but are NOT
 from deepcode (deepcode has neither) — they are tracked in [`docs/roadmap.md`](docs/roadmap.md) as
 original, Claude-Code-inspired additions.*
+
+## 7. Live status line — 2026-07-09
+
+**What shipped:** a status bar pinned to the terminal's bottom row — `model · effort · git branch(*) ·
+~tokens · N background tasks` — refreshed every 2s. `STATUSLINE=0` disables it.
+
+**Why:** glanceable session state (which model, how deep the reasoning, is the tree dirty, how full the
+context, any background tasks) without asking. deepcode has one; we didn't.
+
+**How (files/knobs):** new `src/statusline.ts` — reserves the bottom row via a DECSTBM scroll region
+so normal output scrolls above it; draws with save/restore-cursor so it never splits output; git branch
+polled async off the draw path. Wired in `index.ts` (`startStatusline` before the loop; **synchronous**
+`stopStatusline` on `'exit'` so a crash can't leave the shell's scroll region shrunk). Knobs:
+`STATUSLINE` (on/off), `STATUSLINE_REFRESH_MS` (2000).
+
+**Deviation from deepcode:** deepcode's is a **plugin system** (command + JS-module providers configured
+in settings.json). We shipped a **fixed set of high-signal segments** — no plugin surface (that's
+deepcode-style over-engineering for a small agent). **Tests:** rendering logic (escape sequences +
+segments) verified via a faked-TTY smoke; visual behavior needs a real terminal (TTY-only, no-op when
+piped — verified).

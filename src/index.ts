@@ -15,6 +15,8 @@ import { color, printBanner, stripControl, isPrintableCodePoint, setSteeringActi
 import { SYSTEM_PROMPT, runTurn } from "./agent";
 import { runtimeContext } from "./env";
 import { killAllTasks, runningTaskCount } from "./tasks";
+import { startStatusline, stopStatusline } from "./statusline";
+import { estimateTokens } from "./context";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
 import { loadSkills, getSkill, expandSkill } from "./skills";
@@ -100,6 +102,9 @@ async function main() {
   // every deliberate exit below funnels through process.exit(), which fires 'exit'. process.kill is
   // synchronous, so it's safe here (unlike the async persist()).
   process.on("exit", killAllTasks);
+  // Reset the status-line scroll region on every exit (SYNCHRONOUS — safe here; all deliberate exits
+  // funnel through process.exit → 'exit'). Without this a crash could leave the shell's scroll region shrunk.
+  process.on("exit", stopStatusline);
   if (tty) {
     initInput();
     // Restore the terminal (cursor, bracketed paste, cooked mode) on ANY exit path —
@@ -115,6 +120,11 @@ async function main() {
 
   // Show the startup banner FIRST — before any API-key prompt.
   printBanner(state.model, instr.sources.map(tildify));
+  if (config.dangerouslySkipPermissions) {
+    console.log(color.red("⚠  --dangerously-skip-permissions is ON: the approval gate is OFF. Out-of-root paths and risky") + "\n" +
+      color.red("   shell commands will RUN unprompted. Use only in a disposable sandbox. (read-only mode + catastrophic-") + "\n" +
+      color.red("   command refusal still apply.)") + "\n");
+  }
   if (tty) {
     // Non-blocking: shows a notice from the LAST cached check; refreshes in the background.
     const version = await currentVersion();
@@ -169,6 +179,9 @@ async function main() {
       else { void persist().finally(() => { rl?.close(); process.exit(130); }); }
     });
   }
+
+  // Start the live bottom status bar (TTY + not disabled). Token size reads the current conversation.
+  startStatusline(() => estimateTokens(messages));
 
   while (true) {
     let userInput: string;

@@ -46,6 +46,19 @@ borrowed idea on its own merits — deepcode did not validate these choices, it 
 | 6 | **Background `run_bash`** | Enables dev servers / long tasks the agent can start then poll | M | ⚠️ adds process mgmt | `DONE` (2026-07-09) |
 | — | **Mid-turn steering** *(beyond deepcode)* | Type while it works; picked up next step without cancelling | M | ✅ good | `DONE` (2026-07-09) |
 | — | **Sub-agents (`explore`)** *(beyond deepcode)* | Read-only child explores + returns a summary; parent context stays clean | L | ✅ good | `DONE` (2026-07-09) |
+| — | **Live status line** *(deepcode-derived)* | Glanceable model · effort · branch · ~tokens · bg tasks on the bottom row | M | ✅ good | `DONE` (2026-07-09) |
+| — | **`--dangerously-skip-permissions`** *(Claude-Code-inspired)* | Opt-in bypass of the whole gate for sandboxes; readonly + catastrophic floors hold | S | ⚠️ danger, opt-in | `DONE` (2026-07-09) |
+| — | **Loop hardening: `sanitizeSession` tool-pairing** | Drop a crash-persisted dangling tool group on `/resume` so it can't 400 | S | ✅ good | `DONE` (2026-07-09) |
+| — | **Web-injection hardening** | Strip invisible/zero-width/bidi/tag chars from fetched content + breakout-hardened UNTRUSTED fence | S | ✅ good | `DONE` (2026-07-09) |
+| — | **`AGENTS.md` / `CLAUDE.md` support** | Read the cross-tool standard project-instructions files (lower-trust tier) | S | ✅ good | `DONE` (2026-07-09) |
+| — | **System-prompt hardening** | Adopted the worthwhile Claude-Code/deepcode prompt patterns (shell-out discipline, follow-conventions, no-assume-libraries, no-fabricated-URLs, no-proactive-files, no-unprompted-commits) | S | ✅ good | `DONE` (2026-07-09) |
+
+**Decided NOT to build** (this session, with reasons): prompt-caching for Claude (cheap models cache
+automatically; only Anthropic needs `cache_control`, which would add provider-specific plumbing against
+beecork's identity), an "instruction-detector" antivirus for web content (signature detection of
+injection is evadable + false-positive-prone; the action-layer permission gate is the real defense),
+a security-refusal clause in the prompt (beecork gates *actions*, doesn't gatekeep *tasks*), and
+skills-portability (no cross-tool standard exists to adopt).
 | 7 | **Edit undo / safety net** | Recoverability after a bad edit; complements path-confinement | M | ⚠️ maybe (git already helps) | `TODO` |
 | 8 | **Multimodal `read_file` (images/PDF)** | Situational; many OpenRouter models are multimodal (screenshots, design PDFs) | M | ✅ if capability-gated | `TODO` |
 | 9 | **Desktop notifications** | QoL for long autonomous runs ("done / needs you") | S | ✅ opt-in only | `TODO` |
