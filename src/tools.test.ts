@@ -3,11 +3,13 @@
 // Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { runTool, resolveEdit, toolDefs } from "./tools";
 import { projectRoot } from "./paths";
+import { loadProjectOrigins } from "./projectSites";
 import type { ToolCall } from "./types";
 
 // Apply a successful resolution the same way edit_file's run() does (offset slice-and-splice).
@@ -200,12 +202,19 @@ test("watch_site: POSTs origin (path stripped) + ttl when connected", async () =
   const port = (server.address() as { port: number }).port;
   const prev = process.env.BEECORK_DEV_SIGNALS_URL;
   process.env.BEECORK_DEV_SIGNALS_URL = `http://127.0.0.1:${port}`;
+  const savedCwd = process.cwd();
+  const proj = mkdtempSync(join(tmpdir(), "bk-watch-")); // isolate cwd: watch_site writes .beecork/skeleton.json
   try {
+    process.chdir(proj);
     const out = await watchSite().run({ url: "https://app.example.com/checkout?x=1", minutes: 5 });
     assert.match(out, /Requested watching https:\/\/app\.example\.com/);
     assert.equal(received.origin, "https://app.example.com"); // origin only — path/query stripped
     assert.equal(received.ttlMs, 5 * 60000);
+    // It remembers this site for the project, so later read_dev_signals here auto-scopes to it.
+    assert.deepEqual(await loadProjectOrigins(), ["https://app.example.com"]);
+    assert.match(out, /remember https:\/\/app\.example\.com as this project's site/);
   } finally {
+    process.chdir(savedCwd);
     server.close();
     if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
     else process.env.BEECORK_DEV_SIGNALS_URL = prev;

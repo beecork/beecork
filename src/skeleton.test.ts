@@ -95,6 +95,14 @@ test("ensureBridge: auto-starts the bundled bridge, is idempotent, and serves to
     assert.equal(sig.signals.length, 1);
     assert.equal(sig.signals[0].text, "boom");
 
+    // Origin scoping: ingest signals from two different sites, then /signals?origin= returns only one.
+    for (const u of ["http://localhost:8000/x", "https://app.example.com/y"]) {
+      await fetch(`${url}/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, kind: "network", url: u, status: 500, ts: Date.now() }) });
+    }
+    const scoped = (await (await fetch(`${url}/signals?origin=http://localhost:8000`)).json()) as { signals: { url: string }[] };
+    assert.equal(scoped.signals.length, 1, "only the localhost:8000 signal comes back");
+    assert.ok(scoped.signals[0].url.startsWith("http://localhost:8000"));
+
     // Wrong token → rejected.
     const bad = await fetch(`${url}/ingest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: "nope", kind: "console", text: "x" }) });
     assert.equal(bad.status, 401);

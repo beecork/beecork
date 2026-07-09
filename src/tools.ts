@@ -19,6 +19,7 @@ import { resolveInRoot } from "./paths";
 import { pathGuard, readGuard, writeGuard, bashGuard, isSafeBash, isPrivateAddr, SECRET_FILE, DANGEROUS_BASH } from "./safety";
 import { htmlToText, stripInvisible, stripControlTokens, wrapUntrusted } from "./html";
 import { ensureBridge, skeletonUrl, type EnsureResult } from "./skeleton";
+import { toOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
 import { renderTodos } from "./ui";
 import { showPayload } from "./show";
 import type { ToolCall, ToolDef, TodoItem } from "./types";
@@ -969,13 +970,16 @@ export const toolDefs: ToolDef[] = [
       "(localhost or production), captured live by the Beecork Skeleton extension — so you can SEE " +
       "what's actually happening instead of guessing. Call this whenever the user reports a bug a " +
       "browser would surface (blank page, broken button, failed save, a 500, a visual glitch). If it " +
-      "isn't connected yet it returns setup steps to relay to the user. Pull on demand; don't spam it.",
+      "isn't connected yet it returns setup steps to relay to the user. Pull on demand; don't spam it. " +
+      "The inbox is SHARED across projects, so pass `origin` (this project's site, e.g. its dev URL or " +
+      "production URL) to see only THIS app's signals — otherwise you may get other apps' noise too.",
     parameters: {
       type: "object",
       properties: {
         kind: { type: "string", description: 'Filter: "network", "console", "pageError", "log", or "all" (default all).' },
         since_minutes: { type: "number", description: "Only signals from the last N minutes (optional)." },
         limit: { type: "number", description: "Max signals to return (default 30, max 200)." },
+        origin: { type: "string", description: "Scope to one site, e.g. http://localhost:8000 or https://app.example.com (defaults to this project's remembered site if set)." },
       },
       required: [],
     },
@@ -985,9 +989,15 @@ export const toolDefs: ToolDef[] = [
       const kind = args.kind ? String(args.kind) : "";
       const limit = Math.min(Math.max(Number(args.limit) || 30, 1), 200);
       const sinceMin = Number(args.since_minutes) || 0;
-      const params = new URLSearchParams({ limit: String(limit) });
+      // Scope to this project's site(s): an explicit `origin` wins, else the project's remembered
+      // origins (.beecork/skeleton.json), else unscoped (show all, but flag it if the feed is mixed).
+      const explicit = args.origin ? toOrigin(String(args.origin)) : "";
+      const scope = explicit ? [explicit] : await loadProjectOrigins();
+      // When scoping, over-fetch a bit so client-side filtering (for older bridges) still fills `limit`.
+      const params = new URLSearchParams({ limit: String(scope.length ? Math.min(200, limit * 4) : limit) });
       if (kind && kind !== "all") params.set("kind", kind);
       if (sinceMin > 0) params.set("since", String(Date.now() - sinceMin * 60_000));
+      if (scope.length) params.set("origin", scope.join(","));
       const timeout = AbortSignal.timeout(Math.min(config.webTimeoutMs, 5_000));
       let data: { signals?: Record<string, any>[] };
       try {
@@ -999,9 +1009,13 @@ export const toolDefs: ToolDef[] = [
         return DEV_SIGNALS_SETUP; // inbox unreachable → relay the connect steps
       }
       const now = Date.now();
-      const signals = (data.signals ?? []).filter((s) => s && s.kind !== "watch"); // drop the meta "watch" lines
+      let signals = (data.signals ?? []).filter((s) => s && s.kind !== "watch"); // drop the meta "watch" lines
+      // Re-apply the origin filter here too, so scoping holds even against an older bridge that ignores ?origin=.
+      if (scope.length) signals = signals.filter((s) => scope.some((o) => String(s.url || "").startsWith(o)));
+      signals = signals.slice(-limit);
+      const scopeLabel = scope.length ? ` from ${scope.join(", ")}` : "";
       if (signals.length === 0) {
-        return `The inbox is running${ens.started ? " (I just started it)" : ""}, but no ${kind && kind !== "all" ? `"${kind}" ` : ""}signals were captured${sinceMin ? ` in the last ${sinceMin} min` : ""} yet.\n\n` +
+        return `The inbox is running${ens.started ? " (I just started it)" : ""}, but no ${kind && kind !== "all" ? `"${kind}" ` : ""}signals${scopeLabel} were captured${sinceMin ? ` in the last ${sinceMin} min` : ""} yet.\n\n` +
           `If the Beecork Skeleton extension isn't loaded yet, connect it:\n${EXTENSION_STEPS}\n\n` +
           `Already connected? Reproduce the issue in the browser (or open the app), then call read_dev_signals again.`;
       }
@@ -1011,7 +1025,13 @@ export const toolDefs: ToolDef[] = [
         const text = String(s.text ?? "").replace(/\s+/g, " ").slice(0, 300);
         return `[${s.kind}] ${text}${s.url ? `  @ ${s.url}` : ""}  (${ago(s.ts)})`;
       });
-      return `${signals.length} browser signal(s), newest last:\n${lines.join("\n")}`;
+      // If UNSCOPED and the feed spans multiple sites, nudge toward binding this project's origin.
+      let hint = "";
+      if (!scope.length) {
+        const distinct = [...new Set(signals.map((s) => toOrigin(String(s.url || ""))).filter(Boolean))];
+        if (distinct.length > 1) hint = `\n\n(These span ${distinct.length} sites: ${distinct.join(", ")}. To see only THIS project's, pass origin:"<its site>" — or call watch_site once and I'll remember it for this folder.)`;
+      }
+      return `${signals.length} browser signal(s)${scopeLabel}, newest last:\n${lines.join("\n")}${hint}`;
     },
   },
   {
@@ -1051,7 +1071,9 @@ export const toolDefs: ToolDef[] = [
       } catch {
         return DEV_SIGNALS_SETUP; // no bridge → relay setup steps
       }
-      return `Requested watching ${origin} for ${minutes} min. If the user has approved that site in the extension, it will start capturing shortly — have them reproduce the issue in a tab on ${origin} (or open it), then call read_dev_signals. If nothing shows up, the site isn't approved yet: ask the user to open it and click "Pair this site" in the Beecork Skeleton popup.`;
+      const remembered = await addProjectOrigin(origin).catch(() => false); // bind this site to the project
+      const memo = remembered ? ` I'll remember ${origin} as this project's site, so read_dev_signals here now scopes to it automatically.` : "";
+      return `Requested watching ${origin} for ${minutes} min.${memo} If the user has approved that site in the extension, it will start capturing shortly — have them reproduce the issue in a tab on ${origin} (or open it), then call read_dev_signals. If nothing shows up, the site isn't approved yet: ask the user to open it and click "Pair this site" in the Beecork Skeleton popup.`;
     },
   },
 ];

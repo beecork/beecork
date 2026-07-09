@@ -96,9 +96,12 @@ const server = http.createServer((req, res) => {
     const kind = q.get("kind");
     const since = Number(q.get("since")) || 0;
     const limit = Math.min(Math.max(Number(q.get("limit")) || 50, 1), 1000);
+    // Scope to one or more origins (comma-separated) so a project sees only its own site's signals.
+    const origins = (q.get("origin") || "").split(",").map((s) => s.trim()).filter(Boolean);
     let items = buffer.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     if (kind && kind !== "all") items = items.filter((s) => s.kind === kind);
     if (since) items = items.filter((s) => (s.ts || 0) >= since);
+    if (origins.length) items = items.filter((s) => origins.some((o) => String(s.url || "").startsWith(o)));
     items = items.slice(-limit);
     return void res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ signals: items }));
   }

@@ -7,3 +7,6 @@ eval/good/
 .beecork/memory.md
 audits/
 .claude/think-it-through/
+
+# per-project browser-signal site binding (runtime, not source)
+.beecork/skeleton.json

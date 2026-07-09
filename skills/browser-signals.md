@@ -21,6 +21,20 @@ the real errors:
 
 Pull it **on demand** while debugging — don't call it in a loop or on every turn.
 
+## Seeing only THIS project's signals (scoping)
+
+The inbox is **shared** across every project that uses beecork, so signals from other apps you
+have open can show up too. Scope to the project you're in:
+
+- Pass **`origin`** — the site this project runs on, e.g.
+  `read_dev_signals({ origin: "http://localhost:8000" })` or `{ origin: "https://app.example.com" }`.
+  Get it from the project itself (the dev script / framework config) or from the user.
+- **It's remembered per folder.** Once you `watch_site` a production URL, beecork saves that origin to
+  `.beecork/skeleton.json`, and later `read_dev_signals` calls in that folder auto-scope to it — no
+  need to pass `origin` again.
+- If you call it unscoped and the feed spans multiple sites, the result says so and lists the origins,
+  so you (or the user) can pick this project's.
+
 ## Watching an on-demand / production site
 
 Localhost/dev sites the user approved are watched automatically. A **production** (or
