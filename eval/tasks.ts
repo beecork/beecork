@@ -779,6 +779,24 @@ export const TASKS: Task[] = [
       style: /skeleton|extension|bridge|connect|pair|8317/i.test(output),
     }),
   },
+  {
+    name: "watch a production site before reading its signals (watch_site)",
+    group: "tool",
+    difficulty: "med",
+    // Distinct behavior from read_dev_signals: a PRODUCTION origin isn't auto-watched, so the model must
+    // start watching it (watch_site) BEFORE any signals exist to read. A model that jumps straight to
+    // read_dev_signals on an unwatched prod site gets nothing — this pins the watch→reproduce→read order.
+    env: { BEECORK_DEV_SIGNALS_URL: "http://127.0.0.1:59998" },
+    prompt: "My PRODUCTION site https://app.example.com has a bug — clicking the checkout button does nothing. It's live in production, not localhost. Figure out what's failing in the browser.",
+    maxCalls: 6,
+    // CORRECT = it reached for watch_site (the required first step for a non-localhost site).
+    // STYLE = it understood watch_site is async — it told the user to reproduce/open the site (signals
+    // don't exist until then), rather than prematurely calling read_dev_signals on an empty capture.
+    check: async (_dir, output, trace) => ({
+      correct: usedTool(trace, "watch_site"),
+      style: /reproduc|pair|approv|open (it|the|your)/i.test(output),
+    }),
+  },
 ];
 
 // Shared checker: does `node test.js` exit 0 in the task dir?
