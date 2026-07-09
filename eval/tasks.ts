@@ -762,6 +762,23 @@ export const TASKS: Task[] = [
       return { correct: ok, style: usedTool(trace, "update_todos") };
     },
   },
+  {
+    name: "reach for browser signals on a browser-surfaced bug (read_dev_signals)",
+    group: "tool",
+    difficulty: "med",
+    // Dead port → read_dev_signals can't reach a bridge and returns setup steps, so the eval needs no
+    // server. What we're testing is TOOL SELECTION, which a unit test can't: does the model connect
+    // "browser bug I can't see the console for" → pull the browser's signals, instead of grepping code?
+    env: { BEECORK_DEV_SIGNALS_URL: "http://127.0.0.1:59998" },
+    prompt: "I open my app in the browser and the page renders blank — I'm sure there's a JavaScript error but I can't see the console. Find out what's failing.",
+    maxCalls: 4,
+    // CORRECT = it reached for read_dev_signals (the right first move for a browser-surfaced bug).
+    // STYLE = with no bridge connected, it relayed the setup/connect guidance the tool returned.
+    check: async (_dir, output, trace) => ({
+      correct: usedTool(trace, "read_dev_signals"),
+      style: /skeleton|extension|bridge|connect|pair|8317/i.test(output),
+    }),
+  },
 ];
 
 // Shared checker: does `node test.js` exit 0 in the task dir?
