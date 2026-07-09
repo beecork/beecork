@@ -21,6 +21,15 @@ the real errors:
 
 Pull it **on demand** while debugging — don't call it in a loop or on every turn.
 
+## Watching an on-demand / production site
+
+Localhost/dev sites the user approved are watched automatically. A **production** (or
+any "on-demand") approved site is idle until asked. To investigate one, call
+`watch_site({ url })` — it asks the extension to watch that site for a while. Only sites
+the user already approved are honored (beecork can't start watching a brand-new site on
+its own). Then have the user reproduce the issue (or open the site) and call
+`read_dev_signals`.
+
 ## If it says "not connected" — one-time setup
 
 The tool returns setup steps when the bridge isn't running. Relay them to the user:

@@ -171,3 +171,43 @@ test("read_dev_signals: formats connected signals and drops meta 'watch' lines",
     else process.env.BEECORK_DEV_SIGNALS_URL = prev;
   }
 });
+
+const watchSite = () => toolDefs.find((t) => t.name === "watch_site")!;
+
+test("watch_site: rejects an invalid URL and relays setup when no bridge is reachable", async () => {
+  assert.match(await watchSite().run({ url: "not a url" }), /^Error/); // no request made
+  const prev = process.env.BEECORK_DEV_SIGNALS_URL;
+  process.env.BEECORK_DEV_SIGNALS_URL = "http://127.0.0.1:59237";
+  try {
+    assert.match(await watchSite().run({ url: "https://app.example.com" }), /Beecork Skeleton/);
+  } finally {
+    if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
+    else process.env.BEECORK_DEV_SIGNALS_URL = prev;
+  }
+});
+
+test("watch_site: POSTs origin (path stripped) + ttl when connected", async () => {
+  let received: { origin?: string; ttlMs?: number } = {};
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      received = JSON.parse(body || "{}");
+      res.writeHead(200).end("ok");
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  const prev = process.env.BEECORK_DEV_SIGNALS_URL;
+  process.env.BEECORK_DEV_SIGNALS_URL = `http://127.0.0.1:${port}`;
+  try {
+    const out = await watchSite().run({ url: "https://app.example.com/checkout?x=1", minutes: 5 });
+    assert.match(out, /Requested watching https:\/\/app\.example\.com/);
+    assert.equal(received.origin, "https://app.example.com"); // origin only — path/query stripped
+    assert.equal(received.ttlMs, 5 * 60000);
+  } finally {
+    server.close();
+    if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
+    else process.env.BEECORK_DEV_SIGNALS_URL = prev;
+  }
+});

@@ -1007,6 +1007,45 @@ export const toolDefs: ToolDef[] = [
       return `${signals.length} browser signal(s), newest last:\n${lines.join("\n")}`;
     },
   },
+  {
+    name: "watch_site",
+    description:
+      "Ask the Beecork Skeleton extension to start watching an APPROVED site's tab right now — use for " +
+      "an on-demand or production site you need to investigate (localhost/dev sites are watched " +
+      "automatically, so you don't need this for them). Only sites the user already approved are " +
+      "honored. After calling this, reproduce the issue (or open the site), then read_dev_signals.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The site to watch, e.g. https://app.example.com (its origin is used)." },
+        minutes: { type: "number", description: "How long to keep watching (default 10, max 120)." },
+      },
+      required: ["url"],
+    },
+    run: async (args, signal) => {
+      const base = process.env.BEECORK_DEV_SIGNALS_URL || "http://localhost:8317";
+      let origin: string;
+      try {
+        origin = new URL(String(args.url ?? "")).origin;
+      } catch {
+        return `Error: "${args.url}" is not a valid URL.`;
+      }
+      const minutes = Math.min(Math.max(Number(args.minutes) || 10, 1), 120);
+      const timeout = AbortSignal.timeout(Math.min(config.webTimeoutMs, 5_000));
+      try {
+        const res = await fetch(`${base}/request-watch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ origin, ttlMs: minutes * 60_000 }),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        });
+        if (!res.ok) return `The browser link responded with HTTP ${res.status}.`;
+      } catch {
+        return DEV_SIGNALS_SETUP; // no bridge → relay setup steps
+      }
+      return `Requested watching ${origin} for ${minutes} min. If the user has approved that site in the extension, it will start capturing shortly — have them reproduce the issue in a tab on ${origin} (or open it), then call read_dev_signals. If nothing shows up, the site isn't approved yet: ask the user to open it and click "Pair this site" in the Beecork Skeleton popup.`;
+    },
+  },
 ];
 
 // Derived: the schema list sent to the model, and the dispatch map.
