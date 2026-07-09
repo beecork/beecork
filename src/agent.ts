@@ -51,6 +51,7 @@ async function askApproval(
   ask: (q: string) => Promise<string>,
   call: ToolCall,
   reason?: string,
+  offerAlways = true,
 ): Promise<"once" | "always" | "deny"> {
   let args: Record<string, any> = {};
   try {
@@ -75,8 +76,10 @@ async function askApproval(
     console.log(color.yellow(`   ${stripControl(call.function.arguments)}`));
   }
 
-  const answer = (await ask(color.yellow("   allow? [y]es / [n]o / [a]lways: "))).trim().toLowerCase();
-  if (answer === "a" || answer === "always") return "always";
+  // Only offer "always" when the decision can actually cache it — otherwise it's a misleading option.
+  const prompt = offerAlways ? "   allow? [y]es / [n]o / [a]lways: " : "   allow? [y]es / [n]o: ";
+  const answer = (await ask(color.yellow(prompt))).trim().toLowerCase();
+  if (offerAlways && (answer === "a" || answer === "always")) return "always";
   if (answer === "y" || answer === "yes") return "once";
   return "deny";
 }
@@ -91,12 +94,12 @@ async function askApproval(
 export type ApprovalDecision =
   | { action: "run" }
   | { action: "deny"; kind: "readonly" | "headless"; reason: string }
-  | { action: "ask"; cacheable: boolean; reason?: string };
+  | { action: "ask"; cacheable: boolean; reason?: string; guardKey?: string };
 
 export function decideApproval(
   tool: ToolDef | undefined,
   args: Record<string, any>,
-  ctx: { mode: Mode; autoApprove: boolean; approvedTools: Set<string>; toolName: string; dangerouslySkip?: boolean },
+  ctx: { mode: Mode; autoApprove: boolean; approvedTools: Set<string>; approvedGuardKeys?: Set<string>; toolName: string; dangerouslySkip?: boolean },
 ): ApprovalDecision {
   // Read-only mode: refuse anything that writes/edits/runs (reads/search/web still pass). This is a
   // capability mode (an explicit runtime choice), so it holds even under --dangerously-skip-permissions.
@@ -106,12 +109,16 @@ export function decideApproval(
   // DANGER bypass: skip the entire approval gate (out-of-root + risky shell just run). Placed AFTER
   // readonly (orthogonal) — the catastrophic-pattern refusal in run_bash.run still fires as a floor.
   if (ctx.dangerouslySkip) return { action: "run" };
-  // per-CALL hard guard (out-of-root path / risky shell): asked every time, never cached,
-  // hard-denied in headless mode.
+  // per-CALL hard guard (out-of-root path / risky shell). A guard with a cacheKey (an out-of-root
+  // PATH) can be blessed for the session with "always" — scoped to that key, never persisted. Guards
+  // without a key (secrets, risky shell) are asked every time. Hard-denied in headless mode.
   const guard = tool?.guard?.(args);
   if (guard?.needsApproval) {
+    if (guard.cacheKey && ctx.approvedGuardKeys?.has(guard.cacheKey)) return { action: "run" }; // user already said "always" for this path this session
     if (ctx.autoApprove) return { action: "deny", kind: "headless", reason: guard.reason ?? "blocked" };
-    return { action: "ask", cacheable: false, reason: guard.reason };
+    return guard.cacheKey
+      ? { action: "ask", cacheable: true, reason: guard.reason, guardKey: guard.cacheKey } // out-of-root path → "always" sticks for this key
+      : { action: "ask", cacheable: false, reason: guard.reason }; // secret / risky shell → never cacheable
   }
   // per-TOOL gate (write_file / edit_file / run_bash). Skipped in auto mode and headless —
   // but the hard guard above still ran in both.
@@ -132,7 +139,8 @@ const hasContent = (m: Message) => Boolean(m.content) || (m.tool_calls?.length ?
 // `messages` is deliberately NOT here — compaction may swap that array between steps, so it's
 // passed explicitly each call.
 type TurnDeps = {
-  approvedTools: Set<string>;       // read + written ("always" caching)
+  approvedTools: Set<string>;       // per-TOOL "always" caching (session + persisted)
+  approvedGuardKeys: Set<string>;   // per-KEY "always" for guards (e.g. an out-of-root path); session only
   callCounts: Map<string, number>; // loop detector, read + written
   ask: (q: string) => Promise<string>;
   signal?: AbortSignal;             // user cancel (Ctrl-C)
@@ -179,7 +187,7 @@ async function handleAskUser(args: Record<string, any>): Promise<string> {
 // render/summarize → push exactly one tool result into `messages`. Every path ends in one
 // pushTool, so the return is void. Extracted from runTurn to keep the turn loop readable.
 async function handleToolCall(call: ToolCall, messages: Message[], step: number, deps: TurnDeps): Promise<void> {
-  const { approvedTools, callCounts, ask, signal } = deps;
+  const { approvedTools, approvedGuardKeys, callCounts, ask, signal } = deps;
   const pushTool = (content: string) => messages.push({ role: "tool", tool_call_id: call.id, content });
 
   // Loop detector: refuse a BYTE-IDENTICAL call repeated too many times. (A re-read with a
@@ -216,6 +224,7 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     mode: state.mode,
     autoApprove: config.autoApprove,
     approvedTools,
+    approvedGuardKeys,
     toolName: call.function.name,
     dangerouslySkip: config.dangerouslySkipPermissions,
   });
@@ -230,17 +239,23 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     return;
   }
   if (decision.action === "ask") {
-    const answer = await askApproval(ask, call, decision.cacheable ? undefined : decision.reason);
+    // Always show the guard reason (out-of-root/secret/risky), but only offer "always" when it can
+    // actually cache — so we never dangle a misleading option.
+    const answer = await askApproval(ask, call, decision.reason, decision.cacheable);
     if (answer === "deny") {
       console.log(color.red("   ↳ denied") + "\n");
-      pushTool(decision.cacheable
-        ? "The user DENIED permission to run this tool. Do not retry it."
-        : `The user DENIED this (${decision.reason}). Do not retry, and do not route around it with run_bash/cat or another tool.`);
+      pushTool(decision.reason
+        ? `The user DENIED this (${decision.reason}). Do not retry, and do not route around it with run_bash/cat or another tool.`
+        : "The user DENIED permission to run this tool. Do not retry it.");
       return;
     }
-    if (decision.cacheable && answer === "always") {
-      approvedTools.add(call.function.name); // this session
-      void addProjectApproval(call.function.name); // and persist for THIS project across restarts
+    if (answer === "always" && decision.cacheable) {
+      if (decision.guardKey) {
+        approvedGuardKeys.add(decision.guardKey); // per-key (e.g. one out-of-root path), SESSION ONLY — never persisted
+      } else {
+        approvedTools.add(call.function.name); // per-tool, this session…
+        void addProjectApproval(call.function.name); // …and persisted for THIS project across restarts
+      }
     }
   }
 
@@ -324,6 +339,7 @@ export async function runTurn(
   userInput: string,
   ask: (q: string) => Promise<string>,
   approvedTools: Set<string>,
+  approvedGuardKeys: Set<string>,
   signal?: AbortSignal,
   steering?: string[],
 ): Promise<Message[]> {
@@ -333,7 +349,7 @@ export async function runTurn(
   try {
     let answered = false;
     const callCounts = new Map<string, number>(); // loop detector (per turn)
-    const deps: TurnDeps = { approvedTools, callCounts, ask, signal }; // stable for the whole turn
+    const deps: TurnDeps = { approvedTools, approvedGuardKeys, callCounts, ask, signal }; // stable for the whole turn
 
     for (let step = 0; step < config.maxSteps && !answered && !signal?.aborted; step++) {
       // Keep within the window — before EACH call, so a turn can't overflow either.

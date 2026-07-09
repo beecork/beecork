@@ -9,10 +9,12 @@ import { homedir } from "node:os";
 import { basename } from "node:path";
 import { resolveInRoot } from "./paths";
 
-// A file tool whose path lands outside the project root needs explicit approval.
-export function pathGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
+// A file tool whose path lands outside the project root needs explicit approval. `cacheKey` = the
+// resolved path, so an "always" answer sticks for THAT file this session (never persisted, never a
+// blanket out-of-root approval).
+export function pathGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string; cacheKey?: string } {
   const { abs, inRoot } = resolveInRoot(String(args.path ?? "."));
-  return inRoot ? {} : { needsApproval: true, reason: `path is outside the project root: ${abs}` };
+  return inRoot ? {} : { needsApproval: true, reason: `path is outside the project root: ${abs}`, cacheKey: `path:${abs}` };
 }
 
 // Files whose contents are secrets. read_file/show route these through approval even when
@@ -33,10 +35,11 @@ function isSecretPath(userPath: string): boolean {
 
 // The gate for reads AND writes/edits: outside-root or secret-file → a per-CALL prompt
 // (never "always"-cached; hard-denied in headless), so no secret is read or clobbered silently.
-export function secretGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
+export function secretGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string; cacheKey?: string } {
   const p = pathGuard(args);
-  if (p.needsApproval) return p;
+  if (p.needsApproval) return p; // out-of-root → inherits pathGuard's cacheKey (cacheable per-path)
   const path = String(args.path ?? "");
+  // Secret files: NO cacheKey — "always" must never stick for a secret (too sensitive).
   return isSecretPath(path)
     ? { needsApproval: true, reason: `this looks like a secrets file (${path}) — approve before continuing` }
     : {};

@@ -79,8 +79,9 @@ main conversation clean. It cannot modify anything, run commands, or recurse.
 
 ### Status line
 
-A live bar on the terminal's bottom row shows `model · effort · git branch · ~tokens · background tasks`,
-refreshed every couple seconds. Disable with `STATUSLINE=0`.
+An optional bar on the terminal's bottom row shows `model · effort · git branch · ~tokens · background
+tasks`. It's **off by default** while a proper pinned-input version is built; opt into the interim one
+with `STATUSLINE=1`.
 
 ### Skipping permissions (danger)
 

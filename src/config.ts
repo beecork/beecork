@@ -98,8 +98,10 @@ export const config = {
   // Sub-agent (explore tool)
   subAgentMaxSteps: num("SUBAGENT_MAX_STEPS", 15), // child explorer's step budget (bounds cost/latency)
 
-  // Live status line (bottom row: model · effort · git branch · ~tokens · bg tasks)
-  statuslineEnabled: !["0", "false", "off", "no"].includes((process.env.STATUSLINE ?? "").trim().toLowerCase()), // default on; STATUSLINE=0 disables
+  // Live status line (bottom row: model · effort · git branch · ~tokens · bg tasks). DEFAULT OFF —
+  // the interim scroll-region version clashes with the inline input (banner loss / flicker); it's
+  // being replaced by a proper pinned-input UI. Opt in with STATUSLINE=1.
+  statuslineEnabled: ["1", "true", "on", "yes"].includes((process.env.STATUSLINE ?? "").trim().toLowerCase()),
   statuslineRefreshMs: num("STATUSLINE_REFRESH_MS", 2000), // bar refresh interval
 
   // Integrations / modes

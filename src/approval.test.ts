@@ -12,7 +12,7 @@ const guarded = mk({ name: "run_bash", needsApproval: true, guard: () => ({ need
 const bash = mk({ name: "run_bash", needsApproval: true, alwaysAsk: true }); // a non-risky shell call
 
 // Decide with sensible defaults; toolName always matches the tool.
-const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string>; dangerouslySkip?: boolean } = {}) =>
+const decide = (tool: ToolDef, over: { mode?: "normal" | "auto" | "readonly"; autoApprove?: boolean; approvedTools?: Set<string>; approvedGuardKeys?: Set<string>; dangerouslySkip?: boolean } = {}) =>
   decideApproval(tool, {}, { mode: "normal", autoApprove: false, approvedTools: new Set<string>(), toolName: tool.name, ...over });
 
 test("a read-only tool runs in every mode (incl. read-only)", () => {
@@ -42,6 +42,19 @@ test("per-CALL hard guard asks (not cacheable), even in auto mode; headless deni
   const h = decide(guarded, { autoApprove: true });
   assert.equal(h.action, "deny");
   assert.equal(h.action === "deny" && h.kind, "headless");
+});
+
+test("out-of-root guard: 'always' sticks per-path (session) — not blanket, not persisted", () => {
+  // A guard with a cacheKey (an out-of-root PATH) is cacheable; secret/risky (no key) is not.
+  const outOfRoot = mk({ name: "edit_file", needsApproval: true, guard: () => ({ needsApproval: true, reason: "outside root", cacheKey: "path:/Users/x/Desktop/poem.txt" }) });
+  // First time: asks, and it's cacheable (offers a sticky "always").
+  assert.deepEqual(decide(outOfRoot), { action: "ask", cacheable: true, reason: "outside root", guardKey: "path:/Users/x/Desktop/poem.txt" });
+  // After the user answered "always" for THAT key → runs without asking again.
+  assert.deepEqual(decide(outOfRoot, { approvedGuardKeys: new Set(["path:/Users/x/Desktop/poem.txt"]) }), { action: "run" });
+  // A DIFFERENT out-of-root key is NOT covered → still asks.
+  assert.equal(decide(outOfRoot, { approvedGuardKeys: new Set(["path:/other/file"]) }).action, "ask");
+  // A keyless guard (secret / risky shell) is never cacheable, even after 'always'.
+  assert.deepEqual(decide(guarded), { action: "ask", cacheable: false, reason: "risky" });
 });
 
 test("remember (mutates, not needsApproval) runs in normal mode", () => {

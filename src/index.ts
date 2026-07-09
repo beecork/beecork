@@ -74,6 +74,7 @@ async function main() {
   let messages: Message[] = [{ role: "system", content: systemContent }];
 
   const approvedTools = new Set<string>();
+  const approvedGuardKeys = new Set<string>(); // per-path "always" for out-of-root guards; session only, never persisted
   for (const t of settings.alwaysAllow) approvedTools.add(t); // global pre-approvals (~/.beecork/settings.json)
   for (const t of projectApprovals) approvedTools.add(t); // per-project "always" (loaded above)
 
@@ -259,7 +260,7 @@ async function main() {
         })
       : () => {};
     try {
-      messages = await runTurn(messages, userInput, ask, approvedTools, activeTurn.signal, steering);
+      messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering);
     } finally {
       restoreKeys();
       setSteeringActive(false); // always reset — an uncommitted note must not leave the spinner muted next turn

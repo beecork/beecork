@@ -33,8 +33,10 @@ export type ToolDef = {
   alwaysAsk?: boolean; // confirm EVERY time — never "always"-cached (e.g. run_bash, so its explanation is always seen)
   mutates?: boolean; // writes to disk / changes state — blocked in read-only mode (even without needsApproval)
   // Per-CALL approval decision (e.g. a path outside the project root). Lets the
-  // gate ask about this specific call, not just by tool name.
-  guard?: (args: Record<string, any>) => { needsApproval?: boolean; reason?: string };
+  // gate ask about this specific call, not just by tool name. `cacheKey`, when present,
+  // makes an "always" answer stick for THIS key (e.g. one out-of-root path) for the session
+  // only — never persisted. Absent (secrets, risky shell) → never cacheable.
+  guard?: (args: Record<string, any>) => { needsApproval?: boolean; reason?: string; cacheKey?: string };
 };
 
 export type TodoItem = { content: string; status: "pending" | "in_progress" | "completed" };

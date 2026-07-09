@@ -234,7 +234,8 @@ export async function callModel(
         stopSpinner();
         if (!quiet) {
           if (!printedText) {
-            process.stdout.write("\n" + color.cyan("bee: "));
+            // Blank line between the dim "thinking:" block and the answer, so they don't cram together.
+            process.stdout.write((printedReasoning ? "\n\n" : "\n") + color.cyan("bee: "));
             printedText = true;
           }
           // stripControl: the model's text must not carry raw escape sequences to the terminal
