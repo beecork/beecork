@@ -72,6 +72,11 @@ export const config = {
   keepRecent: num("KEEP_RECENT", 12), // recent messages kept verbatim
   maxToolResultChars: num("MAX_TOOL_RESULT_CHARS", 20_000), // cap a single tool output
 
+  // Long-term memory (the `remember` tool → .beecork/memory.md). The read-side budget truncates a
+  // single memory file at 8k chars, so keep the write budget well under that so memory is never lost.
+  memoryMaxChars: num("MEMORY_MAX_CHARS", 4000), // over budget → remember refuses + asks the model to consolidate
+  memoryNudgeInterval: num("MEMORY_NUDGE_INTERVAL", 8), // every N user turns, remind the model to save durable facts (0 = off)
+
   // Agentic loop
   maxSteps: num("MAX_STEPS", 50), // tool steps per turn (runaway guard)
   loopRepeatLimit: num("LOOP_REPEAT_LIMIT", 3), // identical tool call N× → intervene
