@@ -1,6 +1,6 @@
 {
   "name": "beecork",
-  "version": "2.7.1",
+  "version": "2.7.2",
   "description": "beecork — a from-scratch CLI coding agent: multi-model (OpenRouter), BYOK, path-confined tools, built part by part.",
   "type": "module",
   "bin": {
