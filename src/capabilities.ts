@@ -34,6 +34,12 @@ function loadCatalog(): void {
     });
 }
 
+// Warm the catalog (and the OpenRouter TLS connection) at startup — called from index.ts once a key is
+// resolved. Preloads reasoning-support so the FIRST model call doesn't fail-open, and hits openrouter.ai
+// early so the first real request reuses a warm socket instead of paying a cold DNS+TLS handshake.
+// Fire-and-forget + idempotent (loadCatalog guards on `started`); never throws.
+export function primeCatalog(): void { loadCatalog(); }
+
 // Strip an OpenRouter variant suffix (":free", ":nitro", …) so a variant still matches its
 // base model's advertised capabilities.
 export const baseId = (slug: string): string => slug.split(":")[0]; // exported for tests

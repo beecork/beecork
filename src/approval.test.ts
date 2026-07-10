@@ -1,8 +1,8 @@
 // Tests for the pure approval-policy decision (the security-critical gate). Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideApproval, askUserMessage } from "./agent";
-import type { ToolDef } from "./types";
+import { decideApproval, askUserMessage, isParallelSafe, lastMutationIndex } from "./agent";
+import type { ToolCall, ToolDef } from "./types";
 
 const mk = (over: Partial<ToolDef>): ToolDef => ({ name: "t", description: "", parameters: {}, run: async () => "", ...over });
 const read = mk({ name: "read_file" });
@@ -120,4 +120,35 @@ test("plan mode: reads run, mutations are blocked (like read-only)", () => {
 });
 test("plan mode: provably-safe read-only shell is allowed (so the agent can explore)", () => {
   assert.deepEqual(decide(bashSafe, { mode: "plan" }), { action: "run" });
+});
+
+// --- parallel tool batching (agent.ts) — the concurrency safety gate -----------------------------
+// isParallelSafe decides which batched calls may run CONCURRENTLY. It must NEVER green-light a tool
+// that mutates, prompts for approval, or reads the keyboard — those stay serial. Runs against the REAL
+// tool registry (normal mode, no pre-approvals), so a regression that mis-flags a tool fails here.
+const tc = (name: string, args = "{}"): ToolCall => ({ id: "c", type: "function", function: { name, arguments: args } });
+const pdeps = { approvedTools: new Set<string>(), approvedGuardKeys: new Set<string>() };
+
+test("isParallelSafe: read-only tools are parallelizable", () => {
+  for (const n of ["read_file", "search", "list_dir", "read_skill", "web_fetch", "web_search", "read_dev_signals", "check_task"]) {
+    assert.equal(isParallelSafe(tc(n), pdeps), true, `${n} should be parallel-safe`);
+  }
+});
+
+test("isParallelSafe: mutating / approval / interactive tools are NEVER parallelized", () => {
+  for (const n of ["write_file", "edit_file", "run_bash", "remember", "ask_user", "update_todos", "show", "explore", "stop_task", "watch_site"]) {
+    assert.equal(isParallelSafe(tc(n), pdeps), false, `${n} must stay serial`);
+  }
+});
+
+test("isParallelSafe: a read that WOULD prompt (out-of-root) falls back to serial", () => {
+  assert.equal(isParallelSafe(tc("read_file", '{"path":"src/x.ts"}'), pdeps), true); // in-root → concurrent
+  assert.equal(isParallelSafe(tc("read_file", '{"path":"../../etc/passwd"}'), pdeps), false); // out-of-root → needs the prompt → serial
+  assert.equal(isParallelSafe(tc("read_file", "{not json"), pdeps), false); // bad JSON → serial (reported the usual way)
+});
+
+test("lastMutationIndex: only the LAST write/edit triggers the post-batch verify", () => {
+  assert.equal(lastMutationIndex([tc("read_file"), tc("edit_file"), tc("read_file"), tc("edit_file")]), 3);
+  assert.equal(lastMutationIndex([tc("write_file"), tc("read_file")]), 0);
+  assert.equal(lastMutationIndex([tc("read_file"), tc("search")]), -1); // no mutation → verify never runs
 });

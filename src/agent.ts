@@ -192,10 +192,84 @@ async function handleAskUser(args: Record<string, any>): Promise<string> {
   return askUserMessage(question, choice, true);
 }
 
+// Tools that are PURE + read-only with the standard one-line render — safe to run CONCURRENTLY with
+// their batch siblings. Deliberately excludes anything that mutates, prompts for approval, reads the
+// keyboard, or renders bespoke multi-line output (write/edit/run_bash/remember/ask_user/update_todos/
+// show/explore). The model is told to batch independent calls; this cashes in that batching (N reads
+// or web_fetches take ~1× wall-clock instead of N×).
+const PARALLEL_SAFE = new Set([
+  "read_file", "search", "list_dir", "read_skill",
+  "web_fetch", "web_search", "read_dev_signals", "check_task",
+]);
+
+// Index of the LAST write_file/edit_file in a message's tool calls (-1 if none). The post-edit
+// auto-check runs only for that call, so a multi-edit batch verifies once, not once per edit. Pure.
+export function lastMutationIndex(calls: ToolCall[]): number {
+  return calls.reduce((acc, c, i) => (c.function.name === "write_file" || c.function.name === "edit_file" ? i : acc), -1);
+}
+
+// Can this call run concurrently in a batch? Only an allow-listed read-only tool whose approval
+// decision is "run" — so an out-of-root read_file (which would need an interactive prompt) correctly
+// falls back to the serial path. Gated by config.parallelTools (PARALLEL_TOOLS=0 disables entirely).
+// Takes only the approval-cache sets it needs (not the whole TurnDeps) so it's easy to unit-test.
+export function isParallelSafe(call: ToolCall, deps: Pick<TurnDeps, "approvedTools" | "approvedGuardKeys">): boolean {
+  if (!config.parallelTools) return false;
+  if (!PARALLEL_SAFE.has(call.function.name)) return false;
+  const tool = toolsByName.get(call.function.name);
+  if (!tool) return false;
+  let args: Record<string, any>;
+  try {
+    args = JSON.parse(call.function.arguments);
+  } catch {
+    return false; // bad JSON → serial, so handleToolCall/runTool reports it the usual way
+  }
+  const decision = decideApproval(tool, args, {
+    mode: state.mode,
+    autoApprove: config.autoApprove,
+    approvedTools: deps.approvedTools,
+    approvedGuardKeys: deps.approvedGuardKeys,
+    toolName: call.function.name,
+    dangerouslySkip: config.dangerouslySkipPermissions,
+  });
+  return decision.action === "run";
+}
+
+// Run a contiguous block of parallel-safe calls CONCURRENTLY, then flush their action lines + result
+// summaries and push their tool results in the ORIGINAL order — so output and history read identically
+// to the serial path; only the wall-clock shrinks. Mirrors handleToolCall's read-only branch (the
+// approval / verify / show-todos-explore branches never reach here because isParallelSafe excludes them).
+async function runReadOnlyBatch(block: ToolCall[], messages: Message[], step: number, deps: TurnDeps): Promise<void> {
+  const { callCounts, signal } = deps;
+  const parts = await Promise.all(block.map(async (call) => {
+    // Loop detector: same per-turn byte-identical-call guard as handleToolCall.
+    const sig = `${call.function.name}:${call.function.arguments}`;
+    const seen = (callCounts.get(sig) ?? 0) + 1;
+    callCounts.set(sig, seen);
+    if (seen >= config.loopRepeatLimit) {
+      return { call, out: color.yellow(`   ↳ skipped — repeated identical call ${seen}×`), content: "You have already called this exact tool with these exact arguments several times; it is not making progress. Stop repeating it — try a different approach or give your final answer." };
+    }
+    let callArgs: Record<string, any> = {};
+    try { callArgs = JSON.parse(call.function.arguments); } catch { /* runTool reports the bad JSON */ }
+    if (config.traceFile) trace.push({ tool: call.function.name, args: call.function.arguments, step });
+    let result = await runTool(call, signal);
+    const summary = summarizeResult(call.function.name, callArgs, result);
+    if (result.length > config.maxToolResultChars) {
+      result = result.slice(0, config.maxToolResultChars) + `\n…[truncated ${result.length - config.maxToolResultChars} chars]`;
+    }
+    return { call, out: "  " + renderToolCall(call.function.name, callArgs) + summary, content: result };
+  }));
+  for (const p of parts) {
+    process.stdout.write(p.out + "\n");
+    messages.push({ role: "tool", tool_call_id: p.call.id, content: p.content });
+  }
+}
+
 // Run ONE tool call to completion: loop-detect → decide + gate approval → execute →
 // render/summarize → push exactly one tool result into `messages`. Every path ends in one
 // pushTool, so the return is void. Extracted from runTurn to keep the turn loop readable.
-async function handleToolCall(call: ToolCall, messages: Message[], step: number, deps: TurnDeps): Promise<void> {
+// `verifyThisCall` gates the post-edit auto-check so a batch of edits runs it ONCE (after the last
+// mutation), not once per edit — the caller passes true only for the last write/edit in the message.
+async function handleToolCall(call: ToolCall, messages: Message[], step: number, deps: TurnDeps, verifyThisCall = true): Promise<void> {
   const { approvedTools, approvedGuardKeys, callCounts, ask, signal } = deps;
   const pushTool = (content: string) => messages.push({ role: "tool", tool_call_id: call.id, content });
 
@@ -295,9 +369,10 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
 
   const summary = summarizeResult(call.function.name, callArgs, result); // from the RAW result
 
-  // Auto-verify after a file mutation so the model sees what it broke.
+  // Auto-verify after a file mutation so the model sees what it broke. Runs once per message (after the
+  // LAST edit in a batch) — verifyThisCall is false for earlier edits, so N edits don't trigger N checks.
   let verifyOut = "";
-  if (config.verifyCommand && (call.function.name === "write_file" || call.function.name === "edit_file")) {
+  if (verifyThisCall && config.verifyCommand && (call.function.name === "write_file" || call.function.name === "edit_file")) {
     verifyOut = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
     result += `\n\n[auto-check: ${config.verifyCommand}]\n${verifyOut}`;
   }
@@ -385,9 +460,21 @@ export async function runTurn(
       }
 
       if (message.tool_calls && message.tool_calls.length > 0) {
-        for (const call of message.tool_calls) {
-          if (signal?.aborted) break; // cancelled mid-turn — stop running tools (this break owns iteration)
-          await handleToolCall(call, messages, step, deps);
+        const calls = message.tool_calls;
+        // The post-edit auto-check runs ONCE per message — after the LAST write/edit — instead of once
+        // per edit, so a multi-edit batch doesn't re-run the full typecheck/build for each one.
+        const lastMutationIdx = lastMutationIndex(calls);
+        let i = 0;
+        while (i < calls.length && !signal?.aborted) { // cancelled mid-turn — stop running tools
+          // Group a contiguous run of independent read-only calls and run them concurrently. A run of
+          // one falls through to the serial path (a "batch of one" gains nothing and keeps its live render).
+          if (isParallelSafe(calls[i], deps)) {
+            let j = i + 1;
+            while (j < calls.length && isParallelSafe(calls[j], deps)) j++;
+            if (j - i > 1) { await runReadOnlyBatch(calls.slice(i, j), messages, step, deps); i = j; continue; }
+          }
+          await handleToolCall(calls[i], messages, step, deps, i === lastMutationIdx);
+          i++;
         }
       } else {
         // Text answer — done, UNLESS the user just steered mid-answer: loop once more so the note

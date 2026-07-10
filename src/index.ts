@@ -18,6 +18,7 @@ import { runtimeContext } from "./env";
 import { killAllTasks, runningTaskCount } from "./tasks";
 import { startChrome, stopChrome, nextLine, beginTurn, endTurn, chromeEnabled } from "./chrome";
 import { estimateTokens } from "./context";
+import { primeCatalog } from "./capabilities";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
 import { loadSkills, getSkill, expandSkill, skillsPrompt } from "./skills";
@@ -191,6 +192,9 @@ async function main() {
     process.exit(1);
   }
   state.apiKey = apiKey;
+  // Warm the OpenRouter connection + capability catalog now (fire-and-forget), so the first turn skips
+  // the cold TLS handshake and doesn't fail-open on reasoning support.
+  primeCatalog();
 
   // How approvals read the user's answer: a single keypress on a TTY, a readline
   // line off-TTY. askApproval interprets "y"/"a"/anything-else (agent.ts).

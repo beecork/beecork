@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseSSELine, isTransientStatus, buildRequestBody, pruneReasoningForSend } from "./api";
+import { normalizeProviderSort } from "./config";
 import type { Message } from "./types";
 
 test("parseSSELine classifies content / tool_call / error / done / ignore", () => {
@@ -69,6 +70,27 @@ test("buildRequestBody: tools override (sub-agent) vs default global TOOLS", () 
   const custom = [{ type: "function", function: { name: "read_file", description: "", parameters: {} } }];
   assert.deepEqual(buildRequestBody({ ...base, tools: custom }).tools, custom); // restricted set used verbatim
   assert.ok(Array.isArray(buildRequestBody(base).tools)); // omitted → falls back to the global TOOLS
+});
+
+test("normalizeProviderSort: unset → latency, valid pass through, off → disabled, typo → latency", () => {
+  assert.equal(normalizeProviderSort(undefined), "latency"); // unset → fast default
+  assert.equal(normalizeProviderSort(null), "latency");
+  assert.equal(normalizeProviderSort("latency"), "latency");
+  assert.equal(normalizeProviderSort("PRICE"), "price"); // case-insensitive
+  assert.equal(normalizeProviderSort("throughput"), "throughput");
+  assert.equal(normalizeProviderSort("off"), ""); // explicit opt-out → OpenRouter default routing
+  assert.equal(normalizeProviderSort("none"), "");
+  assert.equal(normalizeProviderSort("wat"), "latency"); // typo → safe fast default, never a bad value
+});
+
+test("buildRequestBody: providerSort sets provider.sort; escape hatch wins; '' omits it", () => {
+  const base = { model: "m", messages: [] as Message[], includeTools: false, effort: "off" as const, reasoningSupported: false };
+  assert.deepEqual(buildRequestBody({ ...base, extra: {}, providerSort: "latency" }).provider, { sort: "latency" });
+  assert.equal("provider" in buildRequestBody({ ...base, extra: {}, providerSort: "" }), false); // disabled → no field
+  assert.equal("provider" in buildRequestBody({ ...base, extra: {} }), false); // omitted → no field (back-compat)
+  // A user-pinned provider block (OPENROUTER_EXTRA) is never overridden by the default sort.
+  const pinned = buildRequestBody({ ...base, extra: { provider: { order: ["anthropic"] } }, providerSort: "latency" });
+  assert.deepEqual(pinned.provider, { order: ["anthropic"] });
 });
 
 test("buildRequestBody: extra.reasoning overrides the effort default", () => {

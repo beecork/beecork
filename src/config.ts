@@ -52,6 +52,19 @@ export function normalizeEffort(raw: string | undefined | null): ReasoningEffort
   return (EFFORTS as string[]).includes(v) ? (v as ReasoningEffort) : undefined;
 }
 
+// OpenRouter provider-routing sort. The SAME model is served by many backends with wildly different
+// time-to-first-token; "latency" routes to the fastest-responding one. "" disables it (OpenRouter's
+// own load-balanced routing). UNSET → "latency" (the fast default); an explicit off/none/default → "";
+// a typo → "latency" rather than sending a bad value.
+export type ProviderSort = "" | "price" | "throughput" | "latency";
+export function normalizeProviderSort(raw: string | undefined | null): ProviderSort {
+  if (raw == null) return "latency";
+  const v = raw.trim().toLowerCase();
+  if (v === "latency" || v === "price" || v === "throughput") return v;
+  if (["", "off", "none", "default", "0", "false", "no"].includes(v)) return "";
+  return "latency";
+}
+
 // Advanced escape hatch: arbitrary extra params merged into every request body
 // (temperature, top_p, seed, provider routing, …). Malformed JSON → {} (ignored), so a
 // typo can never break every request. Read ONLY from the real shell env, like every knob.
@@ -85,6 +98,10 @@ export const config = {
   loopRepeatLimit: num("LOOP_REPEAT_LIMIT", 3), // identical tool call N× → intervene
   retryAttempts: num("RETRY_ATTEMPTS", 3), // transient API failures
   apiTimeoutMs: num("API_TIMEOUT_MS", 180_000), // per-attempt model-call timeout (generous for reasoning models)
+  // Run a batch's independent, read-only tool calls (read_file/search/list_dir/web_fetch/…) CONCURRENTLY
+  // instead of one-at-a-time — the model is told to batch independent calls, so this cashes in the win
+  // (N web_fetches take ~1× instead of N×). Mutating/approval/interactive tools always stay serial.
+  parallelTools: !["0", "false", "off", "no"].includes((process.env.PARALLEL_TOOLS ?? "").trim().toLowerCase()),
 
   // Tool operational limits
   execTimeoutMs: num("EXEC_TIMEOUT_MS", 30_000), // run_bash command timeout
@@ -98,6 +115,12 @@ export const config = {
   // Reasoning / thinking
   reasoningEffort: normalizeEffort(process.env.REASONING_EFFORT) ?? ("medium" as ReasoningEffort), // startup default; changed live via /effort
   openRouterExtra: parseExtra(process.env.OPENROUTER_EXTRA), // advanced: extra request-body params (sampling, provider routing, …)
+
+  // Provider routing (overridable by a `provider` block in OPENROUTER_EXTRA). The same model is served
+  // by many OpenRouter backends with very different time-to-first-token; "latency" (the default) routes
+  // to the fastest-responding one so replies start streaming right away instead of stalling on a slow
+  // provider. Set OPENROUTER_PROVIDER_SORT=off to fall back to OpenRouter's default load-balanced routing.
+  providerSort: normalizeProviderSort(process.env.OPENROUTER_PROVIDER_SORT),
 
   // Background tasks (run_bash background:true → check_task / stop_task)
   maxBackgroundTasks: num("MAX_BG_TASKS", 5), // per-session cap on concurrent background commands

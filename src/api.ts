@@ -77,8 +77,9 @@ export function buildRequestBody(opts: {
   reasoningSupported: boolean;
   extra: Record<string, unknown>;
   tools?: object[]; // override the tool schema (a sub-agent sends a RESTRICTED set); omit → the global TOOLS
+  providerSort?: string; // bias routing toward the fastest/cheapest backend for this model ("" → OpenRouter default)
 }): Record<string, unknown> {
-  const { model, messages, includeTools, effort, reasoningSupported, extra, tools } = opts;
+  const { model, messages, includeTools, effort, reasoningSupported, extra, tools, providerSort } = opts;
   const body: Record<string, unknown> = { ...extra };
   body.model = model;
   body.messages = messages;
@@ -90,6 +91,9 @@ export function buildRequestBody(opts: {
   if (reasoningSupported && !("reasoning" in extra)) {
     body.reasoning = effort === "off" ? { enabled: false } : { effort };
   }
+  // Route to the fastest-responding backend for this model (the same model on a slow provider can
+  // stall seconds before the first token). Skipped if the user pinned their own `provider` block.
+  if (providerSort && !("provider" in extra)) body.provider = { sort: providerSort };
   return body;
 }
 
@@ -129,6 +133,7 @@ export async function callModel(
     reasoningSupported: shouldSendReasoning(state.model),
     extra: config.openRouterExtra,
     tools: opts?.tools,
+    providerSort: config.providerSort,
   });
 
   const tries = config.retryAttempts;
