@@ -1,6 +1,8 @@
-// Beecork Skeleton — local inbox (bridge). SHIPPED WITH beecork and auto-started
-// by it (src/skeleton.ts), so the user never runs this by hand. It can still be run
-// directly (`node skeleton/bridge.mjs`) for development.
+// Beecork Skeleton — local inbox (bridge). THE one bridge: it ships with beecork and is
+// auto-started by it (src/skeleton.ts), so the user never runs this by hand. It can still be
+// run directly (`node skeleton/bridge.mjs`) — that's also how a non-beecork agent uses the
+// Skeleton extension, since the extension only ever talks to this inbox. Visit /test to verify
+// the browser half end-to-end without an agent.
 //
 // Receives signals POSTed by the extension, keeps a *bounded* rolling window of the
 // most recent ones, and mirrors that window to dev-signals.jsonl (one JSON object per
@@ -16,7 +18,7 @@
 //     ~/.beecork/skeleton) instead of whatever cwd it was launched from.
 
 import http from "node:http";
-import { writeFile, readFile, rename } from "node:fs/promises";
+import { writeFile, readFile, rename, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -27,6 +29,11 @@ const TMP = FILE + ".tmp";
 const TOKEN_FILE = resolve(HOME, ".beecork-token");
 const MAX = 1000; // keep at most this many recent signals
 const IDLE_MS = 60 * 60 * 1000; // self-shutdown after an hour with zero activity
+
+// Own our home. beecork's ensureBridge() also creates it before spawning, but a direct
+// run (`node skeleton/bridge.mjs` with a fresh BEECORK_SKELETON_HOME) has no one to do
+// it — and the token write below would crash the process on ENOENT before we ever listen.
+await mkdir(HOME, { recursive: true });
 
 // Pairing token: the extension must present this to write. Blocks any other local
 // process or malicious web page from POSTing fake signals to your agent. Generated
@@ -138,6 +145,46 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return void res.writeHead(204).end();
 
+  // A tiny self-test page: pair this origin, click a button, see it reach the agent. Serves
+  // only static HTML — no captured data — so it needs no origin gate (a top-level navigation
+  // sends no Origin header anyway). It's how you verify the browser half end-to-end.
+  if (req.method === "GET" && req.url === "/test") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    return void res.end(`<!doctype html><meta charset="utf-8"><title>Beecork Skeleton — test</title>
+<body style="font:16px system-ui;padding:2rem;max-width:40rem;line-height:1.5">
+<h2>Beecork Skeleton — test page</h2>
+<ol>
+  <li>Click the <b>Beecork Skeleton</b> toolbar icon, tick <b>Capture enabled</b>, then click
+      <b>Pair this site</b> — this tab should get a red <b>●</b> badge.</li>
+  <li>Click a button below, then ask beecork to <code>read_dev_signals</code>
+      (scoped: <code>origin: "http://localhost:${PORT}"</code>).</li>
+</ol>
+<p>
+  <button id="e" style="font:16px system-ui;padding:.6rem 1rem;cursor:pointer">Console error + exception</button>
+  <button id="n" style="font:16px system-ui;padding:.6rem 1rem;cursor:pointer">Failed network request</button>
+  <button id="r" style="font:16px system-ui;padding:.6rem 1rem;cursor:pointer">Leaked secret (redaction test)</button>
+</p>
+<p id="s" style="color:#888"></p>
+<script>
+  const s = document.getElementById("s");
+  document.getElementById("e").onclick = () => {
+    console.error("Beecork test: failed to load cart", { itemId: 42 });
+    s.textContent = "Fired a console.error + throwing an exception…";
+    throw new Error("Beecork test: boom on button click");
+  };
+  document.getElementById("n").onclick = async () => {
+    s.textContent = "Making a request that 404s…";
+    try { await fetch("/does-not-exist-" + Date.now()); } catch {}
+  };
+  document.getElementById("r").onclick = async () => {
+    // Deliberately "leak" fake secrets — the extension must scrub these to *** before they reach the inbox.
+    console.error("Beecork test: auth failed with Authorization: Bearer abc.def-ghi123 and key sk-ABCDEFGHIJ1234567890");
+    s.textContent = "Leaked a fake Bearer token, an sk- key, and a URL with ?token=… — all should arrive as ***.";
+    try { await fetch("/secret-endpoint?token=SUPERSECRET&api_key=KEY-" + Date.now()); } catch {}
+  };
+</script>`);
+  }
+
   if (req.method === "POST" && req.url === "/ingest") {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -178,4 +225,5 @@ idle.unref(); // don't let the timer alone keep the process alive
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[skeleton] inbox listening on http://localhost:${PORT} (home: ${HOME})`);
+  console.log(`[skeleton] verify the browser half at http://localhost:${PORT}/test`);
 });
