@@ -10,7 +10,8 @@
   "files": [
     "dist/",
     "skills/",
-    "skeleton/"
+    "skeleton/",
+    "extension/"
   ],
   "engines": {
     "node": ">=20.12"
@@ -21,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
     "eval": "tsx eval/run.ts",
+    "sync:extension": "node scripts/sync-extension.mjs",
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --banner:js='#!/usr/bin/env node' && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },

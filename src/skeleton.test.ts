@@ -8,10 +8,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { probe, ensureBridge, skeletonUrl } from "./skeleton";
+import { probe, ensureBridge, skeletonUrl, extensionDir } from "./skeleton";
 
 const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "..", "skeleton", "bridge.mjs");
 const ENV_KEYS = ["BEECORK_DEV_SIGNALS_URL", "BEECORK_SKELETON_PORT", "BEECORK_SKELETON_HOME"];
@@ -119,4 +120,23 @@ test("ensureBridge: auto-starts the bundled bridge, is idempotent, and serves to
     if (pid) { try { process.kill(pid); } catch { /* already gone */ } }
     restoreEnv(prev);
   }
+});
+
+// The extension must actually BE where we tell the user it is. This exists because the setup text
+// once pointed at "beecork-extension/extension" — a sibling-repo path no npm user has — which made
+// the whole browser-signals feature uninstallable while looking fine in the author's checkout.
+// Guards two things at once: the vendored folder is present, and the one-level-up resolution
+// (shared with skills/ and skeleton/) still lands on the package root.
+test("extensionDir points at the real bundled extension", async () => {
+  const dir = extensionDir();
+  const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as { name: string; manifest_version: number };
+  assert.equal(manifest.manifest_version, 3);
+  assert.match(manifest.name, /Beecork Skeleton/);
+  // Every file the extension needs to load must be vendored, not just the manifest.
+  for (const f of ["background.js", "popup.js", "popup.html", "redact.js", "icons/icon128.png"]) {
+    assert.ok(existsSync(join(dir, f)), `${f} is missing from the bundled extension`);
+  }
+  // package.json must SHIP it — present on disk but absent from `files` is the same bug wearing a hat.
+  const pkg = JSON.parse(await readFile(join(dir, "..", "package.json"), "utf8")) as { files: string[] };
+  assert.ok(pkg.files.includes("extension/"), 'package.json "files" must include extension/');
 });

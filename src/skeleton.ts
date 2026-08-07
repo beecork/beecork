@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 // Read at call time (not module load) so env overrides — and tests — take effect.
+// 8317 is a CONTRACT with the extension, which hardcodes it (an extension can't read env).
+// So BEECORK_SKELETON_PORT is for isolated runs with no extension in the loop (tests, evals);
+// pointing a real session elsewhere moves the inbox somewhere the extension won't follow.
 const port = (): number => Number(process.env.BEECORK_SKELETON_PORT) || 8317;
 
 // The inbox URL the tools read from. An explicit BEECORK_DEV_SIGNALS_URL wins (a user
@@ -22,6 +25,13 @@ const managedExternally = (): boolean => !!process.env.BEECORK_DEV_SIGNALS_URL;
 
 const skeletonHome = (): string => process.env.BEECORK_SKELETON_HOME || join(homedir(), ".beecork", "skeleton");
 const bridgeScript = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "skeleton", "bridge.mjs");
+
+// The bundled Chrome extension the user loads unpacked. Same one-level-up resolution as the bridge
+// and the bundled skills: in dev the module is <repo>/src/*.ts, and published it is the flat bundle
+// <pkg>/dist/index.js — both are exactly one dir deep, so ".." lands on the package root either way.
+// esbuild leaves import.meta.url alone, so this survives bundling. INVARIANT: it breaks if the build
+// ever emits to a nested path (dist/esm/index.js) or turns on code splitting.
+export const extensionDir = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "extension");
 
 export type Liveness = "up" | "down" | "foreign"; // ours | nothing there | something else holds the port
 

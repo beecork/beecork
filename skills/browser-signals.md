@@ -54,8 +54,11 @@ its own). Then have the user reproduce the issue (or open the site) and call
 background and shares it across sessions. So there is **no bridge to run by hand**; the only
 one-time step is loading the Chrome extension:
 
-1. **Load the extension:** Chrome → `chrome://extensions` → enable **Developer mode** →
-   **Load unpacked** → select the `beecork-extension/extension` folder → pin the icon.
+1. **Load the extension:** the folder ships inside beecork itself. Have the user run
+   `beecork skeleton` in a terminal — it prints the exact path and opens the folder. Then:
+   Chrome → `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select that
+   folder → pin the icon. (Don't guess the path; it differs between an npm install and a checkout.
+   The not-connected message from `read_dev_signals` also contains the resolved path.)
 2. **Connect + approve:** click the icon (it auto-connects — no token to paste), tick
    **Capture enabled**, open the app in a tab, and click **Pair this site**.
 

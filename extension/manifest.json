@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Beecork Skeleton",
+  "version": "0.0.4",
+  "description": "Sends your approved tabs' console errors and failed network requests to a local inbox your coding agent reads — localhost or production, no copy-paste.",
+  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "host_permissions": ["http://localhost/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Beecork Skeleton — pairing & capture",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}
