@@ -6,10 +6,11 @@ import { readFile, writeFile, readdir, mkdir, chmod, rename, unlink } from "node
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { color, stripControl } from "./ui";
-import { normalizeEffort } from "./config";
+import { normalizeEffort, config } from "./config";
 import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
-import type { Message } from "./types";
+import { textOf, stripImagesForSave } from "./images";
+import type { Message, Content, ContentPart } from "./types";
 
 const BEECORK = ".beecork";
 
@@ -94,12 +95,14 @@ async function readJsonFile(path: string): Promise<Record<string, any> | null> {
 // it is honored ONLY from the user's global ~/.beecork/settings.json — never from a
 // project file that travels with a (possibly cloned) repo. A project file that tries
 // is flagged so the user is warned, not silently exposed.
-export async function loadSettings(): Promise<{ model?: string; reasoningEffort?: ReasoningEffort; alwaysAllow: string[]; projectAlwaysAllowIgnored: boolean }> {
+export async function loadSettings(): Promise<{ model?: string; reasoningEffort?: ReasoningEffort; alwaysAllow: string[]; projectAlwaysAllowIgnored: boolean; mcpServers: Record<string, unknown>; projectMcpIgnored: boolean }> {
   const paths = beecorkPaths("settings.json"); // [0] = global ~/.beecork, rest = project tree
   let model: string | undefined;
   let reasoningEffort: ReasoningEffort | undefined;
   let alwaysAllow: string[] = [];
   let projectAlwaysAllowIgnored = false;
+  let mcpServers: Record<string, unknown> = {};
+  let projectMcpIgnored = false;
   for (let i = 0; i < paths.length; i++) {
     const parsed = await readJsonFile(paths[i]);
     if (!parsed) continue; // missing → skip; malformed → warned by readJsonFile
@@ -109,8 +112,15 @@ export async function loadSettings(): Promise<{ model?: string; reasoningEffort?
       if (i === 0) alwaysAllow = parsed.alwaysAllow.map(String); // global only
       else projectAlwaysAllowIgnored = true; // a project file tried → ignored + warned
     }
+    // Same global-only rule as alwaysAllow, and for a stronger reason: an mcpServers entry spawns an
+    // arbitrary binary with arbitrary args, cwd and env. alwaysAllow only pre-approves a tool beecork
+    // already wrote; this would run someone else's program. A cloned repo must never be able to.
+    if (parsed.mcpServers && typeof parsed.mcpServers === "object" && !Array.isArray(parsed.mcpServers)) {
+      if (i === 0) mcpServers = parsed.mcpServers as Record<string, unknown>; // global only
+      else projectMcpIgnored = true; // a project file tried → ignored + warned
+    }
   }
-  return { model, reasoningEffort, alwaysAllow, projectAlwaysAllowIgnored };
+  return { model, reasoningEffort, alwaysAllow, projectAlwaysAllowIgnored, mcpServers, projectMcpIgnored };
 }
 
 // ~/.beecork/config.json — the user's own machine-level config (their API key,
@@ -173,7 +183,10 @@ export async function saveSession(messages: Message[]): Promise<void> {
     await mkdir(dir, { recursive: true });
     const file = join(dir, `${Date.now()}.json`);
     const tmp = `${file}.tmp`;
-    await writeFile(tmp, JSON.stringify(messages), "utf8");
+    // Strip image payloads: a session is for resuming a conversation, not archiving pixels. Keeping
+    // them would put megabytes per file under .beecork/sessions/ (50 of them) and make /resume,
+    // which parses every file to build its picker, crawl.
+    await writeFile(tmp, JSON.stringify(stripImagesForSave(messages)), "utf8");
     await chmod(tmp, 0o600).catch(() => {});
     await rename(tmp, file);
     await pruneSessions(dir).catch(() => {}); // keep .beecork/sessions/ bounded; best-effort
@@ -190,6 +203,41 @@ async function pruneSessions(dir: string): Promise<void> {
   for (const f of files.sort().slice(0, files.length - MAX_SESSIONS)) await unlink(join(dir, f)).catch(() => {});
 }
 
+// Only a self-contained base64 data URL of an allowed image type, under the size cap.
+//
+// http(s) URLs are REJECTED ON PURPOSE, and this is the security point of the whole function:
+// session files live in the repo's .beecork/sessions/, so a cloned repo can plant one. A planted
+// message containing a remote image URL would make the PROVIDER fetch that URL the instant the user
+// runs /resume — a zero-click beacon (and a plausible exfiltration channel via the path). beecork
+// itself never emits an http image URL (it always base64s local bytes), so refusing them costs
+// nothing real.
+const isSafeImageUrl = (u: unknown): boolean =>
+  typeof u === "string" &&
+  /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(u) &&
+  u.length <= config.maxImageBytes * 2; // base64 inflates ~1.37×; 2× is a loose but finite ceiling
+
+const INVALID = Symbol("invalid-content");
+
+// Widen the content check STRUCTURALLY rather than by loosening it: a parts array is accepted only
+// when every element is a well-formed text or image part. Anything else still rejects the whole
+// session, which is the existing (deliberate) behavior for a malformed file.
+function sanitizeContent(content: unknown): Content | typeof INVALID {
+  if (content == null) return null;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content) || !content.length) return INVALID;
+  const parts: ContentPart[] = [];
+  for (const p of content) {
+    if (!p || typeof p !== "object") return INVALID;
+    const t = (p as { type?: unknown }).type;
+    if (t === "text" && typeof (p as { text?: unknown }).text === "string") {
+      parts.push({ type: "text", text: (p as { text: string }).text });
+    } else if (t === "image_url" && isSafeImageUrl((p as { image_url?: { url?: unknown } }).image_url?.url)) {
+      parts.push({ type: "image_url", image_url: { url: (p as { image_url: { url: string } }).image_url.url } });
+    } else return INVALID;
+  }
+  return parts;
+}
+
 // Validate + sanitize a restored session. Sessions are saved WITHOUT the system prompt,
 // so a `system` message in a project session file is planted injection — drop it. Reject
 // the whole session if any message has an invalid shape (don't feed garbage to the model).
@@ -202,9 +250,9 @@ export function sanitizeSession(raw: unknown): Message[] | null {
     const role = (m as { role?: unknown }).role;
     if (role === "system") continue; // not legitimately in a saved session
     if (role !== "user" && role !== "assistant" && role !== "tool") return null;
-    const content = (m as { content?: unknown }).content;
-    if (content != null && typeof content !== "string") return null;
-    const msg: Message = { role, content: (content as string) ?? null };
+    const content = sanitizeContent((m as { content?: unknown }).content);
+    if (content === INVALID) return null;
+    const msg: Message = { role, content };
     const tc = (m as { tool_calls?: unknown }).tool_calls;
     if (Array.isArray(tc)) msg.tool_calls = tc as Message["tool_calls"];
     const tcid = (m as { tool_call_id?: unknown }).tool_call_id;
@@ -272,8 +320,10 @@ export async function listSessions(): Promise<{ file: string; when: number; coun
       if (!msgs || !msgs.length) continue;
       const firstUser = msgs.find((m) => m.role === "user");
       // stripControl: session files are repo-controlled — a planted session must not inject terminal
-      // escapes through the /resume picker label.
-      const preview = stripControl(firstUser?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      // escapes through the /resume picker label. textOf: content may be a parts array, and
+      // stripControl would throw on one — inside this function's outer try, which would swallow it
+      // and return [], reporting "no previous sessions" and hiding EVERY session, not just this one.
+      const preview = stripControl(textOf(firstUser?.content ?? "")).replace(/\s+/g, " ").trim().slice(0, 60);
       out.push({ file: f, when: Number(f.replace(".json", "")) || 0, count: msgs.length, preview });
     }
     return out.sort((a, b) => b.when - a.when);

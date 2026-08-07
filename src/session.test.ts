@@ -48,3 +48,28 @@ test("dropIncompleteToolTail: leaves a complete conversation untouched", () => {
   const plain: Message[] = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
   assert.deepEqual(dropIncompleteToolTail(plain), plain);
 });
+
+// --- image content ----------------------------------------------------------
+
+test("sanitizeSession accepts well-formed image parts", () => {
+  const out = sanitizeSession([
+    { role: "user", content: [{ type: "text", text: "look" }, { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }] },
+  ]);
+  assert.ok(out);
+  assert.equal(Array.isArray(out![0].content), true);
+});
+
+test("sanitizeSession REJECTS a remote image URL — the zero-click beacon", () => {
+  // A session file lives in the repo, so a cloned repo can plant one. A remote image URL would make
+  // the PROVIDER fetch it the moment the user runs /resume: a no-click beacon + exfil channel.
+  for (const url of ["https://evil.example/x.png", "http://evil.example/x.png", "data:text/html;base64,AAAA", "data:image/svg+xml;base64,AAAA"]) {
+    assert.equal(sanitizeSession([{ role: "user", content: [{ type: "image_url", image_url: { url } }] }]), null, `${url} must be refused`);
+  }
+});
+
+test("sanitizeSession still rejects malformed content of any shape", () => {
+  assert.equal(sanitizeSession([{ role: "user", content: [{ type: "text" }] }]), null); // no text field
+  assert.equal(sanitizeSession([{ role: "user", content: [{ type: "bogus" }] }]), null);
+  assert.equal(sanitizeSession([{ role: "user", content: ["raw string"] }]), null);
+  assert.equal(sanitizeSession([{ role: "user", content: [] }]), null);
+});

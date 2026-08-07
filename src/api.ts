@@ -105,12 +105,21 @@ export function buildRequestBody(opts: {
 export function pruneReasoningForSend(messages: Message[]): Message[] {
   let lastUser = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") { lastUser = i; break; }
+    // SKIP synthesized image-attachment messages. They are user-role but they are not a new turn —
+    // they sit INSIDE the current tool chain. Counting one as "the last user message" would strip
+    // the thinking block off the very assistant message that produced those tool_calls, which
+    // Anthropic requires be resent alongside them, and the next request in the turn would error.
+    if (messages[i].role === "user" && !messages[i].attached) { lastUser = i; break; }
   }
   return messages.map((m, i) => {
-    if (i > lastUser || (m.reasoning === undefined && m.reasoning_details === undefined)) return m;
-    const { reasoning, reasoning_details, ...rest } = m;
-    return rest;
+    const stripReasoning = i <= lastUser && (m.reasoning !== undefined || m.reasoning_details !== undefined);
+    if (!stripReasoning && m.attached === undefined) return m;
+    // `attached` is beecork-internal bookkeeping — never send it to the provider. This shallow copy
+    // is the natural choke point, so the flag can't leak onto the wire.
+    const { attached, ...rest } = m;
+    if (!stripReasoning) return rest;
+    const { reasoning, reasoning_details, ...bare } = rest;
+    return bare;
   });
 }
 

@@ -102,7 +102,7 @@ writes, and catastrophic commands (`rm -rf /`, fork bombs, `mkfs`, …) are stil
 
 ### Slash commands
 
-`/model` · `/effort` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
+`/model` · `/effort` · `/key` · `/update` · `/context` · `/clear` · `/resume` · `/mcp` · `/good` · `/bad` · `/help` · `Shift+Tab` (rotate mode) · `exit`
 
 ### Reasoning ("thinking")
 
@@ -112,6 +112,78 @@ var; default is `medium`. It uses OpenRouter's unified `reasoning` parameter, so
 every provider (deepseek, GLM, Gemini, Claude, OpenAI, …), and is only sent to models that advertise
 support. The thinking streams dimly, distinct from the answer. Note: reasoning tokens bill as output
 tokens.
+
+### Images
+
+Attach an image with `@path` — a mockup to build, a screenshot of a broken layout:
+
+```
+you: here's the design, build this @design/mockup.png
+```
+
+`read_file` also returns an image when you point it at one, and an MCP tool that returns a screenshot
+is attached the same way. Only `@`-tokens ending in `.png/.jpg/.jpeg/.webp/.gif` are treated as
+attachments, so `@types/node` and `@src/index.ts` stay ordinary text. Dragging a file into the
+terminal works too. Files are validated by magic bytes, not by extension.
+
+**Most models can't accept images** — including the default `deepseek/deepseek-v4-flash`. beecork
+checks before sending (an image to a text-only model is a hard API error) and tells you to switch
+with `/model`; `/model` marks which models have vision. When a *tool* returns an image a text-only
+model can't see, beecork says so in the result rather than letting the model pretend it looked.
+
+Images are never written to session files, never fed to the compaction summarizer, and capped
+(`MAX_IMAGE_BYTES` 5 MB each, `MAX_IMAGES_PER_MESSAGE` 4 per step, `MAX_LIVE_IMAGES` 4 kept in the
+conversation — older ones become a placeholder).
+
+### MCP servers — tools beecork doesn't ship with
+
+beecork speaks **MCP** (stdio), so it can use tools from external servers — a browser, a database,
+an issue tracker — without those having to be built into beecork. Configure them in
+**`~/.beecork/settings.json`**:
+
+```json
+{
+  "mcpServers": {
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp@latest"] },
+    "chrome-devtools": { "command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"] }
+  }
+}
+```
+
+Per-server options: `env`, `cwd`, `enabled: false`, `timeoutMs`, `trustAnnotations`.
+`/mcp` shows status, `/mcp tools [server]` lists them, `/mcp reconnect [server]` restarts one.
+
+**Only the global file is honored.** A project `.beecork/settings.json` declaring `mcpServers` is
+ignored and you're warned — an entry runs an arbitrary program, so a cloned repo must not be able to
+add one. Same rule as `alwaysAllow`, for a stronger reason.
+
+Tools arrive namespaced `mcp__<server>__<tool>` and are **dangerous by default**: they ask for
+approval on first use, and are blocked outright in read-only and plan mode, because beecork can't
+inspect what someone else's program does. Answer `[a]lways` to stop being asked (persisted per
+project), or pre-approve a specific tool by adding its name to `alwaysAllow`. A server that marks a
+tool `destructiveHint` is asked about *every* time; `readOnlyHint` is only believed if you set
+`"trustAnnotations": true` for that server — believing a server's claim that it's harmless is a
+capability grant, so it takes your opt-in. Your API keys are never passed to a server.
+
+### Browser signals — let beecork see your running app
+
+beecork can read your app's **console errors and failed network requests** straight from the
+browser — on localhost *or* production, in your real logged-in session — so you stop pasting
+stack traces at it. Ask about a browser bug and it calls `read_dev_signals` itself.
+
+One-time setup, because Chrome will only load an unpacked extension from a folder you pick:
+
+```bash
+beecork skeleton        # prints the bundled extension's path and opens the folder
+```
+
+Then in Chrome: `chrome://extensions` → **Developer mode** → **Load unpacked** → select that
+folder → pin the icon → tick **Capture enabled** → open your app → **Pair this site**.
+
+There is no server to run: beecork starts and shares the local inbox itself. Localhost sites are
+watched automatically; production sites are watched only on demand (when you flip them on, or when
+beecork asks via `watch_site`). Secrets are stripped in the browser before anything leaves the tab,
+and the inbox is `127.0.0.1`-only.
 
 ### Memory
 
@@ -142,8 +214,11 @@ All variables are read from the real shell environment only (never a project fil
 | `EXEC_TIMEOUT_MS` | `run_bash` timeout | `30000` |
 | `WEB_TIMEOUT_MS` | `web_fetch` / `web_search` timeout | `20000` |
 | `MAX_CONTEXT_TOKENS` | Compact the conversation above this | `128000` |
+| `MCP` | Set `0`/`off` to disable MCP servers entirely for a session | on |
+| `MAX_IMAGE_BYTES` | Largest image beecork will attach | `5000000` |
+| `MAX_LIVE_IMAGES` | Images kept in the live conversation | `4` |
 
-Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`, `MEMORY_MAX_CHARS`, `MEMORY_NUDGE_INTERVAL`, `SAFE_BASH_APPROVE`) are defined in `src/config.ts`.
+Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`, `MEMORY_MAX_CHARS`, `MEMORY_NUDGE_INTERVAL`, `SAFE_BASH_APPROVE`, `MCP_STARTUP_TIMEOUT_MS`, `MCP_REQUEST_TIMEOUT_MS`, `MCP_READY_WAIT_MS`, `MCP_MAX_TOOLS`, `IMAGE_TOKEN_COST`, `MAX_IMAGES_PER_MESSAGE`) are defined in `src/config.ts`.
 
 ## Development
 

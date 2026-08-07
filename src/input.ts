@@ -1,7 +1,7 @@
 // Raw-mode terminal input — a small line editor with a live slash-command menu,
 // command highlighting, history, and a reusable arrow-key selector. Zero deps;
 // just Node's keypress events + ANSI. Used only on a TTY; the non-TTY path in
-// index.ts falls back to readline.
+// index.ts falls back to readline (pipedLines, at the bottom of this file).
 //
 // One keypress listener is attached for the whole session (initInput). Widgets
 // (readPrompt / readChoice / selectMenu) push themselves as the active handler
@@ -9,6 +9,7 @@
 // a turn, which itself runs "on top of" nothing.
 
 import { emitKeypressEvents } from "node:readline";
+import type { Interface } from "node:readline/promises";
 import { color, stripAnsi, isPrintableCodePoint } from "./ui";
 import { ansi } from "./ansi";
 import { inputLayout, moveVertIndex } from "./layout";
@@ -301,4 +302,35 @@ export function selectMenu<T>(opts: SelectOpts<T>): Promise<T | null> {
     });
     render();
   });
+}
+
+// Off-TTY (piped / headless) line input.
+//
+// WHY THIS EXISTS: readline starts consuming stdin the INSTANT the interface is created, emitting
+// 'line' events whether or not anyone has asked for one. Every line piped in was therefore emitted —
+// and dropped — while the banner, version check and settings loads were still awaiting, after which
+// EOF closed the interface and the first question() rejected with "readline was closed". The loop
+// caught that and broke, so `echo "fix the bug" | beecork` silently did nothing at all.
+//
+// Queueing decouples arrival from consumption, which is the only thing that actually works here:
+// lines also arrive DURING a turn (runTurn awaits for minutes), not just while we're asking.
+export function pipedLines(rl: Interface): () => Promise<string | null> {
+  const buffered: string[] = [];
+  const waiting: ((v: string | null) => void)[] = [];
+  let ended = false;
+  rl.on("line", (l) => {
+    const w = waiting.shift();
+    if (w) w(l);
+    else buffered.push(l);
+  });
+  rl.on("close", () => {
+    ended = true;
+    while (waiting.length) waiting.shift()!(null); // null = EOF, so callers stop rather than hang
+  });
+  return () =>
+    new Promise<string | null>((resolve) => {
+      if (buffered.length) return resolve(buffered.shift()!);
+      if (ended) return resolve(null);
+      waiting.push(resolve);
+    });
 }

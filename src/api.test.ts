@@ -117,3 +117,29 @@ test("pruneReasoningForSend keeps reasoning only on the current turn's trailing 
   // original history is untouched (pure)
   assert.equal(msgs[2].reasoning, "old-think");
 });
+
+test("pruneReasoningForSend ignores synthesized image messages when finding the last user turn", () => {
+  // An `attached` message is user-ROLE but sits INSIDE the current tool chain. Treating it as the
+  // last user message would strip reasoning off the assistant turn that produced the tool_calls —
+  // which Anthropic requires be resent alongside them, so the next step of the turn would error.
+  const msgs: Message[] = [
+    { role: "user", content: "do it" },
+    { role: "assistant", content: null, reasoning_details: [{ sig: "keep-me" }], tool_calls: [{ id: "1", type: "function", function: { name: "t", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "1", content: "ok" },
+    { role: "user", attached: true, content: [{ type: "text", text: "img" }] },
+  ];
+  const sent = pruneReasoningForSend(msgs);
+  assert.deepEqual(sent[1].reasoning_details, [{ sig: "keep-me" }], "the tool chain's thinking block must survive");
+  assert.equal((sent[3] as any).attached, undefined, "the internal flag must never reach the provider");
+});
+
+test("pruneReasoningForSend still strips reasoning from older turns", () => {
+  const msgs: Message[] = [
+    { role: "assistant", content: "old", reasoning: "stale" },
+    { role: "user", content: "new turn" },
+    { role: "assistant", content: "cur", reasoning: "fresh" },
+  ];
+  const sent = pruneReasoningForSend(msgs);
+  assert.equal(sent[0].reasoning, undefined);
+  assert.equal(sent[2].reasoning, "fresh");
+});

@@ -83,6 +83,26 @@ export const config = {
   modelsUrl: "https://openrouter.ai/api/v1/models",
   defaultModel: process.env.OPENROUTER_MODEL ?? "deepseek/deepseek-v4-flash",
 
+  // Images. maxToolResultChars deliberately does NOT apply to image payloads (they never enter the
+  // text, so they can't be sliced into invalid base64); these four bounded caps replace it.
+  imageTokenCost: num("IMAGE_TOKEN_COST", 1200), // flat per-image estimate — an image costs a fixed-ish
+  // count per tile, never bytes/4. Real range across providers is ~750–1600 (OpenAI tiled ≈1105 for a
+  // 1440×900, Anthropic w*h/750 ≈1584, Gemini ≈516–1032). Deliberately mid-HIGH: over-estimating
+  // compacts a little early (cheap), under-estimating means the provider rejects the whole turn.
+  maxImageBytes: num("MAX_IMAGE_BYTES", 5_000_000), // per image, RAW bytes (base64 inflates ~1.37×)
+  maxImagesPerMessage: num("MAX_IMAGES_PER_MESSAGE", 4), // per user prompt AND per assistant step
+  maxLiveImages: num("MAX_LIVE_IMAGES", 4), // images kept in the live conversation — the real backstop
+
+  // MCP (external tool servers, configured in ~/.beecork/settings.json). Off-switch is env-only so
+  // a repo can never silently enable it; the server LIST is likewise global-file-only (see memory.ts).
+  mcpEnabled: !["0", "false", "off", "no"].includes((process.env.MCP ?? "").trim().toLowerCase()),
+  mcpStartupTimeoutMs: num("MCP_STARTUP_TIMEOUT_MS", 15_000), // cold `npx` can be slow the first time
+  mcpRequestTimeoutMs: num("MCP_REQUEST_TIMEOUT_MS", 60_000),
+  mcpReadyWaitMs: num("MCP_READY_WAIT_MS", 1_500), // bounded wait at turn start, never at startup
+  mcpMaxToolsPerServer: num("MCP_MAX_TOOLS", 64), // a huge server would otherwise swamp the tool schema
+  mcpMaxMessageBytes: num("MCP_MAX_MESSAGE_BYTES", 8_000_000),
+  mcpShutdownGraceMs: num("MCP_SHUTDOWN_GRACE_MS", 1_500),
+
   // Context management
   maxContextTokens: num("MAX_CONTEXT_TOKENS", 128_000), // compact above this
   keepRecent: num("KEEP_RECENT", 12), // recent messages kept verbatim

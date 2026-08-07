@@ -6,6 +6,8 @@
 // (piped input) we fall back to Node's readline.
 
 import { writeFile, chmod } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { tildify } from "./paths";
 import { API_KEY, config } from "./config";
@@ -18,12 +20,16 @@ import { runtimeContext } from "./env";
 import { killAllTasks, runningTaskCount } from "./tasks";
 import { startChrome, stopChrome, nextLine, beginTurn, endTurn, chromeEnabled } from "./chrome";
 import { estimateTokens } from "./context";
-import { primeCatalog } from "./capabilities";
+import { primeCatalog, supportsVision, visionReady } from "./capabilities";
 import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
+import { extensionDir } from "./skeleton";
+import { EXTENSION_STEPS } from "./tools";
+import { startMcp, mcpReady, announceMcpOnce, shutdownMcp, killAllMcp, parseMcpServers, serversFromEnvOverride } from "./mcp";
 import { loadSkills, getSkill, expandSkill, skillsPrompt } from "./skills";
-import { initInput, teardownInput, readPrompt, readChoice, pushKeyHandler } from "./input";
-import type { Message } from "./types";
+import { initInput, teardownInput, readPrompt, readChoice, pushKeyHandler, pipedLines } from "./input";
+import { extractAttachments, loadImage } from "./attach";
+import type { Message, ImagePart } from "./types";
 
 // Periodic memory-nudge text (re-surfaced every config.memoryNudgeInterval user turns). Framed as an
 // automatic reminder — NOT the user speaking — so the model doesn't mistake it for a save request.
@@ -54,6 +60,29 @@ async function main() {
       console.error(color.dim("\nTry manually: npm install -g beecork  (you may need sudo, or your Node version manager)."));
       process.exitCode = 1;
     }
+    return;
+  }
+
+  // `beecork skeleton` — hand the user the bundled extension folder. Chrome can only load an
+  // unpacked extension from a real directory the user picks, so the ONE thing beecork can't
+  // automate is this click-through; the least it can do is say exactly where the folder is and
+  // open it. (beecork starts the local inbox itself — see src/skeleton.ts — so there is nothing
+  // else to run by hand.)
+  if (process.argv[2] === "skeleton") {
+    const dir = extensionDir();
+    if (!existsSync(dir)) {
+      console.error(color.red(`The bundled extension is missing from this install (looked in ${dir}).`));
+      console.error(color.dim("Reinstall with: npm install -g beecork"));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${color.bold("Beecork Skeleton")} — let beecork see your app's console + network errors.\n`);
+    console.log(EXTENSION_STEPS);
+    console.log(color.dim(`\nOpening that folder now. beecork runs the local inbox itself — nothing else to start.`));
+    console.log(color.dim(`Then just ask beecork about a browser bug; it reads the errors on its own.`));
+    // Best-effort reveal; a headless/SSH session simply won't have an opener, which is fine.
+    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+    execFile(opener, [dir], () => {});
     return;
   }
 
@@ -127,6 +156,7 @@ async function main() {
   // every deliberate exit below funnels through process.exit(), which fires 'exit'. process.kill is
   // synchronous, so it's safe here (unlike the async persist()).
   process.on("exit", killAllTasks);
+  process.on("exit", killAllMcp); // sync backstop — orphaned server children would outlive beecork
   // Reset the pinned-chrome scroll region on every exit (SYNCHRONOUS — safe here; all deliberate exits
   // funnel through process.exit → 'exit'). Without this a crash could leave the shell's scroll region shrunk.
   process.on("exit", stopChrome);
@@ -143,6 +173,8 @@ async function main() {
     process.on("exit", teardownInput); // restore cursor / bracketed paste / cooked mode (TTY-only relevance)
   }
   const rl = tty ? null : createInterface({ input: process.stdin, output: process.stdout, completer });
+  // Start queueing immediately — the interface is already draining stdin (see pipedLines).
+  const nextPiped = rl ? pipedLines(rl) : null;
 
   // Pinned-chrome mode starts from a clean screen (banner scrolls above the pinned input).
   if (chromeEnabled()) process.stdout.write(ansi.clearAndHome);
@@ -165,6 +197,9 @@ async function main() {
   }
   if (settings.projectAlwaysAllowIgnored) {
     console.log(color.yellow("⚠ A project .beecork/settings.json tried to pre-approve tools (alwaysAllow) — ignored. Pre-approval is honored only from ~/.beecork/settings.json.") + "\n");
+  }
+  if (settings.projectMcpIgnored) {
+    console.log(color.yellow('⚠ A project .beecork/settings.json declared "mcpServers" — ignored. An MCP server runs an arbitrary program, so servers are honored only from ~/.beecork/settings.json.') + "\n");
   }
   if (skills.length) {
     console.log(color.dim(`skills: ${skills.map((s) => "/" + s.name).join(" ")}  (run /<name>)`) + "\n");
@@ -196,9 +231,20 @@ async function main() {
   // the cold TLS handshake and doesn't fail-open on reasoning support.
   primeCatalog();
 
+  // Connect MCP servers in the BACKGROUND — same fire-and-forget shape as primeCatalog, and
+  // deliberately NOT part of the startup Promise.all, which gates first paint. A slow or dead
+  // server just means this session runs with beecork's built-in toolset.
+  if (config.mcpEnabled) {
+    startMcp((await serversFromEnvOverride()) ?? parseMcpServers(settings.mcpServers).servers);
+  }
+
   // How approvals read the user's answer: a single keypress on a TTY, a readline
   // line off-TTY. askApproval interprets "y"/"a"/anything-else (agent.ts).
-  const ask = tty ? (q: string) => readChoice(q) : (q: string) => rl!.question(q);
+  // Off-TTY, approvals read from the same queue as the prompt — two independent readers on one
+  // stdin would race. Echo the question so a piped run's log shows what was asked.
+  const ask = tty
+    ? (q: string) => readChoice(q)
+    : async (q: string) => { process.stdout.write(q); return (await nextPiped!()) ?? ""; };
 
   let activeTurn: AbortController | null = null;
   let userTurns = 0; // for the periodic memory nudge below
@@ -238,11 +284,9 @@ async function main() {
       if (r.type !== "line") break; // quit (Ctrl-C on empty line) or EOF (Ctrl-D)
       userInput = r.value;
     } else {
-      try {
-        userInput = await rl!.question(promptString());
-      } catch {
-        break; // stdin closed
-      }
+      const line = await nextPiped!();
+      if (line === null) break; // stdin closed (EOF)
+      userInput = line;
     }
     if (userInput.trim() === "exit") break;
     if (!userInput.trim()) continue;
@@ -279,12 +323,48 @@ async function main() {
     messages = messages.filter((m) => m.content !== PLAN_DIRECTIVE);
     if (state.mode === "plan") messages.push({ role: "system", content: PLAN_DIRECTIVE });
 
+    // Give still-connecting MCP servers a bounded moment so their tools make the FIRST request
+    // (body.tools is built per request, so late arrivals land on the next step anyway). Free when
+    // nothing is pending. Announced here rather than from a .then(): at this instant the terminal is
+    // quiescent, whereas a completion line landing mid-keystroke corrupts the pinned scroll region.
+    await mcpReady(config.mcpReadyWaitMs);
+    const mcpLine = announceMcpOnce();
+    if (mcpLine) console.log(color.dim(mcpLine) + "\n");
+
+    // Image attachments ("@shot.png"). Sits above the chrome/tty/readline fork on purpose, so one
+    // implementation covers both editors and the piped path.
+    let attachments: ImagePart[] = [];
+    const { text: strippedText, refs } = extractAttachments(userInput);
+    if (refs.length) {
+      // Refuse BEFORE the turn starts rather than after burning it: fail-closed vision means an
+      // unloaded catalog would otherwise reject a perfectly good model, so wait for the real answer.
+      await visionReady();
+      if (!supportsVision(state.model)) {
+        console.log(color.yellow(`⚠  not attached — ${state.model} has no image input.`));
+        console.log(color.dim(`   switch with /model:  anthropic/claude-haiku-4.5 · google/gemini-3.5-flash · openai/gpt-5.4-nano\n`));
+        // The typed words still send as a normal turn, with the @ref left verbatim so the model can
+        // at least see which file was meant.
+      } else {
+        for (const ref of refs) {
+          const r = await loadImage(ref);
+          if (r.ok) {
+            attachments.push(r.part);
+            console.log(color.dim(`  🖼 ${r.abs}  ·  ${r.mime}  ·  ${Math.max(1, Math.round(r.bytes / 1000))} KB  ·  attached`));
+          } else {
+            console.log(color.yellow(`  🖼 ${r.reason}`));
+          }
+        }
+        if (attachments.length) console.log("");
+        userInput = strippedText || "(see the attached image)";
+      }
+    }
+
     if (chromeEnabled()) {
       // Pinned chrome owns the keyboard; the bottom input line accepts steering during the turn.
       activeTurn = new AbortController();
       const steering = beginTurn();
       try {
-        messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering);
+        messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering, attachments);
       } finally {
         activeTurn = null;
         endTurn();
@@ -328,7 +408,7 @@ async function main() {
         })
       : () => {};
     try {
-      messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering);
+      messages = await runTurn(messages, userInput, ask, approvedTools, approvedGuardKeys, activeTurn.signal, steering, attachments);
     } finally {
       restoreKeys();
       setSteeringActive(false); // always reset — an uncommitted note must not leave the spinner muted next turn
@@ -342,6 +422,10 @@ async function main() {
   stopChrome();    // reset the scroll region + clear the pinned chrome's timers (else the process can't exit)
   teardownInput(); // restore the terminal BEFORE any save can fail
   rl?.close();
+  // MUST be awaited: a live MCP child with piped stdio holds the event loop open, so skipping this
+  // leaves beecork apparently hung after "bye!". (process.on('exit', killAllMcp) is the hard backstop
+  // for the signal/crash paths, where async cleanup can no longer run.)
+  await shutdownMcp();
   await persist();
   console.log(color.dim("bye!"));
 }

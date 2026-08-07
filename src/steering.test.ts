@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applySteering } from "./agent";
-import type { Message } from "./types";
+import type { Message, ImagePart } from "./types";
 
 test("applySteering: empty notes → unchanged", () => {
   const msgs: Message[] = [{ role: "user", content: "hi" }];
@@ -40,4 +40,17 @@ test("applySteering: tail already a user message → merged, no double-user", ()
   assert.equal(out[0].role, "user");
   assert.match(String(out[0].content), /original/);
   assert.match(String(out[0].content), /steer/);
+});
+
+test("applySteering appends to a multi-part user message without destroying the image", () => {
+  // The synthesized image message IS the last message when the next step begins, so the old
+  // `${last.content}` concatenation would have produced "[object Object]" and eaten the image.
+  const png: ImagePart = { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } };
+  const msgs: Message[] = [{ role: "user", attached: true, content: [{ type: "text", text: "here" }, png] }];
+  const out = applySteering(msgs, ["also check the header"]);
+  const parts = out[0].content as any[];
+  assert.equal(Array.isArray(parts), true);
+  assert.equal(parts.filter((p) => p.type === "image_url").length, 1, "the image survives");
+  assert.match(parts[parts.length - 1].text, /also check the header/);
+  assert.doesNotMatch(JSON.stringify(out), /\[object Object\]/);
 });

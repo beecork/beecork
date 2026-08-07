@@ -1,7 +1,7 @@
 // The tool registry: each tool defined once (schema + implementation). The
 // schema list sent to the model and the name→tool dispatch map are derived.
 
-import { readFile, writeFile, appendFile, readdir, mkdir, stat, rename, chmod } from "node:fs/promises";
+import { readFile, writeFile, appendFile, readdir, mkdir, stat, rename, chmod, open } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createInterface as createLineReader } from "node:readline";
 import { spawn } from "node:child_process";
@@ -18,11 +18,12 @@ import { runExplorer } from "./subagent";
 import { resolveInRoot } from "./paths";
 import { pathGuard, readGuard, writeGuard, bashGuard, isSafeBash, isPrivateAddr, SECRET_FILE, DANGEROUS_BASH } from "./safety";
 import { htmlToText, stripInvisible, stripControlTokens, wrapUntrusted } from "./html";
-import { ensureBridge, skeletonUrl, type EnsureResult } from "./skeleton";
+import { ensureBridge, skeletonUrl, extensionDir, type EnsureResult } from "./skeleton";
 import { toOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
 import { renderTodos } from "./ui";
 import { showPayload } from "./show";
-import type { ToolCall, ToolDef, TodoItem } from "./types";
+import { sniffImage, imagePart } from "./images";
+import type { ToolCall, ToolDef, TodoItem, ToolResult } from "./types";
 
 // Run a shell command, capturing stdout/stderr (capped). On timeout, kill the whole
 // process GROUP (detached leader) so spawned descendants — watchers, dev servers, test
@@ -386,8 +387,13 @@ async function readLineWindow(abs: string, offset1: number, limit: number): Prom
 // The one-time connect steps (load + pair the extension). beecork now runs the local inbox
 // itself (src/skeleton.ts auto-starts skeleton/bridge.mjs), so there is no bridge to start by
 // hand — only the extension, which Chrome requires the user to load.
-const EXTENSION_STEPS =
-  `1. Load the extension: Chrome → chrome://extensions → turn on "Developer mode" → "Load unpacked" → select the beecork-extension/extension folder, and pin the icon.\n` +
+//
+// The path comes from the RUNNING INSTALL (extensionDir()), never hardcoded: the folder ships
+// inside the npm package, so a published user and a dev checkout resolve to different absolute
+// paths. A hardcoded repo-relative path is what made this feature uninstallable for npm users.
+export const EXTENSION_STEPS =
+  `1. Load the extension: Chrome → chrome://extensions → turn on "Developer mode" → "Load unpacked" → select this folder, and pin the icon:\n` +
+  `     ${extensionDir()}\n` +
   `2. Click the icon (it auto-connects — no token to paste), tick "Capture enabled", open the app in a tab, and click "Pair this site".`;
 
 // Relayed when the inbox is unreachable — what the user must do to connect the browser side.
@@ -395,14 +401,36 @@ const DEV_SIGNALS_SETUP =
   `The browser link isn't connected yet.\n\n` +
   `This is "Beecork Skeleton" — a Chrome extension that streams the app's console errors and failed network requests to me, so I see what the browser sees instead of guessing. beecork runs the local inbox for you automatically; the only one-time step is loading the extension (local-only, no account):\n\n` +
   EXTENSION_STEPS +
+  `\n\nTip for the user: \`beecork skeleton\` in a terminal prints that folder and opens it.` +
   `\n\nThen call read_dev_signals again. Full step-by-step + troubleshooting is in the "browser-signals" skill.`;
+
+// If `abs` is an image beecork can send, return it as a ToolResult; else null (fall through to the
+// text path). Bounded by maxImageBytes so a huge asset can't be turned into a giant data URL.
+async function readImageFile(abs: string): Promise<ToolResult | null> {
+  let size: number;
+  try { size = (await stat(abs)).size; } catch { return null; } // missing → let the text path report it
+  if (size < 12) return null;
+  let head: Buffer;
+  try {
+    const fh = await open(abs, "r");
+    try { head = Buffer.alloc(12); await fh.read(head, 0, 12, 0); } finally { await fh.close(); }
+  } catch { return null; }
+  const mime = sniffImage(head);
+  if (!mime) return null;
+  if (size > config.maxImageBytes) {
+    return `Error: ${mime} image is ${(size / 1_000_000).toFixed(1)} MB, over the ${(config.maxImageBytes / 1_000_000).toFixed(0)} MB limit — it cannot be attached.`;
+  }
+  const buf = await readFile(abs);
+  return { text: `(${mime}, ${Math.max(1, Math.round(size / 1000))} KB — attached as an image)`, images: [imagePart(mime, buf)] };
+}
 
 export const toolDefs: ToolDef[] = [
   {
     name: "read_file",
     description:
-      "Read a text file, returned WITH line numbers (for reference only). " +
-      "For large files, pass offset (1-based start line) and limit (number of lines) to read a range.",
+      "Read a file. Text comes back WITH line numbers (for reference only); an image file (PNG/JPEG/" +
+      "WebP/GIF) comes back as an image you can look at. " +
+      "For large text files, pass offset (1-based start line) and limit (number of lines) to read a range.",
     parameters: {
       type: "object",
       properties: {
@@ -416,6 +444,11 @@ export const toolDefs: ToolDef[] = [
     run: async (args) => {
       try {
         const { abs } = resolveInRoot(String(args.path ?? "."));
+        // Detect an image BEFORE the text path. Reading a PNG as utf8 (which is what happens below)
+        // silently produces pages of replacement characters — a token-burning non-answer that looks
+        // like a successful read.
+        const img = await readImageFile(abs);
+        if (img) return img;
         const { off, lim } = parseRange(args, 100_000); // streamed, so the default is effectively "all"
         const { lines, startLine, hasMore, empty } = await readLineWindow(abs, off, lim);
         if (lines.length === 0) return empty ? "(empty file)" : `(offset ${off} is past the end of the file)`;
@@ -1080,17 +1113,69 @@ export const toolDefs: ToolDef[] = [
   },
 ];
 
-// Derived: the schema list sent to the model, and the dispatch map.
-export const TOOLS = toolDefs.map((t) => ({
+// Derived: the schema list sent to the model, and the dispatch map. Both are MUTATED IN PLACE when
+// MCP tools connect (see registerDynamicTools). That works with no call-site changes because every
+// reader dereferences them at call time, not import time: api.ts builds body.tools per request,
+// runTool takes toolsByName as a default parameter, and agent.ts does toolsByName.get() per call.
+export type ToolSchema = { type: "function"; function: { name: string; description: string; parameters: object } };
+export const TOOLS: ToolSchema[] = toolDefs.map((t) => ({
   type: "function",
   function: { name: t.name, description: t.description, parameters: t.parameters },
 }));
-export const toolsByName = new Map(toolDefs.map((t) => [t.name, t]));
+export const toolsByName = new Map<string, ToolDef>(toolDefs.map((t) => [t.name, t]));
+
+// INVARIANT: toolsByName is always a SUPERSET of the names in TOOLS. The permission gate
+// (agent.ts handleToolCall) and the dispatcher (runTool) read the SAME map, so a name offered to the
+// model but MISSING from the map would hit decideApproval's `tool === undefined` fall-through, which
+// returns {action:"run"} — i.e. an ungated execution. Superset is safe; the reverse is an auth bypass.
+const BUILTIN_NAMES = new Set(toolsByName.keys()); // frozen snapshot — dynamic tools can never shadow these
+const dynamicNames = new Set<string>();
+
+// Register externally-provided tools (MCP). A bare toolsByName.set() would SILENTLY replace a
+// built-in — a server offering a tool named "run_bash" would hijack it — so a collision with a
+// built-in or with another dynamic tool is REFUSED and reported, never overwritten.
+export function registerDynamicTools(defs: ToolDef[]): { added: string[]; rejected: { name: string; why: string }[] } {
+  const added: string[] = [];
+  const rejected: { name: string; why: string }[] = [];
+  for (const d of defs) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(d.name)) { rejected.push({ name: d.name, why: "invalid tool name" }); continue; }
+    if (BUILTIN_NAMES.has(d.name)) { rejected.push({ name: d.name, why: "would shadow a built-in tool" }); continue; }
+    if (toolsByName.has(d.name)) { rejected.push({ name: d.name, why: "name already registered" }); continue; }
+    toolsByName.set(d.name, d); // map FIRST, schema second → the superset invariant never inverts
+    TOOLS.push({ type: "function", function: { name: d.name, description: d.description, parameters: d.parameters } });
+    dynamicNames.add(d.name);
+    added.push(d.name);
+  }
+  return { added, rejected };
+}
+
+// Stop OFFERING a tool to the model (its server died) while keeping it DISPATCHABLE with a
+// replacement run() that explains itself. A call already in flight then still passes through the
+// permission gate and gets actionable text, instead of hitting the undefined fall-through.
+export function retireDynamicTool(name: string, run: ToolDef["run"]): void {
+  const t = toolsByName.get(name);
+  if (!t || !dynamicNames.has(name)) return;
+  toolsByName.set(name, { ...t, run });
+  const i = TOOLS.findIndex((s) => s.function.name === name);
+  if (i !== -1) TOOLS.splice(i, 1);
+}
+
+// Full removal. Only safe between turns (/mcp reconnect) — mid-turn it can strip a tool the model
+// was just offered. Built-ins are never touched.
+export function unregisterDynamicTools(names: string[]): void {
+  for (const n of names) {
+    if (!dynamicNames.has(n)) continue;
+    dynamicNames.delete(n);
+    toolsByName.delete(n);
+    const i = TOOLS.findIndex((s) => s.function.name === n);
+    if (i !== -1) TOOLS.splice(i, 1);
+  }
+}
 
 // Look up + run a tool call. Errors come back as strings so the model can react. `byName` defaults to
 // the full registry; a sub-agent passes a RESTRICTED map so it's the dispatch ALLOW-LIST — a tool the
 // child isn't allowed (e.g. an emitted write_file) resolves to "unknown tool" and never runs.
-export async function runTool(call: ToolCall, signal?: AbortSignal, byName: Map<string, ToolDef> = toolsByName): Promise<string> {
+export async function runTool(call: ToolCall, signal?: AbortSignal, byName: Map<string, ToolDef> = toolsByName): Promise<ToolResult> {
   const tool = byName.get(call.function.name);
   if (!tool) return `Error: unknown tool "${call.function.name}".`;
   let args: Record<string, any>;

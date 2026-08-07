@@ -5,6 +5,11 @@ import assert from "node:assert/strict";
 import { exploreLoop, EXPLORER_TOOLS, type ExploreDeps } from "./subagent";
 import { runTool, toolDefs } from "./tools";
 import type { Message, ToolCall, ToolDef } from "./types";
+import { splitResult } from "./images";
+
+// Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
+const runText = async (c: ToolCall, s?: AbortSignal, by?: Map<string, ToolDef>): Promise<string> => splitResult(await runTool(c, s, by)).text;
+
 
 const tc = (name: string, args: object, id = "c1"): ToolCall => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
 const asst = (content: string | null, tool_calls?: ToolCall[]): Message => ({ role: "assistant", content, ...(tool_calls ? { tool_calls } : {}) });
@@ -70,6 +75,6 @@ test("allow-list: exactly the 5 read/web tools, and NO mutating tool or `explore
 
 test("restricted dispatch map is airtight: an emitted write_file → unknown tool, never runs", async () => {
   const childByName = new Map<string, ToolDef>(toolDefs.filter((t) => EXPLORER_TOOLS.has(t.name)).map((t) => [t.name, t]));
-  const res = await runTool(tc("write_file", { path: "x", content: "y" }), undefined, childByName);
+  const res = await runText(tc("write_file", { path: "x", content: "y" }), undefined, childByName);
   assert.match(res, /unknown tool/i);
 });

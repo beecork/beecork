@@ -141,9 +141,11 @@ export function diffPreview(diff: string): string {
 // A short, dim summary shown after the call line. Computed from the RAW tool
 // result (before any auto-check output is appended). Returns "" to add nothing
 // (todos render their own list).
-export function summarizeResult(name: string, a: Record<string, any>, result: string): string {
+// `result` stays STRING-typed: images ride in a separate message, so this only ever summarizes the
+// text half. `images` is just a count, for the chip.
+export function summarizeResult(name: string, a: Record<string, any>, result: string, images = 0): string {
   const errored = result.startsWith("Error");
-  const sep = (s: string) => color.dim("  ·  ") + s;
+  const sep = (s: string) => color.dim("  ·  ") + s + (images ? color.dim("  ·  ") + color.cyan(`${images} image${images === 1 ? "" : "s"}`) : "");
   const failed = sep(color.red("✗ failed")); // a failed call must not read as a success ("0 lines")
   switch (name) {
     case "read_file": {

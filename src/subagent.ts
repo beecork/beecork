@@ -15,6 +15,7 @@ import { config } from "./config";
 import { color, stripControl } from "./ui";
 import { callModel } from "./api";
 import { runTool, toolDefs } from "./tools";
+import { splitResult, textOf } from "./images";
 import { decideApproval } from "./agent";
 
 // The child's ALLOW-LIST — read/search/list + web. Deliberately excludes every mutating tool AND
@@ -70,7 +71,7 @@ export async function exploreLoop(deps: ExploreDeps, task: string, focus: string
         deps.onStep?.(call.function.name, args, result);
       }
     } else {
-      return message.content ?? "(the explorer returned no findings)"; // text answer = the findings
+      return textOf(message.content) || "(the explorer returned no findings)"; // text answer = the findings
     }
   }
 
@@ -81,7 +82,7 @@ export async function exploreLoop(deps: ExploreDeps, task: string, focus: string
     false,
     signal,
   );
-  return wrap.content ?? "(the explorer reached its step budget without a conclusion)";
+  return textOf(wrap.content) || "(the explorer reached its step budget without a conclusion)";
 }
 
 // Dim, indented narration of a child step (transparent, attributed to the sub-agent).
@@ -108,7 +109,13 @@ export async function runExplorer(task: string, focus: string | undefined, signa
   const deps: ExploreDeps = {
     call: (m, incl, sig) => callModel(m, incl, sig, { tools: childSchema, quiet: true }),
     dispatch: async (c, sig) => {
-      const r = await runTool(c, sig, childByName); // restricted map = the allow-list
+      // The explorer's contract with its parent is a TEXT summary, and its allow-list can't produce
+      // images anyway — so it stays string-only rather than inheriting vision (which would also
+      // multiply cost). If one ever does arrive, say so instead of dropping it silently.
+      const { text, images } = splitResult(await runTool(c, sig, childByName)); // restricted map = the allow-list
+      const r = images.length
+        ? text + `\n[${images.length} image(s) returned — the read-only explorer is text-only and cannot view them; report that to the parent.]`
+        : text;
       return r.length > cap ? r.slice(0, cap) + `\n…[truncated ${r.length - cap} chars]` : r;
     },
     gate: (name, args) => {

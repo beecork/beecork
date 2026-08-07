@@ -5,29 +5,49 @@ import { config } from "./config";
 import { state } from "./state";
 import { color } from "./ui";
 import { openRouterChat, sleep, isTransientStatus } from "./api";
+import { textOf, pruneOldImages } from "./images";
 import type { Message } from "./types";
 
 // Rough token estimate: ~4 characters per token. Good enough to decide WHEN to
 // compact (a precise count needs a model-specific tokenizer + a dependency).
 // Sum lengths directly — don't build the whole transcript string just to measure it.
+// Images are counted with a FLAT per-image cost, not by length: an array's .length is its part
+// count, so a 2 MB screenshot would otherwise read as ~1 token, compaction would never fire, and the
+// provider would reject the request. Text still accumulates as chars — keeping one shared char
+// accumulator (rather than rounding per message) means text-only histories estimate exactly as before.
 export function estimateTokens(messages: Message[]): number {
   let chars = 0;
-  for (const m of messages) chars += (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
-  return Math.ceil(chars / 4);
+  let imageTokens = 0;
+  for (const m of messages) {
+    const c = m.content;
+    if (typeof c === "string") chars += c.length;
+    else if (Array.isArray(c)) {
+      for (const p of c) {
+        if (p.type === "text") chars += p.text.length;
+        else imageTokens += config.imageTokenCost;
+      }
+    }
+    if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+  }
+  return Math.ceil(chars / 4) + imageTokens;
 }
 
 // Flatten messages into a plain transcript. We summarize TEXT (not structured
 // messages) to sidestep tool-call pairing rules.
+// Every branch goes through textOf, which renders an image as "[image: image/png, 312 KB]" rather
+// than its data URL. That is what guarantees summarize() below — a NON-streaming POST — can never be
+// handed a megabyte of base64, and that array content never stringifies to "[object Object]".
 export function transcript(messages: Message[]): string {
   return messages
     .map((m) => {
-      if (m.role === "tool") return `[tool result] ${m.content ?? ""}`;
+      if (m.role === "tool") return `[tool result] ${textOf(m.content)}`;
       if (m.tool_calls?.length) {
         const called = `assistant called: ${m.tool_calls.map((t) => `${t.function.name}(${t.function.arguments})`).join(", ")}`;
         // Keep the assistant's accompanying text (its reasoning) — a message can have both.
-        return m.content ? `assistant: ${m.content}\n${called}` : called;
+        const t = textOf(m.content);
+        return t ? `assistant: ${t}\n${called}` : called;
       }
-      return `${m.role}: ${m.content ?? ""}`;
+      return `${m.role}: ${textOf(m.content)}`;
     })
     .join("\n");
 }
@@ -93,6 +113,10 @@ export function compactionStart(messages: Message[], keepRecent: number): number
 }
 
 export async function compactIfNeeded(messages: Message[], signal?: AbortSignal): Promise<Message[]> {
+  // Drop stale images FIRST. Compaction keeps `recent` verbatim, so images sitting in that tail are
+  // un-shrinkable by summarization alone — a handful of screenshots would blow the window with no
+  // way for the loop below to make progress. This is also the backstop against a runaway tool.
+  messages = pruneOldImages(messages);
   if (estimateTokens(messages) <= config.maxContextTokens) return messages;
 
   // Normally keep `keepRecent` messages verbatim. But if the recent tail alone is over budget,

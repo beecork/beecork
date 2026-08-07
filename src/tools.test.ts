@@ -11,6 +11,11 @@ import { runTool, resolveEdit, toolDefs } from "./tools";
 import { projectRoot } from "./paths";
 import { loadProjectOrigins } from "./projectSites";
 import type { ToolCall } from "./types";
+import { splitResult } from "./images";
+
+// Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
+const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => splitResult(await runTool(c, s)).text;
+
 
 // Apply a successful resolution the same way edit_file's run() does (offset slice-and-splice).
 const applyEdit = (file: string, r: ReturnType<typeof resolveEdit>): string =>
@@ -21,7 +26,7 @@ const rel = ".tools-test";
 const call = (name: string, args: object): ToolCall => ({ id: "t1", type: "function", function: { name, arguments: JSON.stringify(args) } });
 
 test("write_file with no content is rejected (no empty clobber)", async () => {
-  const res = await runTool(call("write_file", { path: `${rel}/x.txt` }));
+  const res = await runText(call("write_file", { path: `${rel}/x.txt` }));
   assert.match(res, /^Error/);
   assert.match(res, /content/);
 });
@@ -33,7 +38,7 @@ test("edit_file: exactly-once match, literal-$ replacer, mode preserved", async 
   // Ambiguous match → refused.
   const dupPath = join(dir, "dup.txt");
   writeFileSync(dupPath, "foo\nfoo\n");
-  const dupRes = await runTool(call("edit_file", { path: `${rel}/dup.txt`, old_text: "foo", new_text: "bar" }));
+  const dupRes = await runText(call("edit_file", { path: `${rel}/dup.txt`, old_text: "foo", new_text: "bar" }));
   assert.match(dupRes, /appears 2 times|exactly once|more surrounding/i);
   assert.equal(readFileSync(dupPath, "utf8"), "foo\nfoo\n"); // unchanged
 
@@ -41,7 +46,7 @@ test("edit_file: exactly-once match, literal-$ replacer, mode preserved", async 
   const litPath = join(dir, "lit.txt");
   writeFileSync(litPath, "REPLACE_ME here");
   const litNew = "a$&b$`c$1d";
-  const litRes = await runTool(call("edit_file", { path: `${rel}/lit.txt`, old_text: "REPLACE_ME", new_text: litNew }));
+  const litRes = await runText(call("edit_file", { path: `${rel}/lit.txt`, old_text: "REPLACE_ME", new_text: litNew }));
   assert.match(litRes, /Edited/);
   assert.equal(readFileSync(litPath, "utf8"), `${litNew} here`);
 
@@ -49,7 +54,7 @@ test("edit_file: exactly-once match, literal-$ replacer, mode preserved", async 
   const exePath = join(dir, "run.sh");
   writeFileSync(exePath, "old\n");
   chmodSync(exePath, 0o755);
-  await runTool(call("edit_file", { path: `${rel}/run.sh`, old_text: "old", new_text: "new" }));
+  await runText(call("edit_file", { path: `${rel}/run.sh`, old_text: "old", new_text: "new" }));
   assert.equal(readFileSync(exePath, "utf8"), "new\n");
   assert.equal(statSync(exePath).mode & 0o777, 0o755, "executable bit preserved after edit");
 });
@@ -112,7 +117,7 @@ test("edit_file: heals indentation drift end-to-end and reports the heal", async
   const p = join(hdir, "code.ts");
   writeFileSync(p, "export function f() {\n  return 1;\n}\n"); // 2-space indent
   // model OVER-indents old_text (4 spaces) → not a substring → whitespace tier strips the extra indent
-  const res = await runTool(call("edit_file", { path: `${hrel}/code.ts`, old_text: "    return 1;", new_text: "    return 2;" }));
+  const res = await runText(call("edit_file", { path: `${hrel}/code.ts`, old_text: "    return 1;", new_text: "    return 2;" }));
   assert.match(res, /Edited/);
   assert.match(res, /auto-healed/);
   assert.equal(readFileSync(p, "utf8"), "export function f() {\n  return 2;\n}\n");
@@ -120,10 +125,10 @@ test("edit_file: heals indentation drift end-to-end and reports the heal", async
 
 test("ask_user run(): headless proceed message + validation", async () => {
   // Non-interactive (test env) → run() tells the model to proceed with a default.
-  const ok = await runTool(call("ask_user", { question: "npm or pnpm?", options: [{ label: "npm" }, { label: "pnpm" }] }));
+  const ok = await runText(call("ask_user", { question: "npm or pnpm?", options: [{ label: "npm" }, { label: "pnpm" }] }));
   assert.match(ok, /headless|proceed/i);
   // Missing options → an Error the model can react to.
-  const bad = await runTool(call("ask_user", { question: "which?", options: [] }));
+  const bad = await runText(call("ask_user", { question: "which?", options: [] }));
   assert.match(bad, /^Error/);
 });
 
@@ -133,7 +138,7 @@ test("read_dev_signals: relays setup steps when no bridge is reachable", async (
   const prev = process.env.BEECORK_DEV_SIGNALS_URL;
   process.env.BEECORK_DEV_SIGNALS_URL = "http://127.0.0.1:59237"; // nothing listening → ECONNREFUSED
   try {
-    const out = await devSignals().run({});
+    const out = splitResult(await devSignals().run({})).text;
     assert.match(out, /Beecork Skeleton/);
     assert.match(out, /Pair this site/);
     assert.doesNotMatch(out, /^Error/); // it's guidance to relay, not a tool failure
@@ -162,7 +167,7 @@ test("read_dev_signals: formats connected signals and drops meta 'watch' lines",
   const prev = process.env.BEECORK_DEV_SIGNALS_URL;
   process.env.BEECORK_DEV_SIGNALS_URL = `http://127.0.0.1:${port}`;
   try {
-    const out = await devSignals().run({});
+    const out = splitResult(await devSignals().run({})).text;
     assert.match(out, /2 browser signal/); // the "watch" line is dropped → 2, not 3
     assert.match(out, /\[network\] GET https:\/\/app\/api\/x → 500/);
     assert.match(out, /\[console\] boom/);
@@ -177,11 +182,11 @@ test("read_dev_signals: formats connected signals and drops meta 'watch' lines",
 const watchSite = () => toolDefs.find((t) => t.name === "watch_site")!;
 
 test("watch_site: rejects an invalid URL and relays setup when no bridge is reachable", async () => {
-  assert.match(await watchSite().run({ url: "not a url" }), /^Error/); // no request made
+  assert.match(splitResult(await watchSite().run({ url: "not a url" })).text, /^Error/); // no request made
   const prev = process.env.BEECORK_DEV_SIGNALS_URL;
   process.env.BEECORK_DEV_SIGNALS_URL = "http://127.0.0.1:59237";
   try {
-    assert.match(await watchSite().run({ url: "https://app.example.com" }), /Beecork Skeleton/);
+    assert.match(splitResult(await watchSite().run({ url: "https://app.example.com" })).text, /Beecork Skeleton/);
   } finally {
     if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
     else process.env.BEECORK_DEV_SIGNALS_URL = prev;
@@ -206,7 +211,7 @@ test("watch_site: POSTs origin (path stripped) + ttl when connected", async () =
   const proj = mkdtempSync(join(tmpdir(), "bk-watch-")); // isolate cwd: watch_site writes .beecork/skeleton.json
   try {
     process.chdir(proj);
-    const out = await watchSite().run({ url: "https://app.example.com/checkout?x=1", minutes: 5 });
+    const out = splitResult(await watchSite().run({ url: "https://app.example.com/checkout?x=1", minutes: 5 })).text;
     assert.match(out, /Requested watching https:\/\/app\.example\.com/);
     assert.equal(received.origin, "https://app.example.com"); // origin only — path/query stripped
     assert.equal(received.ttlMs, 5 * 60000);

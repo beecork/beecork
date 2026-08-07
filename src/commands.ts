@@ -9,6 +9,9 @@ import { estimateTokens } from "./context";
 import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference } from "./memory";
 import { skillNames } from "./skills";
 import { selfUpdate, shadowWarning } from "./update";
+import { renderMcp, renderMcpTools, reconnect, mcpReady } from "./mcp";
+import { textOf, stripImagesForSave } from "./images";
+import { supportsVision, visionReady } from "./capabilities";
 import { selectMenu } from "./input";
 import { chromeEnabled, chromePick } from "./chrome";
 import { ansi } from "./ansi";
@@ -38,6 +41,7 @@ export const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: "/key", desc: "set + save your OpenRouter API key" },
   { name: "/update", desc: "update beecork to the latest version" },
   { name: "/resume", desc: "resume a previous session (pick from a list)" },
+  { name: "/mcp", desc: "MCP servers: status, tools, reconnect" },
   { name: "/good", desc: "rate this conversation good" },
   { name: "/bad", desc: "rate this conversation bad (→ eval/failures)" },
   { name: "/help", desc: "show this help" },
@@ -73,7 +77,9 @@ function replayConversation(msgs: Message[]): void {
   console.log(color.dim("┄┄┄ resumed conversation ┄┄┄") + "\n");
   for (const m of msgs) {
     // stripControl: a project session file is repo-controlled — it must not carry escapes.
-    const c = typeof m.content === "string" ? stripControl(m.content).trim() : "";
+    // textOf: content may be a parts array; it renders an image as "[image: image/png, 312 KB]"
+    // rather than an empty line (or a data URL).
+    const c = stripControl(textOf(m.content)).trim();
     if (m.role === "user" && c) console.log(color.green("you: ") + c + "\n");
     else if (m.role === "assistant" && c) console.log(color.cyan("bee: ") + c + "\n");
   }
@@ -116,6 +122,17 @@ export async function handleCommand(input: string, messages: Message[]): Promise
         `~${estimateTokens(messages)} tokens in ${messages.length} messages (auto-compacts above ${config.maxContextTokens})`,
       ) + "\n",
     );
+  } else if (cmd === "/mcp") {
+    // Servers connect in the background, and a slash command runs before the turn-start wait — so
+    // without this, /mcp typed right after launch reports "starting" for everything, which is the
+    // one thing this command exists not to do.
+    await mcpReady(config.mcpStartupTimeoutMs);
+    const [sub, which] = arg.split(/\s+/);
+    if (sub === "tools") console.log(renderMcpTools(which) + "\n");
+    else if (sub === "reconnect") {
+      console.log(color.dim(`reconnecting ${which || "all servers"}…`));
+      console.log(await reconnect(which) + "\n");
+    } else console.log(renderMcp() + "\n");
   } else if (cmd === "/update") {
     console.log(color.dim("updating beecork… (npm install -g beecork@latest)"));
     const { ok, output } = await selfUpdate();
@@ -166,7 +183,8 @@ export async function handleCommand(input: string, messages: Message[]): Promise
     try {
       await mkdir(dir, { recursive: true });
       const file = `${dir}/${Date.now()}.json`;
-      await writeFile(file, JSON.stringify({ rating: cmd.slice(1), model: state.model, messages }, null, 2), "utf8");
+      // stripImagesForSave: without it a base64 screenshot lands in eval/ inside the working tree.
+      await writeFile(file, JSON.stringify({ rating: cmd.slice(1), model: state.model, messages: stripImagesForSave(messages) }, null, 2), "utf8");
       await chmod(file, 0o600).catch(() => {}); // the transcript may contain file contents / command output
       console.log(
         color.cyan(`saved this conversation → ${file}`) +
@@ -197,13 +215,16 @@ export async function handleCommand(input: string, messages: Message[]): Promise
 // plain printed list otherwise.
 async function pickModel(): Promise<void> {
   if (!process.stdin.isTTY) return showRecommended();
+  // Most of the curated list is text-only (including the default), so flagging which ones can
+  // actually accept an image is what makes the images feature discoverable at all.
+  await visionReady(1500);
   const choice = await pick({
     title: "switch model — ↑/↓ then Enter (Esc to cancel)",
     initial: Math.max(0, RECOMMENDED_MODELS.findIndex((m) => m.slug === state.model)),
     items: RECOMMENDED_MODELS.map((m) => ({
       label: (m.slug === state.model ? "● " : "  ") + m.slug,
       value: m.slug,
-      hint: `${m.price}/1M · ${m.note}`,
+      hint: `${m.price}/1M · ${supportsVision(m.slug) ? "vision · " : ""}${m.note}`,
     })),
   });
   if (choice) console.log(color.green(`switched to: ${applyModel(choice)}`) + "\n");
@@ -246,7 +267,8 @@ function showRecommended(): void {
   console.log(`\nswitch:  ${color.cyan("/model")}  (menu)    search all:  ${color.cyan("/model <term>")}\n`);
 }
 
-type OpenRouterModel = { id: string; supported_parameters?: string[]; pricing?: { prompt?: string } };
+type OpenRouterModel = { id: string; supported_parameters?: string[]; pricing?: { prompt?: string }; architecture?: { input_modalities?: string[] } };
+const hasVision = (m: OpenRouterModel): boolean => (m.architecture?.input_modalities ?? []).includes("image");
 
 // /model <term>: search the full OpenRouter catalog; pick from a menu (TTY) or print.
 async function searchModels(term: string): Promise<void> {
@@ -266,14 +288,15 @@ async function searchModels(term: string): Promise<void> {
         items: matches.map((m) => ({
           label: m.id,
           value: m.id,
-          hint: ((m.supported_parameters ?? []).includes("tools") ? "tools · " : "") + priceOf(m),
+          hint: ((m.supported_parameters ?? []).includes("tools") ? "tools · " : "") + (hasVision(m) ? "vision · " : "") + priceOf(m),
         })),
       });
       if (choice) console.log(color.green(`switched to: ${applyModel(choice)}`) + "\n");
     } else {
       for (const m of matches) {
         const tools = (m.supported_parameters ?? []).includes("tools") ? "🔧" : "  ";
-        console.log(`  ${tools} ${m.id}  ${color.dim(`(${priceOf(m)})`)}`);
+        const vision = hasVision(m) ? "👁" : "  ";
+        console.log(`  ${tools}${vision} ${m.id}  ${color.dim(`(${priceOf(m)})`)}`);
       }
       console.log("");
     }
