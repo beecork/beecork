@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { seatbeltProfile, bubblewrapArgs, wrapCommand, unconfinedNotice, resetSandboxForTests, protectedPaths, probeSandbox } from "./sandbox";
 import { projectRoot } from "./paths";
 import { config } from "./config";
+import type { Mode } from "./state";
 
 const run = (cmd: string, args: string[]): Promise<{ code: number; stderr: string }> =>
   new Promise((resolve) =>
@@ -132,15 +133,23 @@ test("wrapCommand under auto runs bare when unavailable — but says so, ONCE", 
 // thing that proves the sandbox confines anything, and gating them on macOS meant they ALL skipped on
 // the Linux CI runner — where bwrap isn't installed either, so nothing exercised the sandbox at all
 // and the suite was green with zero confinement.
-const confined = (await probeSandbox()).kind === "active";
+const sandbox = await probeSandbox();
+const confined = sandbox.kind === "active";
+
+// Run `command` under whatever runner beecork ITSELF would use here. Going through wrapCommand is
+// what makes these tests portable AND honest: hardcoding one runner's path made the "refuses"
+// assertions pass on a machine without that runner, since ENOENT is also a non-zero exit.
+const runConfined = async (command: string, mode: Mode = "normal") => {
+  const { spec, refusal } = wrapCommand(command, mode, sandbox);
+  assert.equal(refusal, undefined, "wrapCommand must not refuse when confinement IS available");
+  assert.equal(spec.shell, false, "a confined command must not be handed to a shell OUTSIDE the sandbox");
+  return run(spec.cmd, spec.args);
+};
 
 test("REAL (confined): the kernel refuses a write outside the workspace", { skip: !confined }, async () => {
   const outside = join(homedir(), `.beecork-sandbox-probe-${process.pid}`);
   rmSync(outside, { force: true });
-  const { code } = await run("/usr/bin/sandbox-exec", [
-    "-p", seatbeltProfile("normal"),
-    "/bin/sh", "-c", `echo escaped > ${JSON.stringify(outside)}`,
-  ]);
+  const { code } = await runConfined(`echo escaped > ${JSON.stringify(outside)}`, "normal");
   try {
     assert.notEqual(code, 0, "writing outside the workspace must fail");
     assert.equal(existsSync(outside), false, "and must not leave a file behind");
@@ -153,10 +162,7 @@ test("REAL (confined): the kernel still allows a write INSIDE the workspace", { 
   const inside = join(projectRoot, `.beecork-sandbox-probe-${process.pid}`);
   rmSync(inside, { force: true });
   try {
-    const { code, stderr } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("normal"),
-      "/bin/sh", "-c", `echo ok > ${JSON.stringify(inside)}`,
-    ]);
+    const { code, stderr } = await runConfined(`echo ok > ${JSON.stringify(inside)}`, "normal");
     assert.equal(code, 0, `an in-workspace write must still work (stderr: ${stderr})`);
     assert.equal(existsSync(inside), true);
   } finally {
@@ -180,10 +186,7 @@ test("REAL (confined): a symlink pointing out of the workspace does not become a
     rmSync(homeTarget, { force: true });
     await run("/bin/ln", ["-s", homedir(), homeLink]);
 
-    const { code } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("normal"),
-      "/bin/sh", "-c", `echo escaped > ${JSON.stringify(join(homeLink, `.beecork-escape-${process.pid}`))}`,
-    ]);
+    const { code } = await runConfined(`echo escaped > ${JSON.stringify(join(homeLink, `.beecork-escape-${process.pid}`))}`, "normal");
     assert.notEqual(code, 0, "a write through an in-workspace symlink must still be judged by its DESTINATION");
     assert.equal(existsSync(homeTarget), false);
     rmSync(homeLink, { force: true });
@@ -199,10 +202,7 @@ test("REAL (confined): read-only mode refuses even an in-workspace write", { ski
   const inside = join(projectRoot, `.beecork-ro-probe-${process.pid}`);
   rmSync(inside, { force: true });
   try {
-    const { code } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("readonly"),
-      "/bin/sh", "-c", `echo nope > ${JSON.stringify(inside)}`,
-    ]);
+    const { code } = await runConfined(`echo nope > ${JSON.stringify(inside)}`, "readonly");
     assert.notEqual(code, 0, "read-only mode is a capability floor — the kernel enforces it too");
     assert.equal(existsSync(inside), false);
   } finally {
@@ -211,10 +211,7 @@ test("REAL (confined): read-only mode refuses even an in-workspace write", { ski
 });
 
 test("REAL (confined): an ordinary read-only command still works inside the sandbox", { skip: !confined }, async () => {
-  const { code, stderr } = await run("/usr/bin/sandbox-exec", [
-    "-p", seatbeltProfile("normal"),
-    "/bin/sh", "-c", "ls / >/dev/null && echo fine",
-  ]);
+  const { code, stderr } = await runConfined("ls / >/dev/null && echo fine", "normal");
   assert.equal(code, 0, `the sandbox must not break normal commands (stderr: ${stderr})`);
 });
 
@@ -235,10 +232,7 @@ test("profile grants build caches but re-denies credentials LAST", () => {
 test("REAL (confined): build-tool caches are writable, so ordinary installs still work", { skip: !confined }, async () => {
   for (const dir of [".npm/_cacache", ".cache", ".cargo"]) {
     const probe = join(homedir(), dir, `beecork-test-${process.pid}`);
-    const { code } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("normal"),
-      "/bin/sh", "-c", `mkdir -p ${JSON.stringify(probe)} && rmdir ${JSON.stringify(probe)}`,
-    ]);
+    const { code } = await runConfined(`mkdir -p ${JSON.stringify(probe)} && rmdir ${JSON.stringify(probe)}`, "normal");
     assert.equal(code, 0, `~/${dir} must be writable or npm/pip/cargo break inside the sandbox`);
   }
 });
@@ -246,10 +240,7 @@ test("REAL (confined): build-tool caches are writable, so ordinary installs stil
 test("REAL (confined): credentials and beecork's own approval store stay unwritable", { skip: !confined }, async () => {
   for (const secret of [".ssh", ".aws", ".gnupg", ".beecork"]) {
     const probe = join(homedir(), secret, `beecork-test-${process.pid}`);
-    const { code } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("normal"),
-      "/bin/sh", "-c", `mkdir -p ${JSON.stringify(probe)}`,
-    ]);
+    const { code } = await runConfined(`mkdir -p ${JSON.stringify(probe)}`, "normal");
     assert.notEqual(code, 0, `~/${secret} must never be writable from a sandboxed command`);
     assert.equal(existsSync(probe), false);
   }
@@ -259,9 +250,7 @@ test("REAL (confined): plain $HOME is not writable just because caches inside it
   const probe = join(homedir(), `.beecork-home-probe-${process.pid}`);
   rmSync(probe, { force: true });
   try {
-    const { code } = await run("/usr/bin/sandbox-exec", [
-      "-p", seatbeltProfile("normal"), "/bin/sh", "-c", `touch ${JSON.stringify(probe)}`,
-    ]);
+    const { code } = await runConfined(`touch ${JSON.stringify(probe)}`, "normal");
     assert.notEqual(code, 0);
     assert.equal(existsSync(probe), false);
   } finally {
