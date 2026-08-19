@@ -93,6 +93,14 @@ export function refsOutsideRoot(cmd: string): boolean {
   for (const m of norm.matchAll(/(?:^|[\s"'`=(])(\/[^\s"'`;|&()<>]*)/g)) {
     if (!resolveInRoot(m[1]).inRoot) return true; // an absolute path outside the root
   }
+  // A `..` segment in the MIDDLE of a path (src/../../etc/passwd) slips past the anchored test above,
+  // which only matches a LEADING `../`. RESOLVE those tokens instead of pattern-matching them — that
+  // is also what keeps a legitimately in-root `ls src/..` from over-prompting, which a naive
+  // "contains .." check would not. The segment guard keeps git ranges (HEAD~2..HEAD), triple-dot
+  // (main...feature) and numeric ranges (1..5) out of realpath entirely.
+  for (const t of norm.split(/[\s"'`=();|&<>]+/)) {
+    if (/(^|\/)\.\.(\/|$)/.test(t) && !resolveInRoot(t).inRoot) return true;
+  }
   return false;
 }
 export function bashGuard(args: Record<string, any>): { needsApproval?: boolean; reason?: string } {
@@ -108,12 +116,24 @@ export function bashGuard(args: Record<string, any>): { needsApproval?: boolean;
 // only ever REMOVES a prompt for a demonstrably harmless command; it never grants a risky one.
 const SAFE_BASH_COMMANDS = new Set([
   "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "tree", "du", "nl", "column",
-  "grep", "egrep", "fgrep", "rg", // NOTE: `find` is deliberately excluded — it can WRITE via -fprint/-fls
+  "grep", "egrep", "fgrep", // NOTE: `find` is deliberately excluded — it can WRITE via -fprint/-fls;
+  // `rg` is excluded because it recurses by DEFAULT — `rg secret` reads every file under the root,
+  // .env included, without ever naming one, so no flag-based rule can catch it. `search` covers this
+  // use and skips secret files (tools.ts); an rg call now falls through to the normal prompt.
   "which", "type", "echo", "printf", "basename", "dirname", "realpath", "readlink", "true", "test",
 ]);
 // git is safe ONLY for these subcommands — they have no write form regardless of flags. (Deliberately
 // excludes branch/tag/remote/config/stash/reflog, which all have mutating variants.)
 const SAFE_GIT_READ = new Set(["status", "diff", "log", "show", "blame", "shortlog", "ls-files", "rev-parse", "describe", "cat-file", "whatchanged"]);
+// Flags that turn a NAMED-file read into a whole-tree read. The per-arg secret test below can only
+// see paths the command was handed; a recursive grep reads the secrets it was never given.
+// (The bundled form requires the r/R right after a SINGLE leading dash, so `--regexp=x` can't match.)
+const GREP_FAMILY = new Set(["grep", "egrep", "fgrep"]);
+const GREP_RECURSIVE = /^(--(recursive|dereference-recursive)$|-[a-zA-Z]*[rR])/;
+// `git log -p` prints the full patch of every commit — an untargeted dump of every version of every
+// tracked file, which surfaces a secret that was committed once and later removed. Scoped
+// `git diff` / `git show <rev>` stay auto-approvable; they are the agent's common case.
+const GIT_PATCH_FLAG = /^(-p|-u|-U\d+|--patch|--patch-with-stat|--full-diff|--unified(=|$))$/;
 
 export function isSafeBash(cmd: string): boolean {
   const c = cmd.trim();
@@ -131,9 +151,13 @@ export function isSafeBash(cmd: string): boolean {
     if (!sub || !SAFE_GIT_READ.has(sub)) return false;
     // Even a read subcommand can WRITE a file via --output/-o — reject those.
     if (args.some((t) => /^(--output(-directory)?(=|$)|-o$|-O$)/.test(t))) return false;
+    if ((sub === "log" || sub === "whatchanged") && args.some((t) => GIT_PATCH_FLAG.test(t))) return false;
   } else if (!SAFE_BASH_COMMANDS.has(cmd0)) {
     return false;
   }
+  // A RECURSIVE grep reads every file under its start point — including the secrets it never names,
+  // which the per-arg test below therefore cannot see. Send the whole command to the prompt.
+  if (GREP_FAMILY.has(cmd0) && args.some((t) => GREP_RECURSIVE.test(t))) return false;
   // Every non-flag argument must resolve IN-ROOT and not name a secret file. This backstops the
   // refsOutsideRoot heuristic's embedded-`..` gap (which the human prompt used to catch) and closes the
   // secret-read hole — secretGuard covers read_file/edit_file, NOT run_bash. A search pattern is treated
@@ -144,7 +168,12 @@ export function isSafeBash(cmd: string): boolean {
     if (/[*?[\]]/.test(t)) return false;
     const r = resolveInRoot(t);
     if (!r.inRoot) return false;
-    if (SECRET_FILE.test(t) || SECRET_FILE.test(r.abs) || SECRET_FILE.test(basename(r.abs))) return false;
+    // A git revspec hides the path after a colon (`git show HEAD:.env`), so the raw token doesn't
+    // look like a secret file — SECRET_FILE needs a `^` or `/` before `.env` and here it follows a
+    // `:`. Test the post-colon tail too. (lastIndexOf(":")+1 is 0 when there is no colon, so a plain
+    // path tests itself twice — harmless.) A revspec path WITH a directory part already matched.
+    const tail = t.slice(t.lastIndexOf(":") + 1);
+    if ([t, tail, r.abs, basename(r.abs)].some((x) => SECRET_FILE.test(x))) return false;
   }
   return true;
 }
