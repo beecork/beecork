@@ -41,7 +41,6 @@ export function describePart(p: ImagePart): { mime: string; bytes: number } {
 
 const kb = (bytes: number): string => (bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1000))} KB`);
 
-export const isMultipart = (c: Content): c is ContentPart[] => Array.isArray(c);
 
 // Flatten any Content to plain text. An image becomes a short description — NEVER its data URL.
 export function textOf(c: Content): string {

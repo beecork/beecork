@@ -27,7 +27,7 @@ export type Content = string | ContentPart[] | null;
 export type ToolFailureCode = "INVALID_ARGS" | "DENIED" | "CANCELLED" | "TIMEOUT" | "NOT_FOUND" | "FAILED";
 
 // A tool may return this instead of a string to say "I failed, and here is exactly how".
-export type ToolFailure = { ok: false; code: ToolFailureCode; message: string; images?: ImagePart[]; retryable?: boolean };
+export type ToolFailure = { ok: false; code: ToolFailureCode; message: string; images?: ImagePart[] };
 
 // What a tool hands back: text for the model, optionally alongside images or a structured failure.
 // Existing tools return a plain string and are unchanged (a string is a ToolResult).
@@ -39,7 +39,7 @@ export type ToolResult = ToolContent | ToolFailure;
 // can render one without asking which kind it is first.
 export type ToolOutcome =
   | { ok: true; text: string; images: ImagePart[] }
-  | { ok: false; code: ToolFailureCode; text: string; images: ImagePart[]; retryable: boolean };
+  | { ok: false; code: ToolFailureCode; text: string; images: ImagePart[] };
 
 export type Message = {
   role: "system" | "user" | "assistant" | "tool";

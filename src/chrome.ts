@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { state, nextMode, modeLabel } from "./state";
 import { config } from "./config";
 import { contextBudget } from "./context";
+import { sandboxStatus } from "./sandbox";
 import { runningTaskCount } from "./tasks";
 import { pushKeyHandler } from "./input";
 
@@ -80,12 +81,17 @@ export function statusText(): string { // exported for the sanitization regressi
   const model = stripControl(state.model.split("/").pop() ?? state.model);
   const tok = tokensOf();
   const ctxK = Math.round(contextBudget() / 1000); // the budget actually in force for THIS model
+  // The sandbox can silently degrade to policy-only under BEECORK_SANDBOX=auto (no runner on this
+  // machine). Nothing showed that, so a user could believe commands were confined when they weren't.
+  const sb = sandboxStatus();
+  const sandboxSeg = sb?.kind === "active" ? "" : sb?.kind === "unavailable" ? color.yellow("unsandboxed") : "";
   const parts = [
     modeSegment(),
     color.cyan(model),
     color.dim(state.reasoningEffort),
     ...(branch ? [color.green(stripControl(branch))] : []),
     color.dim(`~${Math.round(tok / 1000)}k/${ctxK}k`),
+    ...(sandboxSeg ? [sandboxSeg] : []),
   ];
   const bg = runningTaskCount();
   if (bg > 0) parts.push(color.yellow(`${bg} task${bg === 1 ? "" : "s"}`));

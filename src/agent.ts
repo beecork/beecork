@@ -207,10 +207,6 @@ async function handleAskUser(args: Record<string, any>): Promise<string> {
 }
 
 // Tools that are PURE + read-only with the standard one-line render — safe to run CONCURRENTLY with
-// their batch siblings. Deliberately excludes anything that mutates, prompts for approval, reads the
-// keyboard, or renders bespoke multi-line output (write/edit/run_bash/remember/ask_user/update_todos/
-// show/explore). The model is told to batch independent calls; this cashes in that batching (N reads
-// or web_fetches take ~1× wall-clock instead of N×).
 // (Which tools those are is now DECLARED on each ToolDef as `execution: "parallel"` — see types.ts.
 // It used to be a hardcoded set of names here, which meant an MCP tool could never be parallel no
 // matter how read-only it was, and a new built-in stayed serial until someone remembered this file.)
@@ -412,6 +408,8 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
       }
     }
   }
+
+  else record({ type: "approval_resolved", callId: call.id, name: call.function.name, decision: "auto" }); // ran without asking — the case worth being able to audit
 
   if (config.traceFile) trace.push({ tool: call.function.name, args: call.function.arguments, step });
 

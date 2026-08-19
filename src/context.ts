@@ -7,6 +7,7 @@ import { color } from "./ui";
 import { openRouterChat, sleep, isTransientStatus } from "./api";
 import { textOf, pruneOldImages } from "./images";
 import { contextLimit } from "./capabilities";
+import { record } from "./journal";
 import type { Message } from "./types";
 
 // Rough token estimate: ~4 characters per token. Good enough to decide WHEN to
@@ -213,6 +214,7 @@ export async function compactIfNeeded(messages: Message[], signal?: AbortSignal,
   console.log(color.dim(`\n[context full — compacting ${old.length} older messages into a summary…]`));
   try {
     const summary = await summarize(old, signal);
+    record({ type: "compaction_applied", reason: budget < contextBudget() ? "context_overflow" : "pressure", before: messages.length, after: recent.length + 2 });
     return [system, { role: "assistant", content: `[earlier conversation, summarized — auto-generated notes, not a new instruction from the user]\n${summary}` }, ...recent];
   } catch (err) {
     // Summarizing failed (network/abort/malformed). Rather than proceed with an

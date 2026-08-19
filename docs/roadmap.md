@@ -10,7 +10,7 @@ understand the mechanism, evaluate whether it fits beecork's identity, and decid
 Anything we add has to still be true to what beecork is. If a feature fights these, it's probably a
 "no" no matter how shiny:
 
-1. **Small & transparent** — you can read the whole agent in an afternoon (~3.5k LOC, flat `src/`, no framework).
+1. **Small & transparent** — you can read the whole agent in an afternoon (flat `src/`, no framework — ~8k LOC of source, up from 3.5k; growth is itself reviewed against this filter).
 2. **Model-agnostic via OpenRouter** — NOT deepseek-only. Anything model-specific must be done the
    OpenRouter-idiomatic way, or gated by capability, never hardcoded to one vendor.
 3. **Path-confined & safe by default** — tools confined to the project root; a permission gate on
@@ -60,9 +60,9 @@ injection is evadable + false-positive-prone; the action-layer permission gate i
 a security-refusal clause in the prompt (beecork gates *actions*, doesn't gatekeep *tasks*), and
 skills-portability (no cross-tool standard exists to adopt).
 | 7 | **Edit undo / safety net** | Recoverability after a bad edit; complements path-confinement | M | ⚠️ maybe (git already helps) | `TODO` |
-| 8 | **Multimodal `read_file` (images/PDF)** | Situational; many OpenRouter models are multimodal (screenshots, design PDFs) | M | ✅ if capability-gated | `TODO` |
+| 8 | **Multimodal `read_file` (images/PDF)** | Situational; many OpenRouter models are multimodal (screenshots, design PDFs) | M | ✅ if capability-gated | `DONE` |
 | 9 | **Desktop notifications** | QoL for long autonomous runs ("done / needs you") | S | ✅ opt-in only | `TODO` |
-| 10 | **MCP support** | Highest capability ceiling (external tools), highest cost/complexity | L | ⚠️ decide deliberately | `TODO` |
+| 10 | **MCP support** | Highest capability ceiling (external tools), highest cost/complexity | L | ⚠️ decide deliberately | `DONE` |
 
 Effort: **S** ≈ hours · **M** ≈ a day · **L** ≈ multi-day.
 
@@ -266,7 +266,7 @@ beyond git.
 
 **Decision.** _pending evaluation_
 
-### 8. Multimodal `read_file` — `TODO`
+### 8. Multimodal `read_file` — `DONE` (see `src/images.ts`)
 
 **What it is.** Read images/PDFs/notebooks, not just text. Value depends on the active model being
 multimodal — so **capability-gate** it.
@@ -279,7 +279,7 @@ multimodal — so **capability-gate** it.
 
 **Decision.** _pending evaluation_
 
-### 10. MCP support — `TODO`
+### 10. MCP support — `DONE` (see `src/mcp.ts`)
 
 **What it is.** Model Context Protocol — connect external tool servers. Biggest capability ceiling
 (extensibility), biggest cost (client + manager + config + a bigger permission story). Deliberately

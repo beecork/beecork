@@ -173,7 +173,7 @@ export async function probeSandbox(): Promise<SandboxStatus> {
   return probed;
 }
 
-/** The cached verdict, or null before the probe has run. For the status line and /doctor. */
+/** The cached verdict, or null before the probe has run. Shown in the status line. */
 export const sandboxStatus = (): SandboxStatus | null => probed;
 
 /**
