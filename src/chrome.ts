@@ -18,10 +18,17 @@ import { contextBudget } from "./context";
 import { sandboxStatus } from "./sandbox";
 import { runningTaskCount } from "./tasks";
 import { pushKeyHandler } from "./input";
+import { clearActivityLine } from "./activity";
 
 const out = (s: string) => process.stdout.write(s);
-const rows = () => process.stdout.rows ?? 24;
-const cols = () => process.stdout.columns ?? 80;
+// A pty whose window size has never been reported says 0, not undefined — and `??` only catches
+// null/undefined, so a 0 went straight through. Everything below is derived from these two numbers,
+// and with rows()=0 the geometry collapsed: all four chrome rows landed on row 1 and the scroll
+// region became (1,1), so the whole conversation scrolled inside ONE thin row. With cols()=0 the
+// input box got a one-column window, which made typing invisible. Treat 0 as "not reported yet"
+// (a later SIGWINCH re-renders with the real size).
+const rows = () => process.stdout.rows || 24;
+const cols = () => process.stdout.columns || 80;
 
 interface Key { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }
 
@@ -62,10 +69,22 @@ let pendingRender = false; // a render coalesced to the end of the current burst
 // Four reserved rows: a top border, the input line (boxed between the borders), a bottom border, and
 // the statusline. Region = 1..rows-4. FIXED height → robust. Rows are clamped to ≥1 so a tiny
 // terminal can never make us emit an invalid negative-row escape (it just renders cramped).
-const statusRow = () => Math.max(1, rows());
-const borderBottomRow = () => Math.max(1, rows() - 1);
-const inputRow = () => Math.max(1, rows() - 2);
-const borderTopRow = () => Math.max(1, rows() - 3);
+// PURE + exported so the geometry is regression-tested (chrome.test.ts) rather than only observable
+// by looking at a broken terminal. `menuH` is the open dropdown's height, which the region gives up.
+export function chromeGeometry(termRows: number, menuH = 0) {
+  const r = Math.max(1, termRows || 24);
+  return {
+    status: Math.max(1, r),
+    borderBottom: Math.max(1, r - 1),
+    input: Math.max(1, r - 2),
+    borderTop: Math.max(1, r - 3),
+    regionBottom: Math.max(1, r - 4 - menuH),
+  };
+}
+const statusRow = () => chromeGeometry(rows()).status;
+const borderBottomRow = () => chromeGeometry(rows()).borderBottom;
+const inputRow = () => chromeGeometry(rows()).input;
+const borderTopRow = () => chromeGeometry(rows()).borderTop;
 const mark = () => color.green("› "); // "› " input marker
 const PW = 2; // display width of the marker
 
@@ -185,7 +204,7 @@ function render(): void {
   if (!picker && sel >= list.length) sel = Math.max(0, list.length - 1);
   menuH = list.length;
   out(ansi.hideCursor + ansi.saveCursor); // hide + save the content cursor
-  const regionB = Math.max(1, rows() - 4 - menuH);
+  const regionB = chromeGeometry(rows(), menuH).regionBottom;
   if (regionB !== lastRegionB) { out(ansi.setRegion(1, regionB)); lastRegionB = regionB; } // re-reserve only on change
   for (let r = borderTopRow() - prevMenuH; r < borderTopRow() - menuH; r++) out(ansi.moveTo(r) + ansi.clearLine); // clear vacated menu rows
   prevMenuH = menuH;
@@ -282,7 +301,19 @@ function onKey(str: string | undefined, key: Key | undefined): void {
     const line = buf;
     buf = ""; cur = 0; edited();
     render(); // menu gone → region shrinks; the content cursor is restored to the right spot
-    if (turnActive) { if (line.trim()) steering.push(line.trim()); return; }
+    if (turnActive) {
+      const note = line.trim();
+      if (note) {
+        steering.push(note);
+        // SAY SO, in the transcript. Without this a steering note vanished on submit: the input box
+        // clears, the queue is drained silently at the top of the next step, and nothing on screen
+        // ever acknowledged the note — so it read as if the keystrokes had been swallowed. (The
+        // classic editor's handler in index.ts always echoed; only this path didn't.)
+        const onEmptyRow = clearActivityLine(); // the live indicator owns this row — take it back first
+        out((onEmptyRow ? "" : "\n") + color.cyan("» ") + color.dim(`queued for next step: ${note}`) + "\n");
+      }
+      return;
+    }
     if (line.trim()) out("\n" + mark() + line + "\n"); // echo AT the content cursor (no reposition → no gap)
     const r = onResult; onResult = null; r?.({ type: "line", value: line });
     return;
