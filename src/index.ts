@@ -439,6 +439,11 @@ async function main() {
   // leaves beecork apparently hung after "bye!". (process.on('exit', killAllMcp) is the hard backstop
   // for the signal/crash paths, where async cleanup can no longer run.)
   await shutdownMcp();
+  // Kill background tasks HERE, not only via process.on("exit"). They are spawned with piped stdio,
+  // which holds the event loop open exactly like a live MCP child — so with one still running the
+  // process never exits, 'exit' never fires, and the handler meant to reap them cannot run. Verified:
+  // the loop stays alive indefinitely and the exit handler is never reached.
+  killAllTasks();
   await persist();
   console.log(color.dim("bye!"));
 }

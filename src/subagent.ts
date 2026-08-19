@@ -56,19 +56,25 @@ export async function exploreLoop(deps: ExploreDeps, task: string, focus: string
     messages.push(message);
 
     if (message.tool_calls && message.tool_calls.length > 0) {
-      for (const call of message.tool_calls) {
+      // Chunked concurrency, like the parent's runReadOnlyBatch. The explorer's entire tool set is
+      // read-only and declares execution:"parallel", and its gate is the same pure decideApproval the
+      // parent uses — so running a step's calls together is safe by construction. Serial cost the
+      // explorer one full round-trip per web_fetch, which is where its time actually goes.
+      const calls = message.tool_calls;
+      for (let i = 0; i < calls.length; i += config.maxParallelTools) {
         if (signal?.aborted) break;
-        let args: Record<string, any> = {};
-        try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* dispatch reports bad JSON */ }
-        const g = deps.gate(call.function.name, args);
-        if (!g.ok) {
-          messages.push({ role: "tool", tool_call_id: call.id, content: `Denied: ${g.reason}. You are a read-only explorer confined to the project — work with what you can read in-root.` });
-          deps.onStep?.(call.function.name, args, null, g.reason);
-          continue;
+        const done = await Promise.all(calls.slice(i, i + config.maxParallelTools).map(async (call) => {
+          let args: Record<string, any> = {};
+          try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* dispatch reports bad JSON */ }
+          const g = deps.gate(call.function.name, args);
+          if (!g.ok) return { call, args, blocked: g.reason, content: `Denied: ${g.reason}. You are a read-only explorer confined to the project — work with what you can read in-root.` };
+          return { call, args, blocked: undefined as string | undefined, content: await deps.dispatch(call, signal) };
+        }));
+        // Committed in the model's original call order, exactly as the parent does.
+        for (const r of done) {
+          messages.push({ role: "tool", tool_call_id: r.call.id, content: r.content });
+          deps.onStep?.(r.call.function.name, r.args, r.blocked ? null : r.content, r.blocked);
         }
-        const result = await deps.dispatch(call, signal);
-        messages.push({ role: "tool", tool_call_id: call.id, content: result });
-        deps.onStep?.(call.function.name, args, result);
       }
     } else {
       return textOf(message.content) || "(the explorer returned no findings)"; // text answer = the findings

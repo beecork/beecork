@@ -91,13 +91,25 @@ export function statusText(): string { // exported for the sanitization regressi
   if (bg > 0) parts.push(color.yellow(`${bg} task${bg === 1 ? "" : "s"}`));
   return parts.join(color.dim(" · "));
 }
+// Parse `git status --porcelain --branch` into the statusline's "branch" or "branch*" (dirty).
+// Pure, so the three shapes that used to be guesswork are unit-tested.
+export function parseGitStatus(stdout: string): string {
+  const lines = String(stdout).split("\n");
+  const head = lines[0].startsWith("## ") ? lines[0].slice(3) : "";
+  const name =
+    head.startsWith("No commits yet on ") ? head.slice(18)
+    : head.startsWith("HEAD (no branch)") ? "HEAD"
+    : head.split("...")[0].trim();
+  return name ? name + (lines.slice(1).some((l) => l.trim()) ? "*" : "") : "";
+}
+
 function pollGit(): void {
-  execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1500, windowsHide: true }, (err, o) => {
-    if (err) { branch = ""; return; }
-    const b = String(o).trim();
-    execFile("git", ["status", "--porcelain"], { timeout: 1500, windowsHide: true }, (e2, o2) => {
-      branch = b + (!e2 && String(o2).trim() ? "*" : "");
-    });
+  // ONE process instead of two, every tick, forever (~34,560 spawns per idle day). --no-optional-locks
+  // stops the poll ever taking .git/index.lock, which it was contending for with the agent's own git
+  // commands. This also FIXES a real bug: in a repo with no commits yet, `rev-parse` exits non-zero
+  // and the old code bailed, so the statusline showed no branch at all.
+  execFile("git", ["--no-optional-locks", "status", "--porcelain", "--branch"], { timeout: 1500, windowsHide: true }, (err, o) => {
+    branch = err ? "" : parseGitStatus(String(o));
   });
 }
 

@@ -44,7 +44,7 @@ function runShell(
     // immediate EOF instead of blocking until the timeout on a pipe we never write to.
     const child = spawn(spec.cmd, spec.args, { shell: spec.shell, detached: unix, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", outLen = 0, errLen = 0, timedOut = false, aborted = false;
-    let settled = false, exitCode: number | null = null;
+    let settled = false, exitCode: number | null = null, exitSignal: NodeJS.Signals | null = null;
     const kill = () => {
       try {
         if (unix && child.pid) process.kill(-child.pid, "SIGKILL"); // whole group
@@ -73,11 +73,14 @@ function runShell(
       if (aborted) reject(Object.assign(new Error("cancelled"), { stdout, stderr }));
       else if (timedOut) reject(Object.assign(new Error(`timed out after ${opts.timeout}ms`), { stdout, stderr }));
       else if (exitCode !== 0 && exitCode !== null) reject(Object.assign(new Error(`exited with code ${exitCode}`), { stdout, stderr }));
+      // A signal-killed command has exitCode null — an OOM kill or a segfault used to land in the
+      // success branch below and be reported to the model as a pass with "(no output)".
+      else if (exitCode === null && exitSignal) reject(Object.assign(new Error(`killed by ${exitSignal}`), { stdout, stderr }));
       else resolve({ stdout, stderr });
     };
     child.on("error", (err) => { if (settled) return; settled = true; cleanup(); reject(Object.assign(err, { stdout, stderr })); });
     child.on("close", finalize); // all pipes drained — the clean/fast path
-    child.on("exit", (code) => { exitCode = code; setTimeout(finalize, 100); }); // backstop: don't wait past the child's own exit
+    child.on("exit", (code, sig) => { exitCode = code; exitSignal = sig; setTimeout(finalize, 100); }); // backstop: don't wait past the child's own exit
   });
 }
 

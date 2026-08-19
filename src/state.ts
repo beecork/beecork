@@ -20,13 +20,27 @@ export function modeLabel(m: Mode): string {
   return m === "auto" ? "auto-approve" : m === "readonly" ? "read-only" : m === "plan" ? "plan" : "normal";
 }
 
+// Accepts what modeLabel() PRINTS as well as the internal token: the statusline and the prompt tag
+// both show "read-only" / "auto-approve", so those were the spellings a user would copy — and the
+// parser rejected them and fell back to "normal", i.e. a fully writing agent with no warning. In CI
+// (BEECORK_MODE=read-only AUTO_APPROVE=1) that is a silent, total loss of the requested guarantee.
+const MODE_ALIASES: Record<string, Mode> = { "read-only": "readonly", "auto-approve": "auto" };
+export function parseMode(raw: string | undefined): Mode {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (!v) return "normal";
+  const m = MODE_ALIASES[v] ?? v;
+  if (MODES.includes(m as Mode)) return m as Mode;
+  console.error(`⚠ BEECORK_MODE="${raw}" is not a mode — using "normal". Valid: ${MODES.join(", ")}.`);
+  return "normal";
+}
+
 export const state = {
   model: config.defaultModel, // changed at runtime via the /model command
   reasoningEffort: config.reasoningEffort, // "thinking" depth; changed live via /effort, persisted like /model
   apiKey: "", // resolved at startup in index.ts: shell env → ~/.beecork/config.json → prompt
   braveKey: "", // resolved at startup in index.ts: env / config.json (for web_search)
   // rotated with Shift+Tab; an initial mode can be set headlessly via BEECORK_MODE (for tests/eval)
-  mode: (MODES.includes(process.env.BEECORK_MODE as Mode) ? (process.env.BEECORK_MODE as Mode) : "normal"),
+  mode: parseMode(process.env.BEECORK_MODE),
 };
 
 // Tool-call trace, recorded only when config.traceFile is set (for the eval).
