@@ -40,6 +40,19 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  // Detach BEFORE any await. reconcile() below starts with a fetch to the bridge, and until that
+  // resolves the debugger is still attached to the newly-loaded page — with tabOrigins still holding
+  // the PREVIOUS origin, so events get stamped with an approved site they did not come from.
+  if (changeInfo.url && watched.has(tabId)) {
+    const o = originOf(changeInfo.url);
+    const site = o && config.pairedSites.find((s) => s.origin === o);
+    if (!site || !(site.auto || requestedOrigins.has(o))) {
+      stop(tabId); // leaving the approved set — detach now, and drop the stale origin stamp
+      tabOrigins.delete(tabId);
+      return;
+    }
+    tabOrigins.set(tabId, o); // still approved: re-stamp immediately so nothing carries the old one
+  }
   // Re-evaluate when a tab finishes loading or changes URL.
   if (changeInfo.status === "complete" || changeInfo.url) reconcile();
 });
@@ -266,6 +279,10 @@ function onDebuggerEvent(source, method, params) {
       ts: Date.now(),
     });
   } else if (method === "Network.requestWillBeSent") {
+    // FIFO cap: streaming requests (EventSource, long-poll) never emit loadingFinished/Failed, so
+    // without this the map grows for as long as the service worker lives — which an attached
+    // debugger keeps alive indefinitely. Map preserves insertion order, so the first key is oldest.
+    if (reqInfo.size >= 2000) reqInfo.delete(reqInfo.keys().next().value);
     reqInfo.set(params.requestId, { method: params.request?.method, url: params.request?.url });
   } else if (method === "Network.responseReceived") {
     const info = reqInfo.get(params.requestId);

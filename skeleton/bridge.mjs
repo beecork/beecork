@@ -18,12 +18,16 @@
 //     ~/.beecork/skeleton) instead of whatever cwd it was launched from.
 
 import http from "node:http";
-import { writeFile, readFile, rename, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { writeFile, readFile, rename, mkdir, chmod } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 const PORT = Number(process.env.BEECORK_SKELETON_PORT) || 8317;
-const HOME = process.env.BEECORK_SKELETON_HOME || process.cwd();
+// NOT process.cwd(): the header advertises `node skeleton/bridge.mjs` as a supported way to run this,
+// and from a repo root that dropped the pairing token AND the captured browser data into the user's
+// repository. Mirrors src/skeleton.ts's skeletonHome() so both halves agree on one fixed home.
+const HOME = process.env.BEECORK_SKELETON_HOME || join(homedir(), ".beecork", "skeleton");
 const FILE = resolve(HOME, "dev-signals.jsonl");
 const TMP = FILE + ".tmp";
 const TOKEN_FILE = resolve(HOME, ".beecork-token");
@@ -65,7 +69,12 @@ let chain = Promise.resolve();
 function persist() {
   chain = chain
     .then(async () => {
-      await writeFile(TMP, buffer.length ? buffer.join("\n") + "\n" : "");
+      // Owner-only, like the token six lines up. This file holds console text and request URLs
+      // captured from the user's real logged-in tabs on production sites — it is the more sensitive
+      // of the two. BOTH steps are required: `mode` is ignored when a crash-leftover TMP already
+      // exists, and chmod'ing the FINAL file would be undone by the next rename.
+      await writeFile(TMP, buffer.length ? buffer.join("\n") + "\n" : "", { mode: 0o600 });
+      await chmod(TMP, 0o600).catch(() => {});
       await rename(TMP, FILE);
     })
     .catch((e) => console.error("[skeleton] persist failed:", e));
@@ -77,7 +86,18 @@ function persist() {
 // origin and passes. No CORS header is set on these routes on purpose.
 const fromWebPage = (req) => /^https?:\/\//i.test(req.headers.origin || "");
 
+// DNS-rebinding defense, and the load-bearing one. The Origin check above is bypassable two ways: a
+// browser sends NO Origin on a same-origin GET fetch, and a sandboxed iframe / data: / blob: document
+// sends the literal string "null" — both slip past /^https?:\/\//. So a page on evil.com rebound to
+// 127.0.0.1 reaches us looking like a local client. What it CANNOT forge is the Host header. Both
+// real clients (the extension and beecork's own fetch) use "localhost:<port>".
+// The port group is optional so a bridge on :80 doesn't 403 itself; the anchors are what reject
+// "localhost.evil.com" and "127.0.0.1.nip.io".
+const badHost = (req) => !/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host || "");
+
 const server = http.createServer((req, res) => {
+  // First, before any route: this covers /ingest and /test too, which had no Origin gate at all.
+  if (badHost(req)) return void res.writeHead(403).end("forbidden");
   lastActivity = Date.now();
 
   // Liveness + identity marker: lets beecork tell OUR bridge apart from some other
@@ -123,7 +143,10 @@ const server = http.createServer((req, res) => {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       try {
-        const { origin: site, ttlMs } = JSON.parse(body || "{}");
+        const { origin: site, ttlMs, token } = JSON.parse(body || "{}");
+        // Token-gated like /ingest. Without this any local process could turn on capture for a site
+        // the user had deliberately left on-demand.
+        if (token !== TOKEN) return void res.writeHead(401).end("unauthorized");
         if (site) watchRequests.set(String(site), Date.now() + (Number(ttlMs) || 10 * 60 * 1000));
         res.writeHead(200).end("ok");
       } catch {
