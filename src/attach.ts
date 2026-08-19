@@ -71,7 +71,15 @@ export async function loadImage(userPath: string): Promise<LoadedImage> {
   if (bytes > config.maxImageBytes) {
     return { ok: false, reason: `${userPath} is ${(bytes / 1_000_000).toFixed(1)} MB — over the ${(config.maxImageBytes / 1_000_000).toFixed(0)} MB limit` };
   }
-  const buf = await readFile(abs);
+  // Guarded like the stat above: a file you can stat but not READ (mode 0600 owned by someone else)
+  // throws EACCES here. Unguarded, that rejection escaped the REPL loop into main().catch and took
+  // the whole conversation with it.
+  let buf: Buffer;
+  try {
+    buf = await readFile(abs);
+  } catch {
+    return { ok: false, reason: `${userPath} could not be read (permission denied?)` };
+  }
   const mime = sniffImage(buf); // magic bytes, never the extension
   if (!mime) return { ok: false, reason: `${userPath} is not a PNG, JPEG, WebP or GIF` };
   return { ok: true, part: imagePart(mime, buf), mime, bytes, abs };

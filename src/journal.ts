@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { config } from "./config";
 import type { ToolCall, ToolOutcome, ToolFailureCode } from "./types";
 
-export type TurnStatus = "completed" | "cancelled" | "error" | "step_limit";
+export type TurnStatus = "completed" | "cancelled" | "error" | "step_limit" | "empty";
 
 export type AgentEvent =
   | { type: "session_started"; model: string; cwd: string }

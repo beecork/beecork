@@ -11,7 +11,7 @@ import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
 import { textOf, stripImagesForSave } from "./images";
 import { ensureProjectBeecork } from "./beecorkDir";
-import type { Message, Content, ContentPart } from "./types";
+import type { Message, Content, ContentPart, ToolCall } from "./types";
 
 const BEECORK = ".beecork";
 
@@ -196,6 +196,14 @@ export async function saveReasoningPreference(reasoningEffort: string): Promise<
 
 const sessionsDir = () => join(process.cwd(), BEECORK, "sessions");
 
+// What persist() writes: the live conversation SEALED, without the system prompt.
+// runTurn's abort/error paths already seal, but the SIGNAL and CRASH paths write the raw live array —
+// which legitimately sits mid-tool-group. Saving that unsealed is how closing your terminal mid-edit
+// lost the edit: the file was on disk, the restored transcript said the turn never happened.
+export function sessionForSave(messages: Message[]): Message[] {
+  return sealInterruptedToolCalls(messages).slice(1);
+}
+
 // Save a conversation (without the system prompt) to .beecork/sessions/, for /resume.
 // Atomic (temp file + rename) so a crash mid-write can't truncate a session, and owner-only
 // (the transcript may contain file contents / command output the model read).
@@ -272,34 +280,50 @@ export function sanitizeSession(raw: unknown): Message[] | null {
     if (content === INVALID) return null;
     const msg: Message = { role, content };
     const tc = (m as { tool_calls?: unknown }).tool_calls;
-    if (Array.isArray(tc)) msg.tool_calls = tc as Message["tool_calls"];
+    if (tc !== undefined) {
+      if (!Array.isArray(tc)) return null;
+      const calls = sanitizeToolCalls(tc);
+      if (calls === INVALID) return null;
+      if (calls.length) msg.tool_calls = calls;
+    }
     const tcid = (m as { tool_call_id?: unknown }).tool_call_id;
     if (typeof tcid === "string") msg.tool_call_id = tcid;
     out.push(msg);
   }
-  return dropIncompleteToolTail(out);
+  // A `tool` result whose call appears nowhere above it is a FORGED result — the shape that plants
+  // "the user already approved run_bash" into history. Providers reject it too. dropIncompleteToolTail
+  // only ever guarded the TAIL, so this was reachable anywhere earlier in the file.
+  const called = new Set<string>();
+  for (const m of out) {
+    if (m.role === "assistant") for (const c of m.tool_calls ?? []) called.add(c.id);
+    if (m.role === "tool" && (!m.tool_call_id || !called.has(m.tool_call_id))) return null;
+  }
+  // SEAL rather than truncate. The old dropIncompleteToolTail deleted the whole trailing group, which
+  // is how a crash-persisted session lost tool work that had already reached the disk (the file was
+  // written, the transcript said it never happened). Sealing keeps every completed result and
+  // backfills a note for the calls that never ran.
+  return sealInterruptedToolCalls(out);
 }
 
-// A crash / SIGTERM / SIGHUP *during* a turn bypasses runTurn's abort-rollback and can persist the
-// conversation mid-tool-group — a trailing assistant with tool_calls whose tool results weren't all
-// pushed yet. Resuming that would send an assistant→tool group with a missing result, which providers
-// reject. So drop the trailing incomplete group (rollback-style, matching runTurn's snapshot behavior —
-// discard the incomplete turn rather than backfill placeholder results). Exported for the test.
-export function dropIncompleteToolTail(messages: Message[]): Message[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === "assistant" && m.tool_calls?.length) {
-      const unanswered = new Set(m.tool_calls.map((t) => t.id));
-      for (let j = i + 1; j < messages.length; j++) {
-        const mj = messages[j];
-        if (mj.role === "tool" && mj.tool_call_id) unanswered.delete(mj.tool_call_id);
-        else break; // a non-tool message ends this tool group
-      }
-      return unanswered.size > 0 ? messages.slice(0, i) : messages; // incomplete → drop from this assistant on
-    }
+// A restored session's tool_calls go straight to the provider AND into sealInterruptedToolCalls,
+// which indexes call.id. Session files live in the repo, so a cloned repo can plant one: validate the
+// shape structurally instead of casting, with the same deny-first rule sanitizeContent uses.
+// (A planted `tool_calls: [null]` used to THROW here, which readSession swallowed — so the session
+// silently vanished from /resume and from the picker.)
+function sanitizeToolCalls(raw: unknown[]): ToolCall[] | typeof INVALID {
+  const out: ToolCall[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== "object") return INVALID;
+    const { id, function: fn } = c as { id?: unknown; function?: unknown };
+    if (typeof id !== "string" || !id) return INVALID;
+    if (!fn || typeof fn !== "object") return INVALID;
+    const { name, arguments: args } = fn as { name?: unknown; arguments?: unknown };
+    if (typeof name !== "string" || !name || typeof args !== "string") return INVALID;
+    out.push({ id, type: "function", function: { name, arguments: args } });
   }
-  return messages;
+  return out;
 }
+
 
 // The note a never-started tool call gets when a turn is cut short. handleToolCall pushes exactly
 // one result on EVERY path, so an unanswered call id can only mean the loop stopped before reaching
