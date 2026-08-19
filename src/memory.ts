@@ -4,12 +4,13 @@
 
 import { readFile, writeFile, readdir, mkdir, chmod, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { color, stripControl } from "./ui";
 import { normalizeEffort, config } from "./config";
 import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
 import { textOf, stripImagesForSave } from "./images";
+import { neutralize, neutralizeBlock } from "./html";
 import { ensureProjectBeecork } from "./beecorkDir";
 import type { Message, Content, ContentPart, ToolCall } from "./types";
 
@@ -68,8 +69,14 @@ export async function loadInstructions(): Promise<{ trusted: string; project: st
       if (content.length > MAX_FILE) content = content.slice(0, MAX_FILE) + "\n…(truncated)";
       if (total + content.length > MAX_TOTAL) content = content.slice(0, Math.max(0, MAX_TOTAL - total)) + "\n…(truncated)";
       total += content.length;
-      const block = `## From ${tildify(file)}\n${content}`;
-      (file.startsWith(homeBeecork) ? trusted : project).push(block);
+      // The TRUSTED tier is the user's own file and stays byte-exact — stripping chat-template
+      // markers there would mangle a cork.md that legitimately documents them (this repo's html.ts
+      // does). The PROJECT tier travels with a possibly-cloned repo, so it is neutralized: without it
+      // an AGENTS.md could contain a byte-exact copy of the tier-1 section heading and, appearing
+      // AFTER the "untrusted" warning, supersede it — later markdown headings win.
+      const isTrusted = file.startsWith(homeBeecork + sep); // + sep: "~/.beecork-notes/x" is NOT trusted
+      const block = `## From ${neutralize(tildify(file), 200)}\n${isTrusted ? content : neutralizeBlock(content, MAX_FILE)}`;
+      (isTrusted ? trusted : project).push(block);
       sources.push(file);
       if (total >= MAX_TOTAL) break;
     } catch {

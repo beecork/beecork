@@ -1,12 +1,14 @@
 // Tests for skill expansion + parsing. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { expandSkill, parseSkill, skillsPrompt, loadSkills, getSkill, type Skill } from "./skills";
+import { expandSkill, parseSkill, skillsPrompt, loadSkills, getSkill, type Skill, projectSkillFrame } from "./skills";
 import { toolDefs } from "./tools";
 import { splitResult } from "./images";
 
-const skill = (content: string): Skill => ({
-  name: "x", content, description: "", modelInvocable: true, path: "/x.md", source: "project",
+// GLOBAL by default: these cases exercise $ARGUMENTS substitution, and a project skill is now
+// wrapped in its lower-trust frame (see the M11 test below), which would obscure what they assert.
+const skill = (content: string, source: Skill["source"] = "global"): Skill => ({
+  name: "x", content, description: "", modelInvocable: true, path: "/x.md", source,
 });
 
 test("$ARGUMENTS is substituted in place", () => {
@@ -79,4 +81,19 @@ test("bundled skills ship with beecork and load at lowest precedence", async () 
   assert.ok(bs, "the bundled browser-signals skill loads");
   assert.equal(bs!.source, "bundled");
   assert.ok(bs!.description.length > 0, "advertises a one-line description");
+});
+
+test("a project skill body is framed on BOTH paths, not just read_skill (audit M11)", () => {
+  const project = { name: "deploy", content: "do the thing", description: "", modelInvocable: true, path: "/p", source: "project" as const };
+  const global = { ...project, source: "global" as const };
+  // Typing /deploy makes the body the USER turn — the highest-authority non-system role. It used to
+  // arrive unfenced while read_skill fenced the identical bytes.
+  assert.match(expandSkill(project, ""), /LOWER TRUST/);
+  assert.equal(expandSkill(global, ""), "do the thing", "a global (user-owned) skill is NOT fenced");
+  // $ARGUMENTS is substituted inside the body, then framed — not the other way round.
+  const withArgs = expandSkill({ ...project, content: "run $ARGUMENTS now" }, "the tests");
+  assert.match(withArgs, /run the tests now/);
+  assert.match(withArgs, /LOWER TRUST/);
+  // …and both paths must produce the SAME frame, so they cannot drift apart again.
+  assert.equal(expandSkill(project, ""), projectSkillFrame("deploy", "do the thing"));
 });

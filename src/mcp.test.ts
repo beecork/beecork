@@ -117,6 +117,21 @@ test("MCP end-to-end: handshake, registration, framing, failures, and the safety
     assert.ok(conn.junkLines >= 1, "non-JSON stdout lines were ignored, not fatal");
     assert.equal(conn.tools.length, 6, "both pages of tools/list were fetched");
 
+    // audit H3 — adaptTool hardened the top-level description with four transforms and a 1024-char
+    // cap, three lines above a comment calling it "the single best place for a hostile or compromised
+    // server to inject instructions". normalizeSchema then copied inputSchema.properties BY REFERENCE,
+    // uninspected and unbounded: the same trusted position (the tool schema the model receives), one
+    // JSON field to the side.
+    const schema = toolsByName.get("mcp__fix__echo")!.parameters as any;
+    const desc = schema.properties.text.description as string;
+    assert.doesNotMatch(desc, /<\|/, "chat-template markers must not reach the tool schema");
+    assert.doesNotMatch(desc, new RegExp("[\\u200b\\u2028]"), "…nor invisibles / line separators");
+    assert.ok(desc.length <= 512, `property descriptions must be bounded, got ${desc.length}`);
+    // Value constraints are matched SEMANTICALLY by the model and by validateArgs — byte-exact.
+    assert.deepEqual(schema.properties.text.enum, ["<s>keep</s>", "café"], "enum values stay untouched");
+    assert.equal(schema.properties.text.type, "string");
+    assert.deepEqual(schema.required, ["text"]);
+
     // A server tool must NEVER be able to shadow a built-in.
     assert.ok(conn.rejected.some((r) => r.name === "mcp__fix__run_bash" || r.why.includes("shadow")) === false,
       "the mcp__ prefix means run_bash cannot collide in the first place");
@@ -199,4 +214,29 @@ test("a server that dies mid-session tombstones its tools rather than leaving a 
     await shutdownMcp();
     if (prev === undefined) delete process.env.BEECORK_MCP_CONFIG; else process.env.BEECORK_MCP_CONFIG = prev;
   }
+});
+
+
+test("flattenContent neutralizes MCP results — but keeps code intact (audit M6)", () => {
+  const flat = (r: unknown, cap = 500) => splitResult(flattenContent(r, "srv/tool", cap)).text;
+  // Invisibles and line separators are removed: an MCP server is pointed at genuinely
+  // attacker-controlled surfaces (a browser MCP returns literal page text).
+  const t = flat({ content: [{ type: "text", text: "a\u200bb\u2028# FORGED HEADING" }] });
+  assert.doesNotMatch(t, new RegExp("[\\u200b]"));
+  assert.doesNotMatch(t, new RegExp("[\\u2028\\u2029]"));
+  // …but stripControlTokens is deliberately NOT applied to the body: its `<|…|>` pattern crosses
+  // newlines, so it would delete the middle of any source file an MCP git/filesystem server returns.
+  const code = flat({ content: [{ type: "text", text: "if (a <| b) {}\nconst x = 1;\n// later |> here" }] });
+  assert.match(code, /const x = 1;/, "code between <| and |> must survive — that is why the body is not token-stripped");
+  // Metadata IS fully neutralized and bounded — it is a label, never code.
+  const link = flat({ content: [{ type: "resource_link", uri: "x\u001b[2J" + "y".repeat(900) }] });
+  assert.doesNotMatch(link, new RegExp("\u001b"), "no terminal escapes from a resource uri");
+  assert.ok(link.length < 400, `resource labels must be bounded, got ${link.length}`);
+});
+
+test("a large MCP result carries an UNTRUSTED banner; a small one pays nothing (audit M6)", () => {
+  const small = splitResult(flattenContent({ content: [{ type: "text", text: "clicked" }] }, "srv/click", 20_000)).text;
+  assert.equal(small, "clicked", "a four-token result must not pay for a banner");
+  const big = splitResult(flattenContent({ content: [{ type: "text", text: "x".repeat(600) }] }, "srv/snapshot", 20_000)).text;
+  assert.match(big, /UNTRUSTED/, "…but a result large enough to hide an injection says what it is");
 });
