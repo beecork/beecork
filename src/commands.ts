@@ -5,6 +5,7 @@ import { writeFile, mkdir, chmod } from "node:fs/promises";
 import { config, RECOMMENDED_MODELS, EFFORTS, normalizeEffort } from "./config";
 import { state } from "./state";
 import { color, stripControl } from "./ui";
+import { startActivity } from "./activity";
 import { estimateTokens, contextBudget } from "./context";
 import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference, writePrivate } from "./memory";
 import { skillNames } from "./skills";
@@ -275,8 +276,16 @@ const hasVision = (m: OpenRouterModel): boolean => (m.architecture?.input_modali
 // /model <term>: search the full OpenRouter catalog; pick from a menu (TTY) or print.
 async function searchModels(term: string): Promise<void> {
   try {
-    const res = await fetch(config.modelsUrl, { signal: AbortSignal.timeout(config.webTimeoutMs) }); // don't hang forever
-    const all = ((await res.json()) as { data?: OpenRouterModel[] }).data ?? [];
+    // The catalog is ~2MB and can take a few seconds; without this, /model <term> looks like it
+    // swallowed the command.
+    const stopActivity = startActivity("searching models…");
+    let all: OpenRouterModel[];
+    try {
+      const res = await fetch(config.modelsUrl, { signal: AbortSignal.timeout(config.webTimeoutMs) }); // don't hang forever
+      all = ((await res.json()) as { data?: OpenRouterModel[] }).data ?? [];
+    } finally {
+      stopActivity();
+    }
     const matches = all.filter((m) => m.id.includes(term.toLowerCase())).slice(0, 30);
     if (matches.length === 0) {
       console.log(color.dim(`no models match "${term}"`) + "\n");

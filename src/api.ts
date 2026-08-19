@@ -10,7 +10,8 @@ import { config } from "./config";
 import type { ReasoningEffort } from "./config";
 import { state } from "./state";
 import { shouldSendReasoning } from "./capabilities";
-import { color, startSpinner, stripControl } from "./ui";
+import { color, stripControl } from "./ui";
+import { startActivity } from "./activity";
 import { createMarkdownStream } from "./markdown";
 import { TOOLS } from "./tools";
 import type { Message, ToolCall } from "./types";
@@ -155,7 +156,7 @@ export async function callModel(
     const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(config.apiTimeoutMs)]) : AbortSignal.timeout(config.apiTimeoutMs);
     // Start spinning BEFORE the request — so there's instant feedback during connect +
     // time-to-first-byte (often 1-2s), not a dead pause until the response lands. (Quiet child: no UI.)
-    const stopSpinner = quiet ? () => {} : startSpinner("thinking…");
+    const stopSpinner = quiet ? () => {} : startActivity("thinking…");
     let response: Response;
     try {
       response = await openRouterChat(body, sig);

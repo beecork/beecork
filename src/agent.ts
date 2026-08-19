@@ -6,6 +6,7 @@ import { config } from "./config";
 import { state, trace } from "./state";
 import type { Mode } from "./state";
 import { color, renderToolCall, summarizeResult, stripControl, diffPreview } from "./ui";
+import { startActivity } from "./activity";
 import { selectMenu } from "./input";
 import { renderShow } from "./show";
 import { callModel } from "./api";
@@ -320,7 +321,18 @@ async function runReadOnlyBatch(block: ToolCall[], messages: Message[], step: nu
     // unanswered call "did not run". Buffering the whole block meant completed work was both lost
     // AND mislabelled. Order is untouched — chunks are consecutive slices and Promise.all preserves
     // order within one, so results still reach the model in the model's own call order.
-    for (const p of await Promise.all(block.slice(i, i + config.maxParallelTools).map(runOne))) {
+    // A batch buffers ALL its output until the chunk resolves, so without this the terminal sits
+    // blank for however long the slowest call takes. Nothing else prints in here, so the indicator
+    // owns the line uncontested and is stopped before the results are flushed onto it.
+    const chunk = block.slice(i, i + config.maxParallelTools);
+    const stopActivity = startActivity(`${chunk.length} tool call${chunk.length === 1 ? "" : "s"}…`);
+    let done: Awaited<ReturnType<typeof runOne>>[];
+    try {
+      done = await Promise.all(chunk.map(runOne));
+    } finally {
+      stopActivity();
+    }
+    for (const p of done) {
       process.stdout.write(p.out + "\n");
       messages.push({ role: "tool", tool_call_id: p.call.id, content: noteImages(p.text, p.images, p.call.function.name, sink) });
     }
@@ -418,12 +430,25 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   const isExplore = call.function.name === "explore"; // narrates multiple lines during its run
   // Readable action line (no raw JSON). Printed before the tool runs; the result summary
   // completes the SAME line afterwards (todos + show + explore render their own lines below).
-  process.stdout.write("  " + renderToolCall(call.function.name, callArgs) + (isTodo || isShow || isExplore ? "\n" : ""));
+  const ownLines = isTodo || isShow || isExplore;
+  const actionLine = "  " + renderToolCall(call.function.name, callArgs);
+  process.stdout.write(actionLine + (ownLines ? "\n" : ""));
 
   // pass the cancel signal so Ctrl-C kills a running tool
   record({ type: "tool_started", turnId: deps.turnId, step, ...callFacts(call) });
   const startedAt = Date.now();
-  const outcome = await runTool(call, signal);
+  // Keep the action line moving while the tool runs — a test suite, a fetch or an MCP call is
+  // otherwise a dead pause where a slow command and a hung one look identical. The indicator redraws
+  // this same line and restores it on stop, so the summary below still completes it as before.
+  // Skipped for the three tools that print their OWN lines underneath: todos/show finish instantly,
+  // and explore drives its own indicator from inside (subagent.ts) between its narration lines.
+  const stopActivity = ownLines ? () => {} : startActivity("", { prefix: actionLine });
+  let outcome: Awaited<ReturnType<typeof runTool>>;
+  try {
+    outcome = await runTool(call, signal);
+  } finally {
+    stopActivity();
+  }
   record({ type: "tool_finished", callId: call.id, name: call.function.name, ms: Date.now() - startedAt, ...outcomeSummary(outcome) });
   const images = outcome.images;
   let result = modelText(outcome);
@@ -449,7 +474,14 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   // LAST edit in a batch) — verifyThisCall is false for earlier edits, so N edits don't trigger N checks.
   let verify: { ok: boolean; text: string } | null = null;
   if (verifyThisCall && config.verifyCommand && (call.function.name === "write_file" || call.function.name === "edit_file")) {
-    verify = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
+    // The auto-check can be a full typecheck/test run — the longest silent wait in a turn, and it
+    // happens AFTER the tool's own line is done, so without this nothing at all moves.
+    const stopVerify = startActivity("auto-check…", { prefix: actionLine });
+    try {
+      verify = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
+    } finally {
+      stopVerify();
+    }
     result += `\n\n[auto-check: ${config.verifyCommand}]\n${verify.text}`;
   }
   // Cap giant outputs so one read/command can't blow the window.

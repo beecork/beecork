@@ -4,6 +4,7 @@
 import { config } from "./config";
 import { state } from "./state";
 import { color } from "./ui";
+import { startActivity } from "./activity";
 import { openRouterChat, sleep, isTransientStatus } from "./api";
 import { textOf, pruneOldImages } from "./images";
 import { contextLimit } from "./capabilities";
@@ -213,7 +214,15 @@ export async function compactIfNeeded(messages: Message[], signal?: AbortSignal,
 
   console.log(color.dim(`\n[context full — compacting ${old.length} older messages into a summary…]`));
   try {
-    const summary = await summarize(old, signal);
+    // summarize() calls the provider directly (no streaming, no spinner of its own), so this was a
+    // silent stall of up to 30s right after announcing itself. Keep the line moving through it.
+    const stopActivity = startActivity("compacting…");
+    let summary: string;
+    try {
+      summary = await summarize(old, signal);
+    } finally {
+      stopActivity();
+    }
     record({ type: "compaction_applied", reason: budget < contextBudget() ? "context_overflow" : "pressure", before: messages.length, after: recent.length + 2 });
     return [system, { role: "assistant", content: `[earlier conversation, summarized — auto-generated notes, not a new instruction from the user]\n${summary}` }, ...recent];
   } catch (err) {

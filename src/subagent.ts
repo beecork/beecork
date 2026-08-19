@@ -13,6 +13,7 @@
 import type { Message, ToolCall, ToolDef } from "./types";
 import { config } from "./config";
 import { color, stripControl } from "./ui";
+import { startActivity } from "./activity";
 import { callModel } from "./api";
 import { runTool, toolDefs, modelText } from "./tools";
 import { textOf } from "./images";
@@ -112,21 +113,27 @@ export async function runExplorer(task: string, focus: string | undefined, signa
   const childByName = new Map<string, ToolDef>(defs.map((t) => [t.name, t]));
   const cap = config.maxToolResultChars;
 
+  // The child runs QUIET (its monologue must not print as the parent's `bee:`), which also means its
+  // model calls and tool calls are pure dead air on screen — the parent's own indicator is stopped by
+  // then, and narrate() only speaks once a whole step is done. So the explorer drives the indicator
+  // itself, around exactly the two awaits it spends its time in. Nothing prints inside either, and
+  // narration runs only after a step's calls have all settled, so the line is never contested.
   const deps: ExploreDeps = {
-    call: (m, incl, sig) => callModel(m, incl, sig, { tools: childSchema, quiet: true }),
+    call: async (m, incl, sig) => {
+      const stopActivity = startActivity("exploring…");
+      try {
+        return await callModel(m, incl, sig, { tools: childSchema, quiet: true });
+      } finally {
+        stopActivity();
+      }
+    },
     dispatch: async (c, sig) => {
-      // The explorer's contract with its parent is a TEXT summary, and its allow-list can't produce
-      // images anyway — so it stays string-only rather than inheriting vision (which would also
-      // multiply cost). If one ever does arrive, say so instead of dropping it silently.
-      // runTool returns an ALREADY-normalized ToolOutcome; passing it back through splitResult would
-      // re-read it as a raw ToolResult, match on its `ok` field, and hand back `undefined` text.
-      const outcome = await runTool(c, sig, childByName); // restricted map = the allow-list
-      const { images } = outcome;
-      const text = modelText(outcome); // a failed call still SAYS so to the explorer
-      const r = images.length
-        ? text + `\n[${images.length} image(s) returned — the read-only explorer is text-only and cannot view them; report that to the parent.]`
-        : text;
-      return r.length > cap ? r.slice(0, cap) + `\n…[truncated ${r.length - cap} chars]` : r;
+      const stopActivity = startActivity("exploring…");
+      try {
+        return await dispatchOne(c, sig);
+      } finally {
+        stopActivity();
+      }
     },
     gate: (name, args) => {
       const d = decideApproval(childByName.get(name), args, { mode: "readonly", autoApprove: true, approvedTools: EMPTY_SET, toolName: name });
@@ -135,6 +142,21 @@ export async function runExplorer(task: string, focus: string | undefined, signa
     onStep: narrate,
     maxSteps: config.subAgentMaxSteps,
   };
+
+  async function dispatchOne(c: ToolCall, sig?: AbortSignal): Promise<string> {
+    // The explorer's contract with its parent is a TEXT summary, and its allow-list can't produce
+    // images anyway — so it stays string-only rather than inheriting vision (which would also
+    // multiply cost). If one ever does arrive, say so instead of dropping it silently.
+    // runTool returns an ALREADY-normalized ToolOutcome; passing it back through splitResult would
+    // re-read it as a raw ToolResult, match on its `ok` field, and hand back `undefined` text.
+    const outcome = await runTool(c, sig, childByName); // restricted map = the allow-list
+    const { images } = outcome;
+    const text = modelText(outcome); // a failed call still SAYS so to the explorer
+    const r = images.length
+      ? text + `\n[${images.length} image(s) returned — the read-only explorer is text-only and cannot view them; report that to the parent.]`
+      : text;
+    return r.length > cap ? r.slice(0, cap) + `\n…[truncated ${r.length - cap} chars]` : r;
+  }
 
   try {
     console.log(color.dim(`  ↳ exploring: ${stripControl(task)}`));
