@@ -1,9 +1,12 @@
+.DS_Store
 node_modules/
 .env
 dist/
 eval/failures/
 eval/good/
 .beecork/sessions/
+.beecork/journal/
+.beecork/ratings/
 .beecork/memory.md
 audits/
 .claude/think-it-through/

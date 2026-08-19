@@ -24,6 +24,7 @@ import { renderTodos, color } from "./ui";
 import { showPayload } from "./show";
 import { sniffImage, imagePart, splitResult } from "./images";
 import { probeSandbox, wrapCommand, unconfinedNotice, type SpawnSpec } from "./sandbox";
+import { ensureProjectBeecork } from "./beecorkDir";
 import type { ToolCall, ToolDef, TodoItem, ToolResult, ToolOutcome, ToolFailure, ToolFailureCode } from "./types";
 
 // Run a shell command, capturing stdout/stderr (capped). On timeout, kill the whole
@@ -893,8 +894,7 @@ export const toolDefs: ToolDef[] = [
     },
     run: async (args) => {
       try {
-        const dir = join(process.cwd(), ".beecork");
-        await mkdir(dir, { recursive: true });
+        const dir = await ensureProjectBeecork();
         const file = join(dir, "memory.md");
         // Neutralized and capped, which is exactly what this tool already promises ("One short line
         // per memory"). Newlines used to survive, and memory.md is read back into the system prompt

@@ -103,7 +103,21 @@ async function readJsonFile(path: string): Promise<Record<string, any> | null> {
 // it is honored ONLY from the user's global ~/.beecork/settings.json — never from a
 // project file that travels with a (possibly cloned) repo. A project file that tries
 // is flagged so the user is warned, not silently exposed.
+// Files written before the owner-only hardening keep their old mode until something rewrites them.
+// settings.json in particular holds alwaysAllow and per-MCP-server env credentials, and a user who
+// never touches /model again would never trigger a rewrite. Once per process, best-effort.
+let modesRepaired = false;
+async function repairHomeModes(): Promise<void> {
+  if (modesRepaired) return;
+  modesRepaired = true;
+  const home = join(homedir(), BEECORK);
+  for (const f of ["settings.json", "config.json", "project-approvals.json", join("skeleton", "dev-signals.jsonl"), join("skeleton", ".beecork-token")]) {
+    await chmod(join(home, f), 0o600).catch(() => {}); // ENOENT → nothing to fix
+  }
+}
+
 export async function loadSettings(): Promise<{ model?: string; reasoningEffort?: ReasoningEffort; alwaysAllow: string[]; projectAlwaysAllowIgnored: boolean; mcpServers: Record<string, unknown>; projectMcpIgnored: boolean }> {
+  await repairHomeModes();
   const paths = beecorkPaths("settings.json"); // [0] = global ~/.beecork, rest = project tree
   let model: string | undefined;
   let reasoningEffort: ReasoningEffort | undefined;
@@ -231,6 +245,9 @@ export async function saveSession(messages: Message[]): Promise<void> {
 const MAX_SESSIONS = 50; // per project; /resume rarely needs more, and the dir shouldn't grow forever
 async function pruneSessions(dir: string): Promise<void> {
   const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
+  // Sessions written before the owner-only hardening are still 0644. Repair them here rather than
+  // only on read: a session that is never /resume'd would otherwise stay world-readable forever.
+  for (const f of files) await chmod(join(dir, f), 0o600).catch(() => {});
   if (files.length <= MAX_SESSIONS) return;
   // Filenames are `${Date.now()}.json` (fixed-width ms) → lexical sort == chronological. Drop the oldest.
   for (const f of files.sort().slice(0, files.length - MAX_SESSIONS)) await unlink(join(dir, f)).catch(() => {});

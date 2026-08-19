@@ -25,7 +25,7 @@ const { config } = await import("./config");
 const { state } = await import("./state");
 const { installScriptedModel } = await import("./scripted");
 const { runExplorer } = await import("./subagent");
-const { startJournal, flushJournal, journalPath, resetJournalForTests } = await import("./journal");
+const { startJournal, flushJournal, journalPath, resetJournalForTests, record } = await import("./journal");
 import type { ScriptStep } from "./scripted";
 import type { Message } from "./types";
 
@@ -603,4 +603,42 @@ test("an empty completion does not issue a second, billed model call", async () 
   assert.equal(model.consumed(), 1, "the wrap-up call must not fire — the model just said nothing");
   assert.match(narration, /empty response/);
   assert.doesNotMatch(narration, /step limit/, "…and the narration must not contradict itself");
+});
+
+
+// ---------------------------------------------------------------------------
+// The journal's own stated invariant: SUMMARIES, never full payloads.
+// ---------------------------------------------------------------------------
+
+test("record() bounds free text — including fields nobody remembered to wrap (audit M4)", async () => {
+  resetJournalForTests();
+  await startJournal("test/model");
+  record({ type: "turn_started", turnId: "t1", input: "x".repeat(50_000) });
+  // The one that matters most: api.ts builds this from `await response.text()`, so it is the ENTIRE
+  // provider response body — remote-controlled and unbounded, in a file that promises summaries.
+  record({ type: "turn_finished", turnId: "t1", status: "error", steps: 1, error: "HTTP 400: " + "y".repeat(100_000) });
+  await flushJournal();
+  const rows = readFileSync(journalPath()!, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+  const started = rows.find((r) => r.type === "turn_started");
+  assert.ok(started.input.length < 1100, `prompt must be capped, got ${started.input.length}`);
+  assert.match(started.input, /…\[\+\d+\]$/, "…and marked, so a truncated row is not mistaken for a complete one");
+
+  const finished = rows.find((r) => r.type === "turn_finished");
+  assert.ok(finished.error.length < 600, `provider body must be capped, got ${finished.error.length}`);
+
+  // Identity fields are never touched — truncating one would break replay correlation.
+  assert.equal(finished.turnId, "t1");
+  assert.equal(finished.status, "error");
+});
+
+test("a NEW journal field is bounded by default, not by remembering (audit M4)", async () => {
+  resetJournalForTests();
+  await startJournal("test/model");
+  // The invariant itself, not today's three fields: the old shape applied brief() at three call
+  // sites and forgot three others. Cast in a field that does not exist yet.
+  record({ type: "step_started", turnId: "t1", step: 0, somethingNew: "z".repeat(9000) } as never);
+  await flushJournal();
+  const row = readFileSync(journalPath()!, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+  assert.ok(row.somethingNew.length < 600, `an unanticipated field must still be bounded, got ${row.somethingNew.length}`);
 });

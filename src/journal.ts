@@ -24,6 +24,7 @@
 import { appendFile, mkdir, chmod, readdir, unlink, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { config } from "./config";
+import { ensureProjectBeecork } from "./beecorkDir";
 import type { ToolCall, ToolOutcome, ToolFailureCode } from "./types";
 
 export type TurnStatus = "completed" | "cancelled" | "error" | "step_limit" | "empty";
@@ -81,8 +82,7 @@ export async function startJournal(model: string): Promise<void> {
     return;
   }
   try {
-    const dir = journalDir();
-    await mkdir(dir, { recursive: true });
+    const dir = await ensureProjectBeecork("journal");
     file = join(dir, `${Date.now()}.jsonl`);
     await appendFile(file, "", "utf8");
     await chmod(file, 0o600).catch(() => {}); // may name paths and commands the agent touched
@@ -100,10 +100,29 @@ export async function startJournal(model: string): Promise<void> {
  * and must not have to care whether journaling works. The row is buffered; flushJournal() puts it on
  * disk, and the loop flushes at tool boundaries so a hard kill still leaves the record behind.
  */
+// Keys whose values are identity or enum — truncating one would break replay correlation. Everything
+// NOT listed is free text and gets capped, so a field added to AgentEvent later is bounded BY DEFAULT
+// and can only become unbounded through a deliberate entry here. The previous shape was the opposite:
+// brief() was applied at three call sites and three others were simply forgotten — including
+// turn_finished.error, which carries the ENTIRE provider response body (api.ts builds it from
+// `await response.text()`), i.e. an unbounded remote-controlled value in a file that promises summaries.
+const NEVER_TRUNCATE = new Set(["type", "v", "seq", "time", "turnId", "callId", "id", "name", "decision", "status", "code", "model"]);
+const LIMIT: Record<string, number> = { input: 1000, note: 500, error: 500, text: 300, args: 400, summary: 200 };
+const MAX_ARRAY = 50;
+
+function bound(value: unknown, key?: string): unknown {
+  if (typeof value === "string") return key && NEVER_TRUNCATE.has(key) ? value : brief(value, LIMIT[key ?? ""] ?? 500);
+  if (Array.isArray(value)) return value.slice(0, MAX_ARRAY).map((v) => bound(v));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, bound(v, k)]));
+  return value; // numbers, booleans, null
+}
+
 export function record(ev: AgentEvent): void {
   if (!file || disabled) return;
-  const row: JournalRow = { v: 1, seq: ++seq, time: new Date().toISOString(), ...ev };
   try {
+    // bound() inside the try: record() is documented never to throw and sits on the hot path, so a
+    // pathological future event must degrade to a dropped row exactly as an unstringifiable one does.
+    const row = bound({ v: 1, seq: ++seq, time: new Date().toISOString(), ...ev }) as JournalRow;
     pending.push(JSON.stringify(row) + "\n");
   } catch {
     /* an un-stringifiable row is dropped rather than breaking the turn */

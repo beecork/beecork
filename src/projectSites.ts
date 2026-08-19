@@ -7,6 +7,8 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureProjectBeecork } from "./beecorkDir";
+import { writeJsonPrivate } from "./memory";
 
 type SkeletonConfig = { origins?: string[] };
 const dir = () => join(process.cwd(), ".beecork");
@@ -58,7 +60,7 @@ export async function addProjectOrigin(origin: string): Promise<boolean> {
   if (!o || isLoopbackOrigin(o)) return false;
   const cur = await loadProjectOrigins();
   if (cur.includes(o)) return false;
-  await mkdir(dir(), { recursive: true });
-  await writeFile(file(), JSON.stringify({ origins: [...cur, o] }, null, 2) + "\n");
+  await ensureProjectBeecork();
+  await writeJsonPrivate(file(), { origins: [...cur, o] });
   return true;
 }

@@ -6,7 +6,7 @@ import { config, RECOMMENDED_MODELS, EFFORTS, normalizeEffort } from "./config";
 import { state } from "./state";
 import { color, stripControl } from "./ui";
 import { estimateTokens, contextBudget } from "./context";
-import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference } from "./memory";
+import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference, writePrivate } from "./memory";
 import { skillNames } from "./skills";
 import { selfUpdate, shadowWarning } from "./update";
 import { renderMcp, renderMcpTools, reconnect, mcpReady } from "./mcp";
@@ -16,6 +16,8 @@ import { selectMenu } from "./input";
 import { chromeEnabled, chromePick } from "./chrome";
 import { ansi } from "./ansi";
 import type { Message } from "./types";
+import { ensureProjectBeecork } from "./beecorkDir";
+import { join } from "node:path";
 
 // One picker abstraction. In the pinned-chrome UI it renders in the chrome's OWN
 // dropdown (chromePick) so it never fights the scroll region; otherwise it uses the inline selectMenu.
@@ -179,13 +181,13 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   } else if (cmd === "/good" || cmd === "/bad") {
     // Flywheel capture: save this conversation. A /bad one is a candidate to
     // turn into a new eval task later (you write the checker).
-    const dir = cmd === "/bad" ? "eval/failures" : "eval/good";
+    // .beecork/ratings/, NOT a top-level eval/: beecork runs inside other people's repos, where a new
+    // top-level eval/ collides with their own and is far likelier to be swept up by `git add -A`.
     try {
-      await mkdir(dir, { recursive: true });
-      const file = `${dir}/${Date.now()}.json`;
+      const dir = await ensureProjectBeecork(join("ratings", cmd === "/bad" ? "failures" : "good"));
+      const file = join(dir, `${Date.now()}.json`);
       // stripImagesForSave: without it a base64 screenshot lands in eval/ inside the working tree.
-      await writeFile(file, JSON.stringify({ rating: cmd.slice(1), model: state.model, messages: stripImagesForSave(messages) }, null, 2), "utf8");
-      await chmod(file, 0o600).catch(() => {}); // the transcript may contain file contents / command output
+      await writePrivate(file, JSON.stringify({ rating: cmd.slice(1), model: state.model, messages: stripImagesForSave(messages) }, null, 2));
       console.log(
         color.cyan(`saved this conversation → ${file}`) +
           (cmd === "/bad" ? " (turn it into an eval task later)" : "") +
