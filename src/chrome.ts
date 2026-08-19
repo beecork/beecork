@@ -49,6 +49,8 @@ let pickItems: { label: string; hint?: string; value: unknown }[] | null = null;
 let pickSel = 0;
 let pickTitle = "";
 let pickResolve: ((v: unknown) => void) | null = null;
+let history: string[] = []; // shared with index.ts (the classic editor's array) — mutated on submit
+let hist = 0;               // recall cursor; == history.length means "the new line being typed"
 let branch = ""; // cached git branch (+"*" dirty)
 let tokensOf: () => number = () => 0;
 type LineResult = { type: "line"; value: string } | { type: "quit" };
@@ -148,6 +150,14 @@ function drawStatus(): void {
 function drawBorder(row: number): void {
   out(ansi.moveTo(row) + ansi.clearLine + color.dim("─".repeat(Math.max(1, cols()))));
 }
+// Where up (dir -1) / down (dir +1) land in the history, and what sits there. `i` is the recall
+// cursor: i === len means "the new, unsubmitted line", so walking down off the end gives a blank
+// line back rather than sticking on the newest entry. PURE + exported so the off-by-one is
+// regression-tested (chrome.test.ts) — the classic editor's copy in input.ts is the same walk.
+export const historyStep = (len: number, i: number, dir: -1 | 1): number =>
+  dir < 0 ? Math.max(0, i - 1) : Math.min(len, i + 1);
+export const historyAt = (h: string[], i: number): string => (i >= h.length ? "" : h[i]);
+
 const closePick = () => { pickItems = null; pickSel = 0; pickTitle = ""; };
 // Blocking chooser rendered IN the chrome's dropdown (not the inline selectMenu, which fought the
 // scroll region and orphaned the cursor). Used by /model, /effort, /resume in chrome mode. Resolves
@@ -173,7 +183,12 @@ function drawInput(): void {
   const ci = cur - start;
   let body: string;
   if (!buf) {
-    body = ansi.reverse + " " + ansi.reverseOff + color.dim("type a message · / for commands · Shift+Tab mode");
+    // Mid-turn the same box steers the running turn, so it advertises the keys that apply THEN —
+    // Esc to interrupt was invisible here, which is a good way to own a key nobody knows about.
+    const hint = turnActive
+      ? "type to steer · Esc to interrupt"
+      : "type a message · / for commands · ↑ history · Shift+Tab mode";
+    body = ansi.reverse + " " + ansi.reverseOff + color.dim(hint);
   } else {
     const at = ci < shown.length ? shown[ci] : " ";
     body = shown.slice(0, ci) + ansi.reverse + at + ansi.reverseOff + (ci < shown.length ? shown.slice(ci + 1) : "");
@@ -259,6 +274,18 @@ function resetBurst(): void {
   burstLen = 0;
   pendingRender = false;
 }
+// Walk the history into the input box. Reaching the bottom returns the empty new line.
+function recall(dir: -1 | 1): void {
+  if (!history.length) return;
+  const next = historyStep(history.length, hist, dir);
+  if (next === hist) return;
+  hist = next;
+  buf = historyAt(history, hist);
+  cur = buf.length;
+  edited();
+  render();
+}
+
 function onKey(str: string | undefined, key: Key | undefined): void {
   // Picker mode (chromePick): the dropdown is a blocking chooser — arrows move, Enter selects, Esc/Ctrl-C cancels.
   if (pickItems) {
@@ -281,9 +308,14 @@ function onKey(str: string | undefined, key: Key | undefined): void {
     else { const r = onResult; onResult = null; r?.({ type: "quit" }); } // idle → quit
     return;
   }
-  if (key?.name === "escape") { // close the menu if open, else clear the line
-    if (mm.length) { menuHidden = true; render(); }
-    else if (buf) { buf = ""; cur = 0; render(); }
+  // Esc: close the menu, else clear the line, else — mid-turn — ABORT the turn. That last step was
+  // missing, so in the pinned chrome Esc could not interrupt at all and Ctrl-C was the only way out
+  // (the classic editor in index.ts has always aborted on Esc). Same two-stage shape as Ctrl-C
+  // below, so neither key can throw away something you were half-way through typing.
+  if (key?.name === "escape") {
+    if (mm.length) { menuHidden = true; render(); return; }
+    if (buf) { buf = ""; cur = 0; edited(); render(); return; }
+    if (turnActive) onInterrupt?.();
     return;
   }
   if (key?.name === "tab" && key.shift) { state.mode = nextMode(state.mode); render(); return; }
@@ -291,8 +323,16 @@ function onKey(str: string | undefined, key: Key | undefined): void {
     if (mm.length) { buf = mm[sel].name + " "; cur = buf.length; edited(); render(); }
     return;
   }
-  if (key?.name === "up") { if (mm.length) { sel = (sel - 1 + mm.length) % mm.length; render(); } return; }
-  if (key?.name === "down") { if (mm.length) { sel = (sel + 1) % mm.length; render(); } return; }
+  // Arrows drive the slash menu while it's open; otherwise they recall history, which the pinned
+  // input simply never had (only the classic editor did), so up/down did nothing at the prompt.
+  if (key?.name === "up") {
+    if (mm.length) { sel = (sel - 1 + mm.length) % mm.length; render(); } else recall(-1);
+    return;
+  }
+  if (key?.name === "down") {
+    if (mm.length) { sel = (sel + 1) % mm.length; render(); } else recall(1);
+    return;
+  }
   if (key?.name === "return" || key?.name === "enter") {
     // A newline mid-burst (a multi-line PASTE) or an explicit Shift/Alt+Enter is a literal newline,
     // not a submit — so pasted text isn't split across submissions. A lone Enter submits.
@@ -314,6 +354,8 @@ function onKey(str: string | undefined, key: Key | undefined): void {
       }
       return;
     }
+    if (line.trim()) history.push(line); // recallable with ↑ (steering notes are not recorded, as in the classic editor)
+    hist = history.length;
     if (line.trim()) out("\n" + mark() + line + "\n"); // echo AT the content cursor (no reposition → no gap)
     const r = onResult; onResult = null; r?.({ type: "line", value: line });
     return;
@@ -331,12 +373,14 @@ function onKey(str: string | undefined, key: Key | undefined): void {
 }
 
 // Turn on the pinned chrome: reserve the bottom two rows, draw, start timers, own the keyboard.
-export function startChrome(opts: { tokens: () => number; items: MenuItem[]; onInterrupt: () => void }): void {
+export function startChrome(opts: { tokens: () => number; items: MenuItem[]; onInterrupt: () => void; history?: string[] }): void {
   if (active || !process.stdout.isTTY) return;
   active = true;
   tokensOf = opts.tokens;
   allItems = opts.items;
   onInterrupt = opts.onInterrupt;
+  history = opts.history ?? history; // the SAME array the classic editor uses, so a session has one history
+  hist = history.length;
   out(ansi.bracketedPasteOff); // Apple Terminal draws visible [ ] brackets otherwise
   pollGit();
   restoreKeys = pushKeyHandler(onKey);

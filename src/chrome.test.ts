@@ -2,7 +2,7 @@
 // escapes into the pinned status bar. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { statusText, parseGitStatus, chromeGeometry } from "./chrome";
+import { statusText, parseGitStatus, chromeGeometry, historyStep, historyAt } from "./chrome";
 import { stripAnsi } from "./ui";
 import { state } from "./state";
 
@@ -53,4 +53,26 @@ test("chromeGeometry never emits a row below 1, however small the terminal", () 
       assert.ok(Number.isInteger(v) && v >= 1, `row ${v} at ${r} rows`); // a negative row is an invalid escape
     }
   }
+});
+
+// --- history recall in the pinned input --------------------------------------
+
+test("historyStep/historyAt walk the history and come back to a blank new line", () => {
+  const h = ["one", "two", "three"];
+  let i = h.length; // the new, unsubmitted line
+  assert.equal(historyAt(h, i), "");
+  i = historyStep(h.length, i, -1); assert.equal(historyAt(h, i), "three"); // ↑ = most recent first
+  i = historyStep(h.length, i, -1); assert.equal(historyAt(h, i), "two");
+  i = historyStep(h.length, i, -1); assert.equal(historyAt(h, i), "one");
+  i = historyStep(h.length, i, -1); assert.equal(historyAt(h, i), "one");   // ↑ stops at the oldest
+  i = historyStep(h.length, i, 1);  assert.equal(historyAt(h, i), "two");
+  i = historyStep(h.length, i, 1);  assert.equal(historyAt(h, i), "three");
+  i = historyStep(h.length, i, 1);  assert.equal(historyAt(h, i), "");      // ↓ off the end = blank again
+  i = historyStep(h.length, i, 1);  assert.equal(historyAt(h, i), "");      // and stays there
+});
+
+test("historyStep on an empty history never moves off zero", () => {
+  assert.equal(historyStep(0, 0, -1), 0);
+  assert.equal(historyStep(0, 0, 1), 0);
+  assert.equal(historyAt([], 0), "");
 });

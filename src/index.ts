@@ -279,6 +279,7 @@ async function main() {
       tokens: () => estimateTokens(messages),
       items: [...SLASH_COMMANDS, ...skills.map((s) => ({ name: "/" + s.name, desc: "skill" }))],
       onInterrupt: () => activeTurn?.abort(),
+      history, // the same array readPrompt uses — one history per session, whichever editor is active
     });
 
   while (true) {
