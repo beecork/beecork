@@ -586,3 +586,21 @@ test("auto-check runs ONCE after a multi-edit batch, and its verdict is data", a
     rmSync(counter, { force: true });
   }
 });
+
+test("an empty completion ends the turn — it is NOT a step-limit turn", async () => {
+  // `messages.pop(); break;` left `answered` false, so the loop fell into the step-cap branch:
+  // an extra billed model call, narration that contradicted itself ("empty response" then
+  // "reached the 50-step limit" at step 0), and a journal row claiming status "step_limit".
+  const rows = await journalOf(() => turn([{}, { text: "unreachable wrap-up" }], "say nothing"));
+  const model = rows; // journalOf returns the parsed journal
+  const end = model.at(-1);
+  assert.equal(end.type, "turn_finished");
+  assert.equal(end.status, "empty", "the journal must say what actually happened");
+});
+
+test("an empty completion does not issue a second, billed model call", async () => {
+  const { model, narration } = await turn([{}, { text: "unreachable wrap-up" }], "say nothing");
+  assert.equal(model.consumed(), 1, "the wrap-up call must not fire — the model just said nothing");
+  assert.match(narration, /empty response/);
+  assert.doesNotMatch(narration, /step limit/, "…and the narration must not contradict itself");
+});

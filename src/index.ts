@@ -22,7 +22,7 @@ import { killAllTasks, runningTaskCount } from "./tasks";
 import { startChrome, stopChrome, nextLine, beginTurn, endTurn, chromeEnabled } from "./chrome";
 import { estimateTokens } from "./context";
 import { primeCatalog, supportsVision, visionReady } from "./capabilities";
-import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals } from "./memory";
+import { loadInstructions, loadSettings, saveSession, loadUserConfig, saveUserConfig, loadProjectApprovals, sessionForSave } from "./memory";
 import { handleCommand, completer, isBuiltin, SLASH_COMMANDS } from "./commands";
 import { extensionDir } from "./skeleton";
 import { EXTENSION_STEPS } from "./tools";
@@ -46,6 +46,9 @@ const PLAN_DIRECTIVE =
   "(e.g. ls, cat, grep, git status/diff/log) are available; editing, writing, and mutating commands are " +
   "BLOCKED. When you understand the task, present a concise, numbered plan of the changes you would make, " +
   "then STOP. Do not attempt edits — the user reviews your plan and switches you to normal mode to execute.";
+
+// Set once main() has built its persist closure, so the top-level catch can reuse the same promise.
+let persistRef: (() => Promise<void>) | null = null;
 
 async function main() {
   // `beecork update` — self-update from the shell, no key/REPL needed.
@@ -134,22 +137,25 @@ async function main() {
 
   // Persist the transcript (or trace) — used on the clean exit AND before an abrupt one
   // (SIGTERM/SIGHUP/crash) so closing the terminal doesn't discard the conversation. Idempotent.
-  let saved = false;
-  const persist = async () => {
-    if (saved) return;
-    saved = true;
+  // Latches the PROMISE, not a boolean. With a boolean the flag was set before the await, so a
+  // second signal (SIGTERM then SIGHUP — a supervisor, or closing a terminal on a job being killed)
+  // returned instantly and process.exit'd mid-write. saveSession is tmp+rename, so that lost the
+  // session file entirely rather than truncating it, and skipped flushJournal too.
+  let saving: Promise<void> | null = null;
+  const persist = () => (saving ??= (async () => {
     try {
       if (config.traceFile) {
         await writeFile(config.traceFile, JSON.stringify(trace), "utf8");
         await chmod(config.traceFile, 0o600).catch(() => {}); // may contain tool output the model read
       } else if (messages.length > 1) {
-        await saveSession(messages.slice(1));
+        await saveSession(sessionForSave(messages));
       }
       await flushJournal(); // the record must be complete even on an abrupt exit
     } catch {
       // best-effort — never let a save failure mask the real exit reason
     }
-  };
+  })());
+  persistRef = persist; // so the top-level catch can save too
 
   // On a TTY we own the keyboard (raw mode). Off a TTY, use readline for piped input.
   const tty = !!process.stdin.isTTY;
@@ -437,8 +443,12 @@ async function main() {
   console.log(color.dim("bye!"));
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   teardownInput(); // restore the terminal on a fatal error too
   console.error(`[fatal] ${(err as Error)?.message ?? err}`);
+  // A rejection anywhere in the REPL loop that isn't inside runTurn's own try (nextLine, readPrompt,
+  // loadImage, stopChrome, shutdownMcp) lands here. The uncaughtException hook was deliberately wired
+  // to persist; this sibling path caught the same class of failure and threw the session away.
+  await persistRef?.();
   process.exit(1);
 });

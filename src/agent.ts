@@ -570,6 +570,7 @@ export async function runTurn(
 
   try {
     let answered = false;
+    let empty = false; // the model returned nothing — the turn is over, and it is NOT a step-cap turn
     const callCounts = new Map<string, number>(); // loop detector (per turn)
     const overflow = { retried: false }; // context-overflow recovery: EXACTLY once per turn
     const deps: TurnDeps = { approvedTools, approvedGuardKeys, callCounts, ask, signal, turnId, step: 0 }; // stable for the whole turn
@@ -610,6 +611,7 @@ export async function runTurn(
         // persist the null message (some providers 400 on it) — surface it and stop.
         messages.pop();
         console.log(color.dim("\n[the model returned an empty response — ending the turn]") + "\n");
+        empty = true;
         break;
       }
 
@@ -651,10 +653,13 @@ export async function runTurn(
     if (signal?.aborted) {
       console.log(color.dim("\n[cancelled]") + "\n");
       finishTurn(turnId, "cancelled", lastStep);
-      return sealInterruptedToolCalls(messages); // keep what really ran; pair up what never started
+      // Adopt IN PLACE: the caller (and persist()) holds this array. Returning a new one is exactly
+      // the shape adoptInPlace exists to prevent.
+      adoptInPlace(messages, sealInterruptedToolCalls(messages)); // keep what really ran; pair up what never started
+      return messages;
     }
 
-    if (!answered) {
+    if (!answered && !empty) {
       // Hit the step cap — don't die silently. Ask for a final wrap-up (no tools).
       console.log(color.dim(`\n[reached the ${config.maxSteps}-step limit — wrapping up]`));
       // The "no more tools" directive is EPHEMERAL: pass it to THIS call only, never persist it —
@@ -670,18 +675,24 @@ export async function runTurn(
       if (hasContent(wrap)) messages.push(wrap);
     }
 
-    finishTurn(turnId, answered ? "completed" : "step_limit", lastStep);
+    finishTurn(turnId, empty ? "empty" : answered ? "completed" : "step_limit", lastStep);
     return messages;
   } catch (err) {
     if (signal?.aborted || (err as Error)?.name === "AbortError") {
       console.log(color.dim("\n[cancelled]") + "\n");
       finishTurn(turnId, "cancelled", lastStep);
-      return sealInterruptedToolCalls(messages);
+      // Adopt IN PLACE: the caller (and persist()) holds this array. Returning a new one is exactly
+      // the shape adoptInPlace exists to prevent.
+      adoptInPlace(messages, sealInterruptedToolCalls(messages));
+      return messages;
     }
     console.error(color.red(`\n[error] ${(err as Error).message}`) + "\n");
     finishTurn(turnId, "error", lastStep, (err as Error).message);
     // Do NOT roll back. A tool that already ran changed the real world; erasing it from history is
     // how the model ends up redoing an edit it already made. Keep the work, repair the pairing.
-    return sealInterruptedToolCalls(messages);
+    // Adopt IN PLACE: the caller (and persist()) holds this array. Returning a new one is exactly
+    // the shape adoptInPlace exists to prevent.
+    adoptInPlace(messages, sealInterruptedToolCalls(messages));
+    return messages;
   }
 }
