@@ -6,8 +6,52 @@ on:
   pull_request:
 
 jobs:
-  build:
+  # Linux. bubblewrap is NOT on the runner image, and Ubuntu 24.04 blocks unprivileged user
+  # namespaces by default — so both are set up explicitly and then HARD-VERIFIED. Before this, every
+  # test that actually proves the sandbox confines anything was gated on macOS and silently skipped
+  # here, while bwrap's absence meant probeSandbox() returned "unavailable" and nothing exercised the
+  # sandbox at all. A missing sandbox must turn this job RED, never make its tests quietly disappear.
+  linux:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install bubblewrap and allow unprivileged user namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 ships kernel.apparmor_restrict_unprivileged_userns=1, which makes bwrap fail
+          # with "Operation not permitted" (actions/runner-images#10443).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Verify bubblewrap actually confines here
+        run: |
+          bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent /bin/true
+          # A write outside the bound-writable roots must be refused by the kernel, or the sandbox
+          # assertions in the suite would be testing nothing.
+          if bwrap --ro-bind / / --dev /dev --proc /proc --die-with-parent \
+               /bin/sh -c 'echo escaped > "$HOME/.bwrap-ci-probe"'; then
+            echo "::error::bwrap did not refuse an out-of-workspace write — the sandbox is not confining"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      # BEECORK_SANDBOX=on turns an unavailable runner into a REFUSAL rather than a silent bare run,
+      # so a regression in probeSandbox/wrapCommand fails CI instead of quietly disabling confinement.
+      - run: npm test
+        env:
+          BEECORK_SANDBOX: 'on'
+      - run: npm run build
+
+  # macOS. Seatbelt is always present, so this is the job that exercises the kernel path beecork
+  # actually ships to most users. GitHub-hosted runners are free for public repositories.
+  macos:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -17,4 +61,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+        env:
+          BEECORK_SANDBOX: 'on'
       - run: npm run build

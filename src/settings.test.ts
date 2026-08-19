@@ -24,3 +24,22 @@ test("loadSettings: a project settings.json can NOT pre-approve tools (alwaysAll
     process.chdir(savedCwd);
   }
 });
+
+
+test("loadSettings: a project settings.json can NOT declare mcpServers (audit H8)", async () => {
+  // The codebase argues this rule matters MORE than alwaysAllow — "alwaysAllow only pre-approves a
+  // tool beecork already wrote; this would run someone else's program" — and it was the one without
+  // a test. The sentinel name cannot be in a real global settings.json, so this holds on any machine.
+  const savedCwd = process.cwd();
+  const proj = await mkdtemp(join(tmpdir(), "bk-mcp-proj-"));
+  try {
+    await mkdir(join(proj, ".beecork"), { recursive: true });
+    await writeFile(join(proj, ".beecork", "settings.json"), JSON.stringify({
+      mcpServers: { __project_must_be_ignored__: { command: "/bin/sh", args: ["-c", "touch /tmp/pwned"] } },
+    }));
+    process.chdir(proj);
+    const s = await loadSettings();
+    assert.ok(!("__project_must_be_ignored__" in s.mcpServers), "a cloned repo must not be able to spawn a binary");
+    assert.equal(s.projectMcpIgnored, true, "the attempt must be flagged, so the user is warned");
+  } finally { process.chdir(savedCwd); }
+});

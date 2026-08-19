@@ -10,7 +10,7 @@
 // process.chdir BEFORE importing: paths.ts freezes projectRoot from cwd at import time, so the
 // imports below are dynamic on purpose. Run with: npm test
 
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
@@ -24,6 +24,14 @@ const { runTurn } = await import("./agent");
 const { config } = await import("./config");
 const { state } = await import("./state");
 const { installScriptedModel } = await import("./scripted");
+const { probeSandbox } = await import("./sandbox");
+const { resetLearnedCeilings, contextBudget } = await import("./context");
+
+// A provider-confirmed overflow HALVES this model's budget for the rest of the PROCESS. Without this
+// hook the two overflow tests below left every later test running at a quarter of the real budget
+// (measured: 32000 vs 128000), so execution order silently changed what any later test measured.
+// It also gives resetLearnedCeilings its only caller — it was a test-only export nothing called.
+afterEach(() => resetLearnedCeilings());
 const { runExplorer } = await import("./subagent");
 const { startJournal, flushJournal, journalPath, resetJournalForTests, record } = await import("./journal");
 import type { ScriptStep } from "./scripted";
@@ -440,7 +448,11 @@ test("the journal never stores full tool output — it is a record, not a second
 // turn. The unit tests prove the profile confines; this proves the profile is actually applied.
 // ---------------------------------------------------------------------------
 
-const onMac = process.platform === "darwin";
+// Gate on CONFINEMENT BEING AVAILABLE, not on platform. The kernel assertions below are the only
+// thing that proves the sandbox confines anything, and gating them on macOS meant they ALL skipped on
+// the Linux CI runner — where bwrap isn't installed either, so nothing exercised the sandbox at all
+// and the suite was green with zero confinement.
+const confined = (await probeSandbox()).kind === "active";
 
 test("a LITERAL out-of-project path is stopped by policy, before the sandbox is even needed", async () => {
   const escape = join(homedir(), `.beecork-replay-literal-${process.pid}`);
@@ -460,7 +472,7 @@ test("a LITERAL out-of-project path is stopped by policy, before the sandbox is 
   }
 });
 
-test("REAL: a command with NO path text still can't escape — policy is blind here, the kernel isn't", { skip: !onMac }, async () => {
+test("REAL (confined): a command with NO path text still can't escape — policy is blind here, the kernel isn't", { skip: !confined }, async () => {
   // The whole argument for having a sandbox at all, in one command.
   //
   // beecork's out-of-root guard is a TEXTUAL heuristic: it expands $HOME, $PWD, ${IFS} and ~, then
@@ -493,7 +505,7 @@ test("REAL: a command with NO path text still can't escape — policy is blind h
   }
 });
 
-test("REAL: a model-issued run_bash CAN still write inside the workspace", { skip: !onMac }, async () => {
+test("REAL (confined): a model-issued run_bash CAN still write inside the workspace", { skip: !confined }, async () => {
   const { out } = await turn(
     [
       { tools: [{ id: "c1", name: "run_bash", args: { command: "echo hello > sandboxed.txt", explanation: "normal write" } }] },
@@ -641,4 +653,12 @@ test("a NEW journal field is bounded by default, not by remembering (audit M4)",
   await flushJournal();
   const row = readFileSync(journalPath()!, "utf8").trim().split("\n").map((l) => JSON.parse(l)).at(-1);
   assert.ok(row.somethingNew.length < 600, `an unanticipated field must still be bounded, got ${row.somethingNew.length}`);
+});
+
+test("a learned context ceiling does not leak into later tests", () => {
+  // Pins the afterEach hook above: without it the overflow tests halve the budget for the rest of the
+  // process, and everything after them silently measures against a quarter of the real window.
+  // Keyed by MODEL — assert on the one the overflow tests actually poisoned (state.model), not a
+  // name they never touch, or this test passes whether or not the hook exists.
+  assert.equal(contextBudget(state.model), config.maxContextTokens, "the budget must start clean in each test");
 });

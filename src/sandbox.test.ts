@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import { seatbeltProfile, bubblewrapArgs, wrapCommand, unconfinedNotice, resetSandboxForTests, protectedPaths } from "./sandbox";
+import { seatbeltProfile, bubblewrapArgs, wrapCommand, unconfinedNotice, resetSandboxForTests, protectedPaths, probeSandbox } from "./sandbox";
 import { projectRoot } from "./paths";
 import { config } from "./config";
 
@@ -52,14 +52,36 @@ test("seatbelt profile: a path with a quote can't break out of the string litera
   }
 });
 
-test("bubblewrap args: root read-only, workspace bound back rw, none in read-only mode", () => {
-  const normal = bubblewrapArgs("normal").join(" ");
-  assert.match(normal, /--ro-bind \/ \//, "everything starts read-only");
-  assert.ok(bubblewrapArgs("normal").includes(projectRoot), "the workspace is bound writable");
+// Is `p` bound READ-WRITE (a real --bind-try triple), rather than merely appearing somewhere in argv?
+const rwBindIndex = (argv: string[], p: string): number =>
+  argv.findIndex((a, i) => a === "--bind-try" && argv[i + 1] === p && argv[i + 2] === p);
+
+test("bubblewrap args: the workspace is bound READ-WRITE, not merely mentioned", () => {
+  const normal = bubblewrapArgs("normal");
+  assert.match(normal.join(" "), /--ro-bind \/ \//, "everything starts read-only");
+  // NOT `.includes(projectRoot)`: `--chdir projectRoot` puts that string in argv even with every
+  // writable bind deleted, so the old assertion passed against a sandbox that granted nothing.
+  // Proved by mutation — deleting the whole bind loop left all 16 tests green.
+  assert.ok(rwBindIndex(normal, projectRoot) >= 0, "the workspace must be bound rw");
 
   const ro = bubblewrapArgs("readonly");
   assert.match(ro.join(" "), /--ro-bind \/ \//);
   assert.ok(!ro.includes("--bind-try"), "read-only mode binds nothing writable");
+  assert.ok(ro.includes(projectRoot), "…though --chdir still names it — which is why includes() proves nothing");
+});
+
+test("bubblewrap args: credentials are re-bound read-only AFTER every writable root", () => {
+  // The Linux half of the "deny credentials LAST" guarantee. Nothing tested it: sandbox.test.ts only
+  // inspected the SEATBELT string, so deleting bubblewrap's trailing re-deny loop also left all 16
+  // tests green — and on Linux ~/.ssh could have become writable unnoticed.
+  const argv = bubblewrapArgs("normal");
+  const lastWritable = argv.lastIndexOf("--bind-try");
+  assert.ok(lastWritable >= 0, "there must be writable roots to re-deny after");
+  for (const p of protectedPaths()) {
+    const i = argv.findIndex((a, k) => a === "--ro-bind-try" && argv[k + 1] === p && argv[k + 2] === p);
+    assert.ok(i >= 0, `${p} must be re-bound read-only`);
+    assert.ok(i > lastWritable, `${p} must be re-bound AFTER the writable roots — bwrap applies binds in argv order`);
+  }
 });
 
 test("wrapCommand: an active runner replaces the bare shell with the confined form", () => {
@@ -106,9 +128,13 @@ test("wrapCommand under auto runs bare when unavailable — but says so, ONCE", 
 // Everything above checks what beecork BUILDS. This checks what the kernel actually ENFORCES,
 // which is the only evidence that matters. macOS only; skipped elsewhere rather than faked.
 
-const onMac = process.platform === "darwin";
+// Gate on CONFINEMENT BEING AVAILABLE, not on platform. The kernel assertions below are the only
+// thing that proves the sandbox confines anything, and gating them on macOS meant they ALL skipped on
+// the Linux CI runner — where bwrap isn't installed either, so nothing exercised the sandbox at all
+// and the suite was green with zero confinement.
+const confined = (await probeSandbox()).kind === "active";
 
-test("REAL: the kernel refuses a write outside the workspace", { skip: !onMac }, async () => {
+test("REAL (confined): the kernel refuses a write outside the workspace", { skip: !confined }, async () => {
   const outside = join(homedir(), `.beecork-sandbox-probe-${process.pid}`);
   rmSync(outside, { force: true });
   const { code } = await run("/usr/bin/sandbox-exec", [
@@ -123,7 +149,7 @@ test("REAL: the kernel refuses a write outside the workspace", { skip: !onMac },
   }
 });
 
-test("REAL: the kernel still allows a write INSIDE the workspace", { skip: !onMac }, async () => {
+test("REAL (confined): the kernel still allows a write INSIDE the workspace", { skip: !confined }, async () => {
   const inside = join(projectRoot, `.beecork-sandbox-probe-${process.pid}`);
   rmSync(inside, { force: true });
   try {
@@ -138,7 +164,7 @@ test("REAL: the kernel still allows a write INSIDE the workspace", { skip: !onMa
   }
 });
 
-test("REAL: a symlink pointing out of the workspace does not become an escape hatch", { skip: !onMac }, async () => {
+test("REAL (confined): a symlink pointing out of the workspace does not become an escape hatch", { skip: !confined }, async () => {
   // This is the case policy parsing cannot catch: the PATH is inside the workspace, so a path check
   // passes, and only the kernel sees where the write actually lands.
   const outsideDir = mkdtempSync(join(tmpdir(), "beecork-escape-"));
@@ -169,7 +195,7 @@ test("REAL: a symlink pointing out of the workspace does not become an escape ha
   }
 });
 
-test("REAL: read-only mode refuses even an in-workspace write", { skip: !onMac }, async () => {
+test("REAL (confined): read-only mode refuses even an in-workspace write", { skip: !confined }, async () => {
   const inside = join(projectRoot, `.beecork-ro-probe-${process.pid}`);
   rmSync(inside, { force: true });
   try {
@@ -184,7 +210,7 @@ test("REAL: read-only mode refuses even an in-workspace write", { skip: !onMac }
   }
 });
 
-test("REAL: an ordinary read-only command still works inside the sandbox", { skip: !onMac }, async () => {
+test("REAL (confined): an ordinary read-only command still works inside the sandbox", { skip: !confined }, async () => {
   const { code, stderr } = await run("/usr/bin/sandbox-exec", [
     "-p", seatbeltProfile("normal"),
     "/bin/sh", "-c", "ls / >/dev/null && echo fine",
@@ -206,7 +232,7 @@ test("profile grants build caches but re-denies credentials LAST", () => {
   assert.ok(protectedPaths().some((s) => s.endsWith(".beecork")), "~/.beecork holds project-approvals.json");
 });
 
-test("REAL: build-tool caches are writable, so ordinary installs still work", { skip: !onMac }, async () => {
+test("REAL (confined): build-tool caches are writable, so ordinary installs still work", { skip: !confined }, async () => {
   for (const dir of [".npm/_cacache", ".cache", ".cargo"]) {
     const probe = join(homedir(), dir, `beecork-test-${process.pid}`);
     const { code } = await run("/usr/bin/sandbox-exec", [
@@ -217,7 +243,7 @@ test("REAL: build-tool caches are writable, so ordinary installs still work", { 
   }
 });
 
-test("REAL: credentials and beecork's own approval store stay unwritable", { skip: !onMac }, async () => {
+test("REAL (confined): credentials and beecork's own approval store stay unwritable", { skip: !confined }, async () => {
   for (const secret of [".ssh", ".aws", ".gnupg", ".beecork"]) {
     const probe = join(homedir(), secret, `beecork-test-${process.pid}`);
     const { code } = await run("/usr/bin/sandbox-exec", [
@@ -229,7 +255,7 @@ test("REAL: credentials and beecork's own approval store stay unwritable", { ski
   }
 });
 
-test("REAL: plain $HOME is not writable just because caches inside it are", { skip: !onMac }, async () => {
+test("REAL (confined): plain $HOME is not writable just because caches inside it are", { skip: !confined }, async () => {
   const probe = join(homedir(), `.beecork-home-probe-${process.pid}`);
   rmSync(probe, { force: true });
   try {

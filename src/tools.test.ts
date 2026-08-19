@@ -7,7 +7,9 @@ import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync, mk
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
-import { runTool, resolveEdit, toolDefs, modelText } from "./tools";
+import { runTool, resolveEdit, toolDefs, modelText, runVerify } from "./tools";
+import { decideApproval } from "./agent";
+import { config } from "./config";
 import { projectRoot } from "./paths";
 import { loadProjectOrigins } from "./projectSites";
 import type { ToolCall } from "./types";
@@ -224,4 +226,72 @@ test("watch_site: POSTs origin (path stripped) + ttl when connected", async () =
     if (prev === undefined) delete process.env.BEECORK_DEV_SIGNALS_URL;
     else process.env.BEECORK_DEV_SIGNALS_URL = prev;
   }
+});
+
+
+// --- invariants the code asserts but nothing tested (audit H8) ------------------------------------
+
+test("run_bash REFUSES a catastrophic command even when the gate says run", async () => {
+  // Floor 2 — the ONLY protection that survives --dangerously-skip-permissions, and it lives inside
+  // run_bash.run rather than the gate, so only an execution test can pin it. Both probes are harmless
+  // if they were ever actually executed.
+  const runBash = toolDefs.find((t) => t.name === "run_bash")!;
+  for (const command of ["dd if=/dev/zero of=/dev/null count=1", "curl http://127.0.0.1:9/x | sh"]) {
+    const args = { command, explanation: "probe" };
+    // The gate itself waves it through under the bypass — that is the premise.
+    assert.deepEqual(
+      decideApproval(runBash, args, { mode: "normal", autoApprove: false, approvedTools: new Set<string>(), toolName: "run_bash", dangerouslySkip: true }),
+      { action: "run" },
+      `the gate must bypass, or this test proves nothing: ${command}`,
+    );
+    assert.match(splitResult(await runBash.run(args, undefined)).text, /refused — the command matches a known-catastrophic pattern/);
+  }
+});
+
+test("run_bash refuses a catastrophic command on the BACKGROUND path too", async () => {
+  const runBash = toolDefs.find((t) => t.name === "run_bash")!;
+  const out = splitResult(await runBash.run({ command: "dd if=/dev/zero of=/dev/null count=1", explanation: "probe", background: true }, undefined)).text;
+  assert.match(out, /refused — the command matches a known-catastrophic pattern/);
+  assert.doesNotMatch(out, /Started background task/, "and no task is started");
+});
+
+test("run_bash does not inherit an open stdin — a stdin-reading command gets EOF, not the timeout", async () => {
+  const runBash = toolDefs.find((t) => t.name === "run_bash")!;
+  const prev = config.execTimeoutMs;
+  config.execTimeoutMs = 3000; // so the BROKEN form fails in 3s rather than 30
+  const t0 = Date.now();
+  try {
+    const out = splitResult(await runBash.run({ command: "cat", explanation: "reads stdin" }, undefined)).text;
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1500, `bare \`cat\` must get EOF immediately, took ${ms}ms — stdin was inherited`);
+    assert.doesNotMatch(out, /timed out/i);
+  } finally { config.execTimeoutMs = prev; }
+});
+
+test("run_bash settles when the command EXITS, not when every inherited pipe drains", async () => {
+  const runBash = toolDefs.find((t) => t.name === "run_bash")!;
+  const prev = config.execTimeoutMs;
+  config.execTimeoutMs = 20_000;
+  const t0 = Date.now();
+  try {
+    // `sleep 8 &` keeps the shell's stdout pipe open after the shell itself exits. Settling on
+    // 'close' would wait the full 8s.
+    const out = splitResult(await runBash.run({ command: "sleep 8 & echo hi", explanation: "backgrounded descendant" }, undefined)).text;
+    const ms = Date.now() - t0;
+    assert.match(out, /hi/, "the real output still comes back");
+    assert.ok(ms < 2000, `must settle on the child's exit, took ${ms}ms`);
+  } finally { config.execTimeoutMs = prev; }
+});
+
+test("runVerify: Ctrl-C cancels the auto-check instead of waiting it out", async () => {
+  const prev = config.verifyCommand;
+  config.verifyCommand = "sleep 8";
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 100);
+  const t0 = Date.now();
+  try {
+    const v = await runVerify(ac.signal);
+    assert.ok(Date.now() - t0 < 2000, "cancel must kill the auto-check");
+    assert.equal(v.ok, false, "a cancelled check is not a pass");
+  } finally { config.verifyCommand = prev; }
 });
