@@ -6,6 +6,7 @@
 // the same "here's how to connect" guidance as before, so nothing regresses.
 
 import { spawn } from "node:child_process";
+import { childEnv } from "./env";
 import { mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,22 @@ const port = (): number => Number(process.env.BEECORK_SKELETON_PORT) || 8317;
 // beecork does NOT auto-spawn, because the user is managing the inbox themselves.
 export const skeletonUrl = (): string => process.env.BEECORK_DEV_SIGNALS_URL || `http://localhost:${port()}`;
 const managedExternally = (): boolean => !!process.env.BEECORK_DEV_SIGNALS_URL;
+
+// The bridge's pairing token, for the routes that WRITE (/request-watch). Read from /pair rather
+// than the token file so it still works when BEECORK_DEV_SIGNALS_URL points at someone else's bridge.
+// Cached: the token is stable for the life of a bridge, and a failed read must not stop the caller.
+let cachedToken: string | null = null;
+export async function bridgeToken(): Promise<string | null> {
+  if (cachedToken) return cachedToken;
+  try {
+    const res = await fetch(`${skeletonUrl()}/pair`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    cachedToken = (await res.text()).trim() || null;
+    return cachedToken;
+  } catch {
+    return null;
+  }
+}
 
 const skeletonHome = (): string => process.env.BEECORK_SKELETON_HOME || join(homedir(), ".beecork", "skeleton");
 const bridgeScript = (): string => join(dirname(fileURLToPath(import.meta.url)), "..", "skeleton", "bridge.mjs");
@@ -87,7 +104,10 @@ async function doEnsure(): Promise<EnsureResult> {
     await mkdir(home, { recursive: true });
     const child = spawn(process.execPath, [bridgeScript()], {
       cwd: home,
-      env: { ...process.env, BEECORK_SKELETON_HOME: home, BEECORK_SKELETON_PORT: String(port()) },
+      // childEnv, not process.env: this is a DETACHED process that outlives the session, and
+      // `ps eww` shows a same-user shell its whole environment. mcp.ts already made this decision
+      // for server children; the bridge needs none of those keys either.
+      env: { ...childEnv({}), BEECORK_SKELETON_HOME: home, BEECORK_SKELETON_PORT: String(port()) },
       detached: true,
       stdio: "ignore", // fire-and-forget; it logs to no one, which is fine
     });

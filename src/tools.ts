@@ -18,7 +18,7 @@ import { runExplorer } from "./subagent";
 import { resolveInRoot } from "./paths";
 import { pathGuard, readGuard, writeGuard, bashGuard, isSafeBash, isPrivateAddr, SECRET_FILE, DANGEROUS_BASH } from "./safety";
 import { htmlToText, stripInvisible, stripControlTokens, wrapUntrusted, neutralize } from "./html";
-import { ensureBridge, skeletonUrl, extensionDir, type EnsureResult } from "./skeleton";
+import { ensureBridge, skeletonUrl, extensionDir, bridgeToken, type EnsureResult } from "./skeleton";
 import { toOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
 import { renderTodos, color } from "./ui";
 import { showPayload } from "./show";
@@ -1141,7 +1141,8 @@ export const toolDefs: ToolDef[] = [
         const res = await fetch(`${base}/request-watch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ origin, ttlMs: minutes * 60_000 }),
+          // /request-watch is token-gated (it turns on capture for a site), so send the pairing token.
+          body: JSON.stringify({ origin, ttlMs: minutes * 60_000, token: await bridgeToken() }),
           signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
         if (!res.ok) return `The browser link responded with HTTP ${res.status}.`;
