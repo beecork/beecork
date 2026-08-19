@@ -66,6 +66,15 @@ skills-portability (no cross-tool standard exists to adopt).
 
 Effort: **S** ≈ hours · **M** ≈ a day · **L** ≈ multi-day.
 
+### From the DeepSeek Harness comparison — `DONE` (2026-08-19)
+
+Nine items shipped: the turn no longer discards completed work on error/cancel, a model-aware context
+budget with bounded overflow recovery, structured `ToolOutcome`s (retiring the `Error`-prefix
+contract), per-tool `execution` declarations with a bounded scheduler, an append-only execution
+journal, and an OS sandbox (macOS Seatbelt / Linux bubblewrap) over the two model-chosen spawn sites.
+Two items were deliberately NOT built — a journal-derived transcript and a full `AgentRuntime`.
+Verified claims, corrections and reasoning: [`.claude/think-it-through/from-deepseek-harness-review.md`](../.claude/think-it-through/from-deepseek-harness-review.md).
+
 ### Explicitly rejected (and why)
 
 - **React/Ink TUI rewrite** — betrays identity #1. beecork's hand-rolled I/O is a feature, not debt.

@@ -4,13 +4,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTool } from "./tools";
+import { runTool, modelText } from "./tools";
 import { config } from "./config";
 import type { ToolCall } from "./types";
 import { splitResult } from "./images";
 
 // Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
-const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => splitResult(await runTool(c, s)).text;
+const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => modelText(await runTool(c, s));
 
 
 const tc = (name: string, args: object): ToolCall => ({ id: "c1", type: "function", function: { name, arguments: JSON.stringify(args) } });

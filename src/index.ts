@@ -13,6 +13,7 @@ import { tildify } from "./paths";
 import { API_KEY, config } from "./config";
 import { checkForUpdate, currentVersion, selfUpdate, shadowWarning } from "./update";
 import { state, trace, nextMode, modeLabel } from "./state";
+import { startJournal, flushJournal } from "./journal";
 import { color, printBanner, stripControl, isPrintableCodePoint, setSteeringActive } from "./ui";
 import { ansi } from "./ansi";
 import { SYSTEM_PROMPT, runTurn } from "./agent";
@@ -144,6 +145,7 @@ async function main() {
       } else if (messages.length > 1) {
         await saveSession(messages.slice(1));
       }
+      await flushJournal(); // the record must be complete even on an abrupt exit
     } catch {
       // best-effort — never let a save failure mask the real exit reason
     }
@@ -230,6 +232,11 @@ async function main() {
   // Warm the OpenRouter connection + capability catalog now (fire-and-forget), so the first turn skips
   // the cold TLS handshake and doesn't fail-open on reasoning support.
   primeCatalog();
+
+  // Open the execution journal (.beecork/journal/*.jsonl) — the append-only record of what this
+  // session actually does. Best-effort: a read-only workspace just means no record, never a failure
+  // to start. Local file only, never transmitted.
+  void startJournal(state.model);
 
   // Connect MCP servers in the BACKGROUND — same fire-and-forget shape as primeCatalog, and
   // deliberately NOT part of the startup Promise.all, which gates first paint. A slow or dead

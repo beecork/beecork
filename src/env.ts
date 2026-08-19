@@ -61,3 +61,14 @@ export async function runtimeContext(): Promise<string> {
     ripgrep: rg !== null,
   });
 }
+
+// The environment a beecork-spawned CHILD gets. beecork's own secrets are NOT inherited: a child
+// process has no business with the user's OpenRouter/Brave keys, and a compromised or nosy one
+// shouldn't get them for free. A child that genuinely needs a credential gets it explicitly.
+// Lives here, in a leaf module (env.ts imports only node builtins), so BOTH spawners can use it —
+// mcp.ts and skeleton.ts. Importing it from mcp.ts would cycle: skeleton → mcp → tools → skeleton.
+export function childEnv(cfgEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of ["OPENROUTER_API_KEY", "BRAVE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) delete out[k];
+  return { ...out, ...cfgEnv };
+}

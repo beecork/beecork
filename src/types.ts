@@ -16,9 +16,30 @@ export type ImagePart = { type: "image_url"; image_url: { url: string; detail?: 
 export type ContentPart = TextPart | ImagePart;
 export type Content = string | ContentPart[] | null;
 
-// What a tool hands back: text for the model, optionally alongside images. Existing tools return a
-// plain string and are unchanged (a string is a ToolResult).
-export type ToolResult = string | { text: string; images: ImagePart[] };
+// Why a tool call did not succeed. These are DATA, not prose: the loop, the journal and the UI all
+// branch on the code, never on how the message happens to be worded.
+//   INVALID_ARGS — the model sent arguments the tool can't use (its own mistake; it can retry)
+//   DENIED       — policy said no (approval refused, read-only/plan mode, headless hard-block)
+//   CANCELLED    — the user interrupted, or the call never started because the turn was cut short
+//   TIMEOUT      — the tool ran too long and was killed
+//   NOT_FOUND    — no such tool
+//   FAILED       — the tool ran and reported failure
+export type ToolFailureCode = "INVALID_ARGS" | "DENIED" | "CANCELLED" | "TIMEOUT" | "NOT_FOUND" | "FAILED";
+
+// A tool may return this instead of a string to say "I failed, and here is exactly how".
+export type ToolFailure = { ok: false; code: ToolFailureCode; message: string; images?: ImagePart[]; retryable?: boolean };
+
+// What a tool hands back: text for the model, optionally alongside images or a structured failure.
+// Existing tools return a plain string and are unchanged (a string is a ToolResult).
+export type ToolContent = string | { text: string; images: ImagePart[] }; // the success half
+export type ToolResult = ToolContent | ToolFailure;
+
+// The NORMALIZED result of one tool call — what runTool always returns, and the only shape the loop,
+// the renderer and the journal ever see. Success and failure carry the same fields so every consumer
+// can render one without asking which kind it is first.
+export type ToolOutcome =
+  | { ok: true; text: string; images: ImagePart[] }
+  | { ok: false; code: ToolFailureCode; text: string; images: ImagePart[]; retryable: boolean };
 
 export type Message = {
   role: "system" | "user" | "assistant" | "tool";
@@ -45,10 +66,20 @@ export type ToolDef = {
   name: string;
   description: string;
   parameters: object; // JSON Schema for the arguments
-  // Returns text shown to the model (optionally with images — see ToolResult). CONTRACT: an
-  // error/failure result's TEXT MUST begin with "Error" — the agent loop + ui.summarizeResult
-  // detect failure by that prefix. signal = user cancel (Ctrl-C).
+  // Returns text shown to the model (optionally with images — see ToolResult). To report a failure,
+  // PREFER returning a structured `ToolFailure` ({ ok: false, code, message }). A plain string whose
+  // text begins with "Error" is still accepted and is normalized to { ok: false, code: "FAILED" } —
+  // that legacy form is an INPUT convention only, never something beecork branches on downstream.
+  // signal = user cancel (Ctrl-C).
   run: (args: Record<string, any>, signal?: AbortSignal) => Promise<ToolResult>;
+  // May a run of these calls execute CONCURRENTLY with its neighbours?
+  //   "parallel"  — independent and side-effect-free; safe to run alongside others
+  //   "exclusive" — a barrier: everything before it settles first, and it runs alone (the DEFAULT,
+  //                 because "I didn't think about it" must never mean "run it concurrently")
+  // This lives on the tool because only the tool knows. It used to be a hardcoded list of names in
+  // agent.ts, which meant no MCP tool could ever be parallel however read-only it was, and every new
+  // built-in was serial until someone remembered to add it to a set in another file.
+  execution?: "parallel" | "exclusive";
   needsApproval?: boolean; // dangerous tools must be approved before running
   alwaysAsk?: boolean; // confirm EVERY time — never "always"-cached (e.g. run_bash, so its explanation is always seen)
   mutates?: boolean; // writes to disk / changes state — blocked in read-only mode (even without needsApproval)

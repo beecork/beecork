@@ -14,6 +14,7 @@ import { windowStart, windowEnd } from "./layout";
 import { execFile } from "node:child_process";
 import { state, nextMode, modeLabel } from "./state";
 import { config } from "./config";
+import { contextBudget } from "./context";
 import { runningTaskCount } from "./tasks";
 import { pushKeyHandler } from "./input";
 
@@ -78,7 +79,7 @@ export function statusText(): string { // exported for the sanitization regressi
   // both are repo-influenced; sanitize before printing so they can't emit cursor/escape/OSC sequences.
   const model = stripControl(state.model.split("/").pop() ?? state.model);
   const tok = tokensOf();
-  const ctxK = Math.round(config.maxContextTokens / 1000);
+  const ctxK = Math.round(contextBudget() / 1000); // the budget actually in force for THIS model
   const parts = [
     modeSegment(),
     color.cyan(model),

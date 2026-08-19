@@ -9,13 +9,13 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseMcpServers, toolNameFor, flattenContent, childEnv, startMcp, mcpReady, mcpStatus, shutdownMcp, serversFromEnvOverride } from "./mcp";
-import { TOOLS, toolsByName, runTool } from "./tools";
+import { TOOLS, toolsByName, runTool, modelText, toOutcome } from "./tools";
 import { decideApproval } from "./agent";
 import type { ToolCall } from "./types";
 import { splitResult } from "./images";
 
 // Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
-const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => splitResult(await runTool(c, s)).text;
+const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => modelText(await runTool(c, s));
 
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp-echo-server.mjs");
@@ -53,16 +53,35 @@ test("toolNameFor: namespaces, slugifies, and stays within the 64-char provider 
   assert.notEqual(toolNameFor("s", "b".repeat(80) + "one"), toolNameFor("s", "b".repeat(80) + "two"));
 });
 
-test("flattenContent: blocks to string, isError to the Error contract", () => {
-  assert.equal(flattenContent({ content: [{ type: "text", text: "hi" }] }, "t", 100), "hi");
-  // The agent loop + ui.summarizeResult detect failure by the "Error" prefix.
-  assert.match(flattenContent({ isError: true, content: [{ type: "text", text: "bad" }] }, "t", 100), /^Error: bad/);
-  assert.equal(flattenContent({ isError: true, content: [{ type: "text", text: "Error: bad" }] }, "t", 100), "Error: bad", "no double prefix");
-  assert.match(flattenContent({ content: [{ type: "image", mimeType: "image/png" }] }, "t", 100), /image/);
-  assert.match(flattenContent({ content: [{ type: "future_type" }] }, "t", 100), /unsupported content block/);
-  assert.equal(flattenContent({ content: [] }, "t", 100), "(the tool returned no content)");
-  assert.equal(flattenContent({ structuredContent: { a: 1 } }, "t", 100), '{"a":1}');
-  assert.match(flattenContent({ content: [{ type: "text", text: "x".repeat(500) }] }, "t", 50), /truncated at 50 chars/);
+// Text() unwraps whichever half flattenContent returned, so the block-rendering assertions below
+// stay about CONTENT and don't have to care about success vs failure.
+const flatText = (r: unknown, cap = 100) => splitResult(flattenContent(r, "t", cap)).text;
+
+test("flattenContent renders every block kind, and truncates", () => {
+  assert.equal(flatText({ content: [{ type: "text", text: "hi" }] }), "hi");
+  assert.match(flatText({ content: [{ type: "image", mimeType: "image/png" }] }), /image/);
+  assert.match(flatText({ content: [{ type: "future_type" }] }), /unsupported content block/);
+  assert.equal(flatText({ content: [] }), "(the tool returned no content)");
+  assert.equal(flatText({ structuredContent: { a: 1 } }), '{"a":1}');
+  assert.match(flatText({ content: [{ type: "text", text: "x".repeat(500) }] }, 50), /truncated at 50 chars/);
+});
+
+test("flattenContent preserves MCP's isError as a STRUCTURED failure, not a string prefix", () => {
+  // The server states failure in a boolean. beecork used to flatten that into an "Error: " prefix and
+  // then re-derive "did it fail?" by reading the prefix back — losing the server's own answer, and
+  // mislabelling any success whose text merely began with "Error".
+  const bad = flattenContent({ isError: true, content: [{ type: "text", text: "bad" }] }, "t", 100);
+  assert.deepEqual(bad, { ok: false, code: "FAILED", message: "bad" });
+  assert.equal(toOutcome(bad).ok, false);
+  assert.equal(modelText(toOutcome(bad)), "Error: bad", "the MODEL is still told, in words, that it failed");
+
+  // A server that already worded its message with "Error" must not be double-prefixed.
+  const already = flattenContent({ isError: true, content: [{ type: "text", text: "Error: bad" }] }, "t", 100);
+  assert.equal(modelText(toOutcome(already)), "Error: bad", "no double prefix");
+
+  // The regression the structured form fixes: a SUCCESSFUL result whose text starts with "Error".
+  const okish = flattenContent({ content: [{ type: "text", text: "Error budget: 3 remaining" }] }, "t", 100);
+  assert.equal(typeof okish, "string", "no isError → still a plain successful string");
 });
 
 test("childEnv: beecork's own API keys are NOT inherited by a server", () => {

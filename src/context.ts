@@ -6,6 +6,7 @@ import { state } from "./state";
 import { color } from "./ui";
 import { openRouterChat, sleep, isTransientStatus } from "./api";
 import { textOf, pruneOldImages } from "./images";
+import { contextLimit } from "./capabilities";
 import type { Message } from "./types";
 
 // Rough token estimate: ~4 characters per token. Good enough to decide WHEN to
@@ -112,12 +113,71 @@ export function compactionStart(messages: Message[], keepRecent: number): number
   return start;
 }
 
-export async function compactIfNeeded(messages: Message[], signal?: AbortSignal): Promise<Message[]> {
+// What a provider actually accepted, learned from being refused. Session-only and per-model: the
+// estimate is ~4 chars/token, so a token-dense conversation (CJK, base64, minified code) can be well
+// over budget while we believe it fits. Without this, every step of the turn would re-hit the same
+// 400 and burn a retry each time.
+const learnedCeiling = new Map<string, number>();
+
+// How many prompt tokens we're willing to send THIS model, in tokens.
+//
+// beecork used to compact against one fixed number for every model. On a model with a smaller window
+// than that number, nothing ever triggered compaction and the provider hard-400'd the turn instead —
+// a real failure that got worse every time you switched models with /model. The catalog beecork
+// already fetches for reasoning + vision knows the real window, so use it.
+//
+// It is a MINIMUM of the candidates, never a maximum: the configured budget stays a ceiling
+// (identity #4 — token-economical; a 1M-context model should not silently start costing 8× per
+// turn), the model's window minus the output reserve is the physical limit, and anything the
+// provider has already refused this session overrides both. Unknown window → the configured budget
+// alone, exactly as before.
+export function contextBudget(model = state.model): number {
+  const advertised = contextLimit(model);
+  const learned = learnedCeiling.get(model) ?? Infinity; // what the PROVIDER told us, the hard way
+  if (!advertised) return Math.min(config.maxContextTokens, learned);
+  // Never let the reserve eat the whole window on a small model — leave at least a working quarter.
+  const usable = Math.max(Math.floor(advertised / 4), advertised - config.outputReserveTokens);
+  return Math.min(config.maxContextTokens, usable, learned);
+}
+
+// A provider-CONFIRMED context overflow. Deliberately narrow: it gates a retry that costs real
+// tokens, and misreading an unrelated 400 (bad key, bad model, malformed tool schema) as "too long"
+// would compact a healthy conversation for nothing and hide the true error.
+export function isContextOverflow(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err).toLowerCase();
+  if (!msg) return false;
+  return (
+    msg.includes("context_length_exceeded") ||
+    msg.includes("context length") ||
+    msg.includes("maximum context") ||
+    msg.includes("context window") ||
+    msg.includes("prompt is too long") ||
+    msg.includes("too many tokens") ||
+    (msg.includes("reduce") && msg.includes("length"))
+  );
+}
+
+// Record that this model refused the size we thought was fine, and halve what we'll try next.
+// Floored so a pathological provider message can't drive the budget to zero and wedge the loop.
+export function noteContextOverflow(model = state.model): void {
+  const next = Math.max(8_000, Math.floor(contextBudget(model) / 2));
+  learnedCeiling.set(model, next);
+}
+
+// Test-only: forget what we learned, so one test's overflow can't leak into the next.
+export function resetLearnedCeilings(): void {
+  learnedCeiling.clear();
+}
+
+// `budget` overrides the normal per-model budget. The overflow-recovery path passes a deliberately
+// smaller one: the provider has just told us our estimate was wrong, so compacting to the SAME
+// budget that already got refused would send another over-sized request and waste the one retry.
+export async function compactIfNeeded(messages: Message[], signal?: AbortSignal, budget = contextBudget()): Promise<Message[]> {
   // Drop stale images FIRST. Compaction keeps `recent` verbatim, so images sitting in that tail are
   // un-shrinkable by summarization alone — a handful of screenshots would blow the window with no
   // way for the loop below to make progress. This is also the backstop against a runaway tool.
   messages = pruneOldImages(messages);
-  if (estimateTokens(messages) <= config.maxContextTokens) return messages;
+  if (estimateTokens(messages) <= budget) return messages;
 
   // Normally keep `keepRecent` messages verbatim. But if the recent tail alone is over budget,
   // shrink how many we keep so compaction still makes progress (rather than sending an

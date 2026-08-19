@@ -10,6 +10,7 @@ import { config } from "./config";
 
 let capable: Set<string> | null = null; // ids that advertise reasoning support (null = unknown/not-loaded/failed)
 let visionCapable: Set<string> | null = null; // ids whose architecture.input_modalities includes "image"
+let contextLengths: Map<string, number> | null = null; // id → advertised context window, in tokens
 let started = false;
 let catalogDone: Promise<void> | null = null; // so a user-initiated path can AWAIT the lazy load
 
@@ -25,6 +26,7 @@ function loadCatalog(): void {
       if (!Array.isArray(data)) return; // leave capable=null (fail-open)
       const ids = new Set<string>();
       const vision = new Set<string>();
+      const windows = new Map<string, number>();
       for (const m of data) {
         const id = (m as { id?: unknown }).id;
         if (typeof id !== "string") continue;
@@ -33,9 +35,17 @@ function loadCatalog(): void {
         // Same pass, no second fetch: which models can actually ACCEPT an image.
         const mods = (m as { architecture?: { input_modalities?: unknown } }).architecture?.input_modalities;
         if (Array.isArray(mods) && mods.includes("image")) vision.add(id);
+        // …and how much context the model actually has. top_provider is the window the ROUTED
+        // backend will honor, which is the number that decides whether a request 400s; the
+        // top-level context_length is the model's nominal max. Take the smaller known one.
+        const top = (m as { top_provider?: { context_length?: unknown } }).top_provider?.context_length;
+        const nominal = (m as { context_length?: unknown }).context_length;
+        const lens = [top, nominal].filter((v): v is number => typeof v === "number" && v > 0);
+        if (lens.length) windows.set(id, Math.min(...lens));
       }
       if (ids.size) capable = ids; // empty set is suspicious → treat as unknown (fail-open)
       if (vision.size) visionCapable = vision;
+      if (windows.size) contextLengths = windows;
     })
     .catch(() => {
       /* fetch/parse failed — stays null → fail-open for reasoning, fail-CLOSED for vision */
@@ -67,6 +77,16 @@ export function supportsVision(model: string): boolean {
   loadCatalog();
   if (!visionCapable) return false;
   return visionCapable.has(model) || visionCapable.has(baseId(model));
+}
+
+// How many tokens does this model's context window hold? null = unknown (catalog not loaded, fetch
+// failed, or the model isn't listed) — callers must fall back to their own conservative default
+// rather than guessing a number. Deliberately NOT fail-open or fail-closed: "unknown" is the honest
+// answer, and the one caller (the context budget) already has a safe default of its own.
+export function contextLimit(model: string): number | null {
+  loadCatalog();
+  if (!contextLengths) return null;
+  return contextLengths.get(model) ?? contextLengths.get(baseId(model)) ?? null;
 }
 
 // Fail-closed + lazy-async is a trap for a USER-initiated action: primeCatalog() fires at startup,

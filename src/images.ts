@@ -57,9 +57,13 @@ export function imageCount(c: Content): number {
   return Array.isArray(c) ? c.filter((p) => p.type === "image_url").length : 0;
 }
 
-// Normalize either ToolResult shape. Lets every call site treat tools uniformly.
+// Normalize ANY ToolResult shape into text + images, so every call site can treat tools uniformly.
+// A structured failure surfaces its `message` as the text; the failure CODE is not this function's
+// business — toOutcome (tools.ts) carries that through separately.
 export function splitResult(r: ToolResult): { text: string; images: ImagePart[] } {
-  return typeof r === "string" ? { text: r, images: [] } : { text: r.text, images: r.images ?? [] };
+  if (typeof r === "string") return { text: r, images: [] };
+  if ("ok" in r) return { text: r.message, images: r.images ?? [] }; // the only member carrying `ok`
+  return { text: r.text, images: r.images ?? [] };
 }
 
 // Build the synthesized user message carrying images that tools returned during one assistant step.

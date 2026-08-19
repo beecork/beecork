@@ -5,7 +5,7 @@ import { writeFile, mkdir, chmod } from "node:fs/promises";
 import { config, RECOMMENDED_MODELS, EFFORTS, normalizeEffort } from "./config";
 import { state } from "./state";
 import { color, stripControl } from "./ui";
-import { estimateTokens } from "./context";
+import { estimateTokens, contextBudget } from "./context";
 import { loadLatestSession, listSessions, loadSession, saveUserConfig, saveModelPreference, saveReasoningPreference } from "./memory";
 import { skillNames } from "./skills";
 import { selfUpdate, shadowWarning } from "./update";
@@ -119,7 +119,7 @@ export async function handleCommand(input: string, messages: Message[]): Promise
   } else if (cmd === "/context") {
     console.log(
       color.cyan(
-        `~${estimateTokens(messages)} tokens in ${messages.length} messages (auto-compacts above ${config.maxContextTokens})`,
+        `~${estimateTokens(messages)} tokens in ${messages.length} messages (auto-compacts above ${contextBudget()})`,
       ) + "\n",
     );
   } else if (cmd === "/mcp") {

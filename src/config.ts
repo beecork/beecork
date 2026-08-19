@@ -104,7 +104,11 @@ export const config = {
   mcpShutdownGraceMs: num("MCP_SHUTDOWN_GRACE_MS", 1_500),
 
   // Context management
-  maxContextTokens: num("MAX_CONTEXT_TOKENS", 128_000), // compact above this
+  maxContextTokens: num("MAX_CONTEXT_TOKENS", 128_000), // compact above this (a CEILING — see contextBudget)
+  // Headroom kept free INSIDE the model's advertised window for the reply itself plus any hidden
+  // reasoning tokens. The window has to hold prompt + completion; budgeting the whole thing for the
+  // prompt is how a request that "fits" still 400s on a thinking model.
+  outputReserveTokens: num("OUTPUT_RESERVE_TOKENS", 16_000),
   keepRecent: num("KEEP_RECENT", 12), // recent messages kept verbatim
   maxToolResultChars: num("MAX_TOOL_RESULT_CHARS", 20_000), // cap a single tool output
 
@@ -122,6 +126,11 @@ export const config = {
   // instead of one-at-a-time — the model is told to batch independent calls, so this cashes in the win
   // (N web_fetches take ~1× instead of N×). Mutating/approval/interactive tools always stay serial.
   parallelTools: !["0", "false", "off", "no"].includes((process.env.PARALLEL_TOOLS ?? "").trim().toLowerCase()),
+  // Upper bound on how many of those run at once. The batch size is chosen by the MODEL, so without a
+  // cap a single message asking for 200 web_fetches would open 200 sockets at once — enough to get
+  // rate-limited, hit the open-file limit, or stall the machine. Results are still committed in the
+  // model's original call order regardless of how they're chunked.
+  maxParallelTools: Math.max(1, num("MAX_PARALLEL_TOOLS", 8)),
 
   // Tool operational limits
   execTimeoutMs: num("EXEC_TIMEOUT_MS", 30_000), // run_bash command timeout
@@ -165,6 +174,21 @@ export const config = {
   // Integrations / modes
   verifyCommand: process.env.VERIFY_COMMAND ?? "", // auto-run after edits (e.g. "npm run typecheck")
   traceFile: process.env.TRACE_FILE ?? "", // record tool calls for the eval
+
+  // The execution journal (.beecork/journal/*.jsonl) — an append-only record of what the agent did.
+  // Local-only, never transmitted (identity #5: no phone-home); BEECORK_JOURNAL=0 turns it off.
+  // OS-level confinement for MODEL-CHOSEN commands (run_bash, background tasks).
+  //   auto (default) — confine when a working runner exists; otherwise warn ONCE and carry on
+  //   on             — confinement is REQUIRED; refuse to run commands when it isn't available
+  //   off            — no sandbox (policy layers still apply)
+  // `auto` rather than `on` by default because macOS always has sandbox-exec (so Macs are confined
+  // out of the box) while a Linux box without bubblewrap would otherwise lose run_bash on upgrade.
+  sandboxMode: (["on", "off", "auto"].includes((process.env.BEECORK_SANDBOX ?? "").trim().toLowerCase())
+    ? (process.env.BEECORK_SANDBOX ?? "").trim().toLowerCase()
+    : "auto") as "on" | "off" | "auto",
+
+  journalEnabled: !["0", "false", "off", "no"].includes((process.env.BEECORK_JOURNAL ?? "").trim().toLowerCase()),
+  maxJournals: num("MAX_JOURNALS", 50), // per project, like sessions
   autoApprove: bool("AUTO_APPROVE"), // headless: skip permission prompts (explicit truthy only)
 
   // DANGER: skip the ENTIRE approval gate — out-of-root paths and risky shell just RUN, unprompted.
