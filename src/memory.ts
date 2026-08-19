@@ -10,6 +10,7 @@ import { normalizeEffort, config } from "./config";
 import type { ReasoningEffort } from "./config";
 import { projectRoot, tildify } from "./paths";
 import { textOf, stripImagesForSave } from "./images";
+import { ensureProjectBeecork } from "./beecorkDir";
 import type { Message, Content, ContentPart } from "./types";
 
 const BEECORK = ".beecork";
@@ -133,17 +134,38 @@ export async function loadUserConfig(): Promise<Record<string, any>> {
   return (await readJsonFile(userConfigPath())) ?? {}; // missing/malformed → empty (warned)
 }
 
-// Merge a patch into config.json (so saving a key doesn't clobber other fields). Written
-// atomically via a temp file created owner-only (mode 0600) then renamed — so the secret is
-// never briefly world-readable (default umask) and a crash mid-write can't truncate it.
-export async function saveUserConfig(patch: Record<string, any>): Promise<void> {
-  const file = userConfigPath();
+/**
+ * Write `text` to `file` atomically and owner-only. THE write path for anything private.
+ *
+ * The bytes are never world-readable, not even for an instant: the temp is CREATED 0600 via `mode:`
+ * (umask can only clear bits, never add them) and re-chmod'd in case a crash-leftover temp with
+ * looser bits was reused — a measured hazard, `mode:` is ignored when the file already exists.
+ * `rename` preserves the source inode's mode, so a pre-existing 0644 target is REPLACED by a 0600
+ * file: routing the writers through here also self-heals the loose files already on disk.
+ *
+ * The temp name is unique per process+call. The old fixed `${file}.tmp` meant two beecork instances
+ * (two terminals, same project) could rename each other's half-written file into place.
+ */
+export async function writePrivate(file: string, text: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
-  const merged = { ...(await loadUserConfig()), ...patch };
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, JSON.stringify(merged, null, 2), { encoding: "utf8", mode: 0o600 });
-  await chmod(tmp, 0o600).catch(() => {}); // enforce owner-only even if umask/pre-existing tmp differed
-  await rename(tmp, file);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await writeFile(tmp, text, { encoding: "utf8", mode: 0o600 });
+    await chmod(tmp, 0o600).catch(() => {});
+    await rename(tmp, file);
+  } catch (err) {
+    await unlink(tmp).catch(() => {}); // never leave a private-data temp behind
+    throw err;
+  }
+}
+
+/** The config-file case: pretty JSON, same atomic + owner-only guarantees. */
+export const writeJsonPrivate = (file: string, data: unknown): Promise<void> =>
+  writePrivate(file, JSON.stringify(data, null, 2));
+
+// Merge a patch into config.json (so saving a key doesn't clobber other fields).
+export async function saveUserConfig(patch: Record<string, any>): Promise<void> {
+  await writeJsonPrivate(userConfigPath(), { ...(await loadUserConfig()), ...patch });
 }
 
 // Persist the chosen model to the global settings.json (merge, so alwaysAllow etc. survive), so
@@ -153,7 +175,7 @@ export async function saveModelPreference(model: string): Promise<void> {
     const file = join(homedir(), BEECORK, "settings.json");
     await mkdir(dirname(file), { recursive: true });
     const current = (await readJsonFile(file)) ?? {};
-    await writeFile(file, JSON.stringify({ ...current, model }, null, 2), "utf8");
+    await writeJsonPrivate(file, { ...current, model });
   } catch {
     // best-effort
   }
@@ -166,7 +188,7 @@ export async function saveReasoningPreference(reasoningEffort: string): Promise<
     const file = join(homedir(), BEECORK, "settings.json");
     await mkdir(dirname(file), { recursive: true });
     const current = (await readJsonFile(file)) ?? {};
-    await writeFile(file, JSON.stringify({ ...current, reasoningEffort }, null, 2), "utf8");
+    await writeJsonPrivate(file, { ...current, reasoningEffort });
   } catch {
     // best-effort
   }
@@ -179,16 +201,12 @@ const sessionsDir = () => join(process.cwd(), BEECORK, "sessions");
 // (the transcript may contain file contents / command output the model read).
 export async function saveSession(messages: Message[]): Promise<void> {
   try {
-    const dir = sessionsDir();
-    await mkdir(dir, { recursive: true });
+    const dir = await ensureProjectBeecork("sessions");
     const file = join(dir, `${Date.now()}.json`);
-    const tmp = `${file}.tmp`;
     // Strip image payloads: a session is for resuming a conversation, not archiving pixels. Keeping
     // them would put megabytes per file under .beecork/sessions/ (50 of them) and make /resume,
     // which parses every file to build its picker, crawl.
-    await writeFile(tmp, JSON.stringify(stripImagesForSave(messages)), "utf8");
-    await chmod(tmp, 0o600).catch(() => {});
-    await rename(tmp, file);
+    await writePrivate(file, JSON.stringify(stripImagesForSave(messages)));
     await pruneSessions(dir).catch(() => {}); // keep .beecork/sessions/ bounded; best-effort
   } catch {
     // best-effort — ignore save errors
@@ -281,6 +299,79 @@ export function dropIncompleteToolTail(messages: Message[]): Message[] {
     }
   }
   return messages;
+}
+
+// The note a never-started tool call gets when a turn is cut short. handleToolCall pushes exactly
+// one result on EVERY path, so an unanswered call id can only mean the loop stopped before reaching
+// it — "did not run" is a fact here, not a guess.
+export const INTERRUPTED_TOOL_NOTE =
+  "Error: cancelled — this tool call did not run because the turn was interrupted. Any tool call above it DID run; treat its result as real.";
+
+// Close an interrupted turn WITHOUT throwing its work away.
+//
+// The old behavior rolled the conversation back to a pre-turn snapshot on any error or Ctrl-C. That
+// kept the message list provider-valid, but it also erased tool calls that had really happened — a
+// file written to disk vanished from history, so the next turn's model believed it never happened
+// (see .claude/think-it-through/from-deepseek-harness-review.md). This is the honest alternative:
+// keep every completed call and its result, and backfill a synthetic result for each call that never
+// ran, so the assistant→tool pairing every provider requires still holds.
+//
+// Results are emitted in the model's ORIGINAL call order — the same guarantee runReadOnlyBatch gives
+// for parallel results — so a resumed conversation reads the way the model wrote it.
+export function sealInterruptedToolCalls(messages: Message[], note = INTERRUPTED_TOOL_NOTE): Message[] {
+  const out: Message[] = [];
+  let repaired = false;
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+
+    // A tool message belongs to the assistant group above it, and a well-formed one is consumed by
+    // that group below — so reaching one HERE means it answers no call at all. Providers reject
+    // that outright, so drop it. (Can't arise from a live turn; the point is that the function's
+    // guarantee holds by construction rather than by luck.)
+    if (m.role === "tool") {
+      repaired = true;
+      continue;
+    }
+
+    out.push(m);
+    if (m.role !== "assistant" || !m.tool_calls?.length) continue;
+
+    // Consume the ENTIRE contiguous run of tool messages after this assistant — including any that
+    // are malformed. Stopping early on a bad one would leave it to be re-pushed by the next outer
+    // iteration, AFTER this group's results had already been emitted: the message would appear
+    // twice, or land after the user message that ended the group.
+    const byId = new Map<string, Message>();
+    let j = i + 1;
+    for (; j < messages.length && messages[j].role === "tool"; j++) {
+      const id = messages[j].tool_call_id;
+      if (id && !byId.has(id)) byId.set(id, messages[j]);
+      else repaired = true; // no id, or a second answer to one call — either way it can't be emitted
+    }
+    i = j - 1; // the group is consumed; the outer loop resumes at whatever ended it
+
+    // Exactly one result per DISTINCT call id, in the model's original call order. A repeated id in
+    // one assistant message is malformed input (providers key results by id, so it could only ever
+    // be answered once); emitting one result for it is the only self-consistent reading.
+    const answered = new Set<string>();
+    for (const call of m.tool_calls) {
+      if (answered.has(call.id)) {
+        repaired = true;
+        continue;
+      }
+      answered.add(call.id);
+      const answer = byId.get(call.id);
+      if (answer) out.push(answer);
+      else {
+        out.push({ role: "tool", tool_call_id: call.id, content: note });
+        repaired = true;
+      }
+    }
+    // Anything collected that answers no call in this group is deliberately not emitted.
+    for (const id of byId.keys()) if (!answered.has(id)) repaired = true;
+  }
+
+  return repaired ? out : messages;
 }
 
 // Read + validate one session file by name. Returns null on missing/corrupt/invalid.

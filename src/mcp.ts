@@ -16,8 +16,9 @@ import { config } from "./config";
 import { color, stripControl } from "./ui";
 import { stripInvisible, stripControlTokens } from "./html";
 import { appendTail } from "./tasks";
+import { childEnv } from "./env";
 import { registerDynamicTools, retireDynamicTool, unregisterDynamicTools } from "./tools";
-import type { ToolDef } from "./types";
+import type { ToolDef, ToolResult } from "./types";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -100,14 +101,9 @@ export function parseMcpServers(raw: unknown): { servers: McpServerConfig[]; pro
   return { servers, problems };
 }
 
-// The child's environment. beecork's own secrets are NOT inherited: an MCP server has no business
-// with the user's OpenRouter/Brave keys, and a compromised or nosy server shouldn't get them for free.
-// A server that genuinely needs a credential gets it explicitly via its own `env` block.
-export function childEnv(cfgEnv: Record<string, string>): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of ["OPENROUTER_API_KEY", "BRAVE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) delete out[k];
-  return { ...out, ...cfgEnv };
-}
+// childEnv moved to env.ts (a leaf module) so skeleton.ts can use it too without a cycle.
+// Re-exported here because this is where the MCP trust model documents it.
+export { childEnv };
 
 // ---------------------------------------------------------------------------
 // Tool naming (pure — unit-tested)
@@ -140,7 +136,7 @@ export function toolNameFor(server: string, tool: string): string {
 // An MCP result is a list of content blocks; beecork's tool contract is a single string. Images
 // become a note for now (real image support arrives with vision). Anything unrecognized is described
 // rather than dropped, so a server using a newer block type still says something useful.
-export function flattenContent(result: unknown, label: string, cap: number): string {
+export function flattenContent(result: unknown, label: string, cap: number): ToolResult {
   const r = (result ?? {}) as { content?: unknown; isError?: unknown; structuredContent?: unknown };
   const blocks = Array.isArray(r.content) ? r.content : [];
   const parts: string[] = [];
@@ -161,9 +157,12 @@ export function flattenContent(result: unknown, label: string, cap: number): str
   }
   let text = parts.join("\n").trim() || "(the tool returned no content)";
   if (text.length > cap) text = text.slice(0, cap) + `\n… [truncated at ${cap} chars]`;
-  // The tool CONTRACT (types.ts): a failure must start with "Error" — that's how the agent loop and
-  // ui.summarizeResult detect it. Don't double-prefix a server that already said "Error".
-  if (r.isError === true && !text.startsWith("Error")) text = `Error: ${text}`;
+  // MCP tells us about failure STRUCTURALLY, with an isError boolean. beecork used to throw that
+  // away — flattening it into an "Error: " string prefix and then re-deriving "did this fail?" by
+  // reading the prefix back. The server's own answer is better evidence than our reading of its
+  // prose, so carry it through as a typed failure. (modelText still renders the "Error: " the model
+  // sees, so nothing about the model-facing wording changes.)
+  if (r.isError === true) return { ok: false, code: "FAILED", message: text };
   return text;
 }
 
@@ -402,6 +401,11 @@ function adaptTool(conn: McpConnection, t: McpToolSpec): ToolDef {
     needsApproval: !readOnly,
     mutates: !readOnly,
     alwaysAsk: ann.destructiveHint === true,
+    // An MCP tool may now batch concurrently — but ONLY on the same evidence that already earned it
+    // the no-approval path: the user opted into trusting this server's annotations AND the server
+    // declared the tool read-only. Anything less stays exclusive (the default), so the concurrency
+    // grant can never be looser than the approval grant.
+    execution: readOnly ? ("parallel" as const) : ("exclusive" as const),
     run: async (args, signal) => {
       if (conn.status !== "ready") return `Error: the "${server}" MCP server is not connected (${conn.status}). Run /mcp for status.`;
       conn.calls++;

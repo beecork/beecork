@@ -143,8 +143,11 @@ export function diffPreview(diff: string): string {
 // (todos render their own list).
 // `result` stays STRING-typed: images ride in a separate message, so this only ever summarizes the
 // text half. `images` is just a count, for the chip.
-export function summarizeResult(name: string, a: Record<string, any>, result: string, images = 0): string {
-  const errored = result.startsWith("Error");
+// `ok` is the tool call's OWN success flag (ToolOutcome.ok), not a guess from the text. beecork used
+// to infer failure from `result.startsWith("Error")`, which made a red "✗ failed" chip appear on any
+// successful result whose first word happened to be "Error" — e.g. reading a file of error messages.
+export function summarizeResult(name: string, a: Record<string, any>, result: string, images = 0, ok = true): string {
+  const errored = !ok;
   const sep = (s: string) => color.dim("  ·  ") + s + (images ? color.dim("  ·  ") + color.cyan(`${images} image${images === 1 ? "" : "s"}`) : "");
   const failed = sep(color.red("✗ failed")); // a failed call must not read as a success ("0 lines")
   switch (name) {

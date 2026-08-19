@@ -3,12 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exploreLoop, EXPLORER_TOOLS, type ExploreDeps } from "./subagent";
-import { runTool, toolDefs } from "./tools";
+import { runTool, toolDefs, modelText } from "./tools";
 import type { Message, ToolCall, ToolDef } from "./types";
 import { splitResult } from "./images";
 
 // Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
-const runText = async (c: ToolCall, s?: AbortSignal, by?: Map<string, ToolDef>): Promise<string> => splitResult(await runTool(c, s, by)).text;
+const runText = async (c: ToolCall, s?: AbortSignal, by?: Map<string, ToolDef>): Promise<string> => modelText(await runTool(c, s, by));
 
 
 const tc = (name: string, args: object, id = "c1"): ToolCall => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });

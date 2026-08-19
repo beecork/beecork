@@ -9,12 +9,13 @@ import { color, renderToolCall, summarizeResult, stripControl, diffPreview } fro
 import { selectMenu } from "./input";
 import { renderShow } from "./show";
 import { callModel } from "./api";
-import { compactIfNeeded } from "./context";
-import { toolsByName, runTool, runVerify } from "./tools";
-import { addProjectApproval } from "./memory";
+import { compactIfNeeded, contextBudget, isContextOverflow, noteContextOverflow } from "./context";
+import { toolsByName, runTool, runVerify, modelText } from "./tools";
+import { addProjectApproval, sealInterruptedToolCalls } from "./memory";
+import { record, flushJournal, outcomeSummary, callFacts, type TurnStatus } from "./journal";
 import { resolveInRoot } from "./paths";
 import { lineDiff } from "./diff";
-import { splitResult, buildAttachmentMessage, textOf, imageCount } from "./images";
+import { buildAttachmentMessage, textOf, imageCount } from "./images";
 import { supportsVision } from "./capabilities";
 import type { Message, ToolCall, ToolDef, ImagePart, Content } from "./types";
 
@@ -154,9 +155,13 @@ export function decideApproval(
 const hasContent = (m: Message) => Boolean(m.content) || (m.tool_calls?.length ?? 0) > 0;
 
 // State that's stable for a whole turn (so handleToolCall can take it as one bundle). NOTE:
-// `messages` is deliberately NOT here — compaction may swap that array between steps, so it's
-// passed explicitly each call.
+// `messages` is deliberately NOT here — it stays an explicit parameter so the conversation being
+// mutated is visible at every call site rather than hidden inside a bundle. (It used to be excluded
+// because compaction SWAPPED the array between steps; adoptInPlace ended that — the turn now keeps
+// one conversation identity throughout, which is what makes the crash-save path honest.)
 type TurnDeps = {
+  turnId: string;                   // journal coordinates: which turn this call belongs to
+  step: number;                     // …and which step (mutated per step; the rest of the bundle is stable)
   approvedTools: Set<string>;       // per-TOOL "always" caching (session + persisted)
   approvedGuardKeys: Set<string>;   // per-KEY "always" for guards (e.g. an out-of-root path); session only
   callCounts: Map<string, number>; // loop detector, read + written
@@ -206,10 +211,9 @@ async function handleAskUser(args: Record<string, any>): Promise<string> {
 // keyboard, or renders bespoke multi-line output (write/edit/run_bash/remember/ask_user/update_todos/
 // show/explore). The model is told to batch independent calls; this cashes in that batching (N reads
 // or web_fetches take ~1× wall-clock instead of N×).
-const PARALLEL_SAFE = new Set([
-  "read_file", "search", "list_dir", "read_skill",
-  "web_fetch", "web_search", "read_dev_signals", "check_task",
-]);
+// (Which tools those are is now DECLARED on each ToolDef as `execution: "parallel"` — see types.ts.
+// It used to be a hardcoded set of names here, which meant an MCP tool could never be parallel no
+// matter how read-only it was, and a new built-in stayed serial until someone remembered this file.)
 
 // Index of the LAST write_file/edit_file in a message's tool calls (-1 if none). The post-edit
 // auto-check runs only for that call, so a multi-edit batch verifies once, not once per edit. Pure.
@@ -217,15 +221,16 @@ export function lastMutationIndex(calls: ToolCall[]): number {
   return calls.reduce((acc, c, i) => (c.function.name === "write_file" || c.function.name === "edit_file" ? i : acc), -1);
 }
 
-// Can this call run concurrently in a batch? Only an allow-listed read-only tool whose approval
-// decision is "run" — so an out-of-root read_file (which would need an interactive prompt) correctly
-// falls back to the serial path. Gated by config.parallelTools (PARALLEL_TOOLS=0 disables entirely).
+// Can this call run concurrently in a batch? Only a tool that DECLARES execution: "parallel" and
+// whose approval decision is "run" — so an out-of-root read_file (which would need an interactive
+// prompt) correctly falls back to the serial path. Gated by config.parallelTools (PARALLEL_TOOLS=0
+// disables entirely).
 // Takes only the approval-cache sets it needs (not the whole TurnDeps) so it's easy to unit-test.
 export function isParallelSafe(call: ToolCall, deps: Pick<TurnDeps, "approvedTools" | "approvedGuardKeys">): boolean {
   if (!config.parallelTools) return false;
-  if (!PARALLEL_SAFE.has(call.function.name)) return false;
   const tool = toolsByName.get(call.function.name);
   if (!tool) return false;
+  if (tool.execution !== "parallel") return false; // default is "exclusive" — silence means serial
   let args: Record<string, any>;
   try {
     args = JSON.parse(call.function.arguments);
@@ -275,7 +280,7 @@ function noteImages(text: string, images: ImagePart[], tool: string, sink: Image
 // approval / verify / show-todos-explore branches never reach here because isParallelSafe excludes them).
 async function runReadOnlyBatch(block: ToolCall[], messages: Message[], step: number, deps: TurnDeps, sink: ImageSink): Promise<void> {
   const { callCounts, signal } = deps;
-  const parts = await Promise.all(block.map(async (call) => {
+  const runOne = async (call: ToolCall) => {
     // Loop detector: same per-turn byte-identical-call guard as handleToolCall.
     const sig = `${call.function.name}:${call.function.arguments}`;
     const seen = (callCounts.get(sig) ?? 0) + 1;
@@ -286,21 +291,43 @@ async function runReadOnlyBatch(block: ToolCall[], messages: Message[], step: nu
     let callArgs: Record<string, any> = {};
     try { callArgs = JSON.parse(call.function.arguments); } catch { /* runTool reports the bad JSON */ }
     if (config.traceFile) trace.push({ tool: call.function.name, args: call.function.arguments, step });
+    record({ type: "tool_started", turnId: deps.turnId, step, ...callFacts(call) });
     // Each closure returns its own object — no shared mutable state, so concurrency is safe. The
     // ordered loop below is what preserves call order for both the transcript and the image sink.
-    const { text: raw, images } = splitResult(await runTool(call, signal));
-    let text = raw;
-    const summary = summarizeResult(call.function.name, callArgs, text, images.length);
+    const startedAt = Date.now();
+    const outcome = await runTool(call, signal);
+    record({ type: "tool_finished", callId: call.id, name: call.function.name, ms: Date.now() - startedAt, ...outcomeSummary(outcome) });
+    const images = outcome.images;
+    let text = modelText(outcome); // a failure still SAYS it failed to the model — that's presentation
+    const summary = summarizeResult(call.function.name, callArgs, text, images.length, outcome.ok);
     // Truncation applies to the TEXT only; images never enter it, so they can't be sliced into
     // invalid base64. Note the attach note is appended AFTER, so it can never be cut off.
     if (text.length > config.maxToolResultChars) {
       text = text.slice(0, config.maxToolResultChars) + `\n…[truncated ${text.length - config.maxToolResultChars} chars]`;
     }
     return { call, out: "  " + renderToolCall(call.function.name, callArgs) + summary, text, images };
-  }));
-  for (const p of parts) {
-    process.stdout.write(p.out + "\n");
-    messages.push({ role: "tool", tool_call_id: p.call.id, content: noteImages(p.text, p.images, p.call.function.name, sink) });
+  };
+
+  // Bounded fan-out. The batch size is the MODEL's choice, so an unbounded Promise.all over it would
+  // let one message open as many sockets/file handles as it liked. Chunking keeps at most
+  // config.maxParallelTools in flight; the ordered commit loop below is unaffected, so results still
+  // reach the model in the model's own call order however the work was chunked.
+  for (let i = 0; i < block.length; i += config.maxParallelTools) {
+    // Cancelled between chunks — don't start the rest. Every other loop in the turn checks this;
+    // this one didn't, so a Ctrl-C still ran the whole batch. It matters more than it looks: most
+    // parallel-declared tools (read_file, search, list_dir, check_task, read_skill) take no signal
+    // at all, so nothing downstream stops them once started — a 24-search batch kept going for
+    // seconds after the user asked it to stop.
+    if (signal?.aborted) break;
+    // COMMIT PER CHUNK, not once at the end. A SIGTERM or crash mid-batch must leave the finished
+    // chunks' results in the conversation: persist() seals whatever is there, and seal labels every
+    // unanswered call "did not run". Buffering the whole block meant completed work was both lost
+    // AND mislabelled. Order is untouched — chunks are consecutive slices and Promise.all preserves
+    // order within one, so results still reach the model in the model's own call order.
+    for (const p of await Promise.all(block.slice(i, i + config.maxParallelTools).map(runOne))) {
+      process.stdout.write(p.out + "\n");
+      messages.push({ role: "tool", tool_call_id: p.call.id, content: noteImages(p.text, p.images, p.call.function.name, sink) });
+    }
   }
 }
 
@@ -352,6 +379,9 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     dangerouslySkip: config.dangerouslySkipPermissions,
   });
   if (decision.action === "deny") {
+    // A refusal is a FACT about the run, and one the transcript can only hint at. Record it, with the
+    // failure code the tool would have carried, so "was this ever allowed to run?" is answerable.
+    record({ type: "approval_resolved", callId: call.id, name: call.function.name, decision: "deny" });
     if (decision.kind === "readonly") {
       console.log("  " + color.dim(`${call.function.name} — skipped (read-only mode)`));
       pushTool("Read-only mode is ON: write_file, edit_file and run_bash are disabled. Explore and explain instead, or tell the user to press Shift+Tab to leave read-only mode before making changes.");
@@ -365,6 +395,7 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     // Always show the guard reason (out-of-root/secret/risky), but only offer "always" when it can
     // actually cache — so we never dangle a misleading option.
     const answer = await askApproval(ask, call, decision.reason, decision.cacheable);
+    record({ type: "approval_resolved", callId: call.id, name: call.function.name, decision: answer });
     if (answer === "deny") {
       console.log(color.red("   ↳ denied") + "\n");
       pushTool(decision.reason
@@ -392,8 +423,12 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   process.stdout.write("  " + renderToolCall(call.function.name, callArgs) + (isTodo || isShow || isExplore ? "\n" : ""));
 
   // pass the cancel signal so Ctrl-C kills a running tool
-  const { text: rawResult, images } = splitResult(await runTool(call, signal));
-  let result = rawResult;
+  record({ type: "tool_started", turnId: deps.turnId, step, ...callFacts(call) });
+  const startedAt = Date.now();
+  const outcome = await runTool(call, signal);
+  record({ type: "tool_finished", callId: call.id, name: call.function.name, ms: Date.now() - startedAt, ...outcomeSummary(outcome) });
+  const images = outcome.images;
+  let result = modelText(outcome);
 
   // `show` renders a file/dir view for the USER; the model gets only a short note back,
   // so file contents never bloat the conversation.
@@ -409,14 +444,15 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
     return;
   }
 
-  const summary = summarizeResult(call.function.name, callArgs, result, images.length); // from the RAW result
+  // From the RAW result, and from the outcome's OWN success flag — not from how its text is worded.
+  const summary = summarizeResult(call.function.name, callArgs, result, images.length, outcome.ok);
 
   // Auto-verify after a file mutation so the model sees what it broke. Runs once per message (after the
   // LAST edit in a batch) — verifyThisCall is false for earlier edits, so N edits don't trigger N checks.
-  let verifyOut = "";
+  let verify: { ok: boolean; text: string } | null = null;
   if (verifyThisCall && config.verifyCommand && (call.function.name === "write_file" || call.function.name === "edit_file")) {
-    verifyOut = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
-    result += `\n\n[auto-check: ${config.verifyCommand}]\n${verifyOut}`;
+    verify = await runVerify(signal); // Ctrl-C/Esc cancels the auto-check too
+    result += `\n\n[auto-check: ${config.verifyCommand}]\n${verify.text}`;
   }
   // Cap giant outputs so one read/command can't blow the window.
   if (result.length > config.maxToolResultChars) {
@@ -431,9 +467,8 @@ async function handleToolCall(call: ToolCall, messages: Message[], step: number,
   } else {
     process.stdout.write(summary + "\n");
   }
-  if (verifyOut) {
-    const ok = verifyOut.startsWith("passed");
-    console.log("  " + color.dim(`auto-check ${config.verifyCommand}`) + "  " + (ok ? color.green("✓ passed") : color.red("✗ failed")));
+  if (verify) {
+    console.log("  " + color.dim(`auto-check ${config.verifyCommand}`) + "  " + (verify.ok ? color.green("✓ passed") : color.red("✗ failed")));
   }
   pushTool(result);
 }
@@ -463,9 +498,57 @@ export function applySteering(messages: Message[], notes: string[]): Message[] {
   return [...messages, { role: "user", content }];
 }
 
-// Run one full turn. Returns the updated conversation (or the pre-turn snapshot
-// if the turn failed). The conversation may be reassigned by compaction, which
-// is why this returns it rather than only mutating in place.
+let turnCounter = 0;
+
+// Close a turn in the record. EVERY started turn gets exactly one of these — completed, cancelled,
+// error, or step_limit — so "what happened to that turn?" is answerable from the journal alone
+// rather than inferred from which messages happen to be missing. Flushed immediately: a turn ending
+// is exactly the moment the record has to survive whatever happens next.
+function finishTurn(turnId: string, status: TurnStatus, steps: number, error?: string): void {
+  record({ type: "turn_finished", turnId, status, steps, error });
+  void flushJournal();
+}
+
+// One model call, with a BOUNDED recovery from the one provider error we can actually do something
+// about: "your prompt is too long".
+//
+// Our token count is an estimate (~4 chars/token), so a token-dense conversation can be genuinely
+// over the window while beecork believes it fits — and a plain 400 kills the turn. So: compact
+// against a deliberately smaller budget and try again ONCE. `overflow` is per-TURN state, not
+// per-call, so a turn can never trade itself into an unbounded compact→retry→compact loop; a second
+// overflow throws and the turn ends with its work intact (sealInterruptedToolCalls).
+async function callModelWithOverflowRecovery(
+  messages: Message[],
+  signal: AbortSignal | undefined,
+  overflow: { retried: boolean },
+): Promise<Message> {
+  try {
+    return await callModel(messages, true, signal);
+  } catch (err) {
+    if (overflow.retried || signal?.aborted || !isContextOverflow(err)) throw err;
+    overflow.retried = true;
+    noteContextOverflow(); // remember the refusal, so later steps of this turn aim lower from the start
+    console.log(color.dim(`\n[the provider says the prompt is too long — compacting harder and retrying once]`));
+    adoptInPlace(messages, await compactIfNeeded(messages, signal, contextBudget()));
+    return await callModel(messages, true, signal);
+  }
+}
+
+// Compaction and steering both return a NEW array. Rebinding the local would leave the CALLER
+// holding the pre-compaction array — and index.ts's crash handler persists exactly that reference,
+// so a SIGTERM after a mid-turn compaction used to save a conversation missing the rest of the turn.
+// Adopting the new contents into the original array keeps ONE conversation identity for the whole
+// turn, so every holder of it sees the truth at all times. (Element-wise, not splice(...spread):
+// a long conversation would blow the argument limit.)
+function adoptInPlace(target: Message[], next: Message[]): void {
+  if (target === next) return;
+  target.length = 0;
+  for (const m of next) target.push(m);
+}
+
+// Run one full turn. Returns the updated conversation. On failure or cancellation it returns the
+// work that really happened, with never-started tool calls sealed (see sealInterruptedToolCalls) —
+// NOT a pre-turn snapshot, which would erase side effects that already hit the disk.
 // `steering` is a live queue the caller's key handler appends to WHILE the turn runs (mid-turn
 // steering); it's drained at the top of each step, mirroring how `signal` is threaded + checked.
 export async function runTurn(
@@ -480,28 +563,47 @@ export async function runTurn(
 ): Promise<Message[]> {
   // Text FIRST, then images — OpenRouter's guidance for multi-part user messages.
   messages.push({ role: "user", content: attachments?.length ? [{ type: "text", text: userInput }, ...attachments] : userInput });
-  const snapshot = messages.slice(); // roll back to here (keeping the user's message) on failure
+
+  const turnId = `t${++turnCounter}`;
+  record({ type: "turn_started", turnId, input: userInput });
+  let lastStep = 0;
 
   try {
     let answered = false;
     const callCounts = new Map<string, number>(); // loop detector (per turn)
-    const deps: TurnDeps = { approvedTools, approvedGuardKeys, callCounts, ask, signal }; // stable for the whole turn
+    const overflow = { retried: false }; // context-overflow recovery: EXACTLY once per turn
+    const deps: TurnDeps = { approvedTools, approvedGuardKeys, callCounts, ask, signal, turnId, step: 0 }; // stable for the whole turn
 
     for (let step = 0; step < config.maxSteps && !answered && !signal?.aborted; step++) {
       // Keep within the window — before EACH call, so a turn can't overflow either.
       // (compactIfNeeded hard-trims on summary failure, so it won't normally throw.)
       try {
-        messages = await compactIfNeeded(messages, signal);
+        adoptInPlace(messages, await compactIfNeeded(messages, signal));
       } catch (err) {
         console.error(color.red(`\n[compaction failed: ${(err as Error).message} — continuing]`) + "\n");
       }
 
+      lastStep = step;
+      deps.step = step;
+      record({ type: "step_started", turnId, step });
+
       // Drain any mid-turn steering the user typed since the last step, injecting it before this
       // model call so the model acts on it now. splice(0) empties the queue atomically.
-      if (steering?.length) messages = applySteering(messages, steering.splice(0));
+      if (steering?.length) {
+        const notes = steering.splice(0);
+        for (const note of notes) record({ type: "steering_added", turnId, note });
+        adoptInPlace(messages, applySteering(messages, notes));
+      }
 
-      const message = await callModel(messages, true, signal);
+      const message = await callModelWithOverflowRecovery(messages, signal, overflow);
       messages.push(message);
+      record({
+        type: "assistant_message",
+        turnId,
+        step,
+        text: textOf(message.content).slice(0, 300),
+        calls: (message.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name })),
+      });
 
       if (!hasContent(message)) {
         // Empty turn: the model returned nothing, even after callModel's retries. Don't
@@ -528,10 +630,13 @@ export async function runTurn(
           if (isParallelSafe(calls[i], deps)) {
             let j = i + 1;
             while (j < calls.length && isParallelSafe(calls[j], deps)) j++;
-            if (j - i > 1) { await runReadOnlyBatch(calls.slice(i, j), messages, step, deps, sink); i = j; continue; }
+            if (j - i > 1) { await runReadOnlyBatch(calls.slice(i, j), messages, step, deps, sink); i = j; void flushJournal(); continue; }
           }
           await handleToolCall(calls[i], messages, step, deps, sink, i === lastMutationIdx);
           i++;
+          // Flush AFTER each tool settles — the point of the journal is that a hard kill (SIGKILL,
+          // power loss) still leaves a record, and the session file is only written at exit.
+          void flushJournal();
         }
         const attachment = buildAttachmentMessage(sink);
         if (attachment) messages.push(attachment);
@@ -545,7 +650,8 @@ export async function runTurn(
 
     if (signal?.aborted) {
       console.log(color.dim("\n[cancelled]") + "\n");
-      return snapshot; // cancelled — roll back to a clean state
+      finishTurn(turnId, "cancelled", lastStep);
+      return sealInterruptedToolCalls(messages); // keep what really ran; pair up what never started
     }
 
     if (!answered) {
@@ -564,13 +670,18 @@ export async function runTurn(
       if (hasContent(wrap)) messages.push(wrap);
     }
 
+    finishTurn(turnId, answered ? "completed" : "step_limit", lastStep);
     return messages;
   } catch (err) {
     if (signal?.aborted || (err as Error)?.name === "AbortError") {
       console.log(color.dim("\n[cancelled]") + "\n");
-      return snapshot; // cancelled — roll back to a clean state
+      finishTurn(turnId, "cancelled", lastStep);
+      return sealInterruptedToolCalls(messages);
     }
     console.error(color.red(`\n[error] ${(err as Error).message}`) + "\n");
-    return snapshot; // roll the whole turn back to a known-good state
+    finishTurn(turnId, "error", lastStep, (err as Error).message);
+    // Do NOT roll back. A tool that already ran changed the real world; erasing it from history is
+    // how the model ends up redoing an edit it already made. Keep the work, repair the pairing.
+    return sealInterruptedToolCalls(messages);
   }
 }

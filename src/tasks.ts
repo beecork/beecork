@@ -5,6 +5,7 @@
 // reaped with its parent). Reuses runShell's detached-spawn + process-group-kill idiom (tools.ts:26-68).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import type { SpawnSpec } from "./sandbox";
 import { config } from "./config";
 
 type BgTask = {
@@ -63,13 +64,18 @@ function evictOldExited(): void {
   for (const t of exited.slice(0, Math.max(0, exited.length - MAX_EXITED))) tasks.delete(t.id);
 }
 
-export function startTask(command: string): { id?: string; error?: string } {
+// `spec` is the OS-confined form of `command` (sandbox.ts). A background task runs a MODEL-CHOSEN
+// command exactly like run_bash does, and outlives the turn that started it, so it must be confined
+// by the same boundary — a sandbox that only covered the foreground path would be a sandbox the
+// model could step around by passing background:true.
+export function startTask(command: string, spec?: SpawnSpec): { id?: string; error?: string } {
   evictOldExited(); // keep the map from accumulating finished-task tombstones for the whole session
   const running = [...tasks.values()].filter((t) => t.status === "running").length;
   if (running >= config.maxBackgroundTasks) {
     return { error: `too many background tasks (${running}/${config.maxBackgroundTasks}) — stop one with stop_task first.` };
   }
-  const child = spawn(command, { shell: true, detached: unix, stdio: ["ignore", "pipe", "pipe"] });
+  const run = spec ?? { cmd: command, args: [], shell: true };
+  const child = spawn(run.cmd, run.args, { shell: run.shell, detached: unix, stdio: ["ignore", "pipe", "pipe"] });
   const id = `bg_${++counter}`;
   const task: BgTask = { id, command, child, buffer: "", totalLen: 0, readLen: 0, status: "running", exitCode: null, startedAt: Date.now() };
   const onData = (d: Buffer) => {

@@ -14,8 +14,8 @@ import type { Message, ToolCall, ToolDef } from "./types";
 import { config } from "./config";
 import { color, stripControl } from "./ui";
 import { callModel } from "./api";
-import { runTool, toolDefs } from "./tools";
-import { splitResult, textOf } from "./images";
+import { runTool, toolDefs, modelText } from "./tools";
+import { textOf } from "./images";
 import { decideApproval } from "./agent";
 
 // The child's ALLOW-LIST — read/search/list + web. Deliberately excludes every mutating tool AND
@@ -112,7 +112,11 @@ export async function runExplorer(task: string, focus: string | undefined, signa
       // The explorer's contract with its parent is a TEXT summary, and its allow-list can't produce
       // images anyway — so it stays string-only rather than inheriting vision (which would also
       // multiply cost). If one ever does arrive, say so instead of dropping it silently.
-      const { text, images } = splitResult(await runTool(c, sig, childByName)); // restricted map = the allow-list
+      // runTool returns an ALREADY-normalized ToolOutcome; passing it back through splitResult would
+      // re-read it as a raw ToolResult, match on its `ok` field, and hand back `undefined` text.
+      const outcome = await runTool(c, sig, childByName); // restricted map = the allow-list
+      const { images } = outcome;
+      const text = modelText(outcome); // a failed call still SAYS so to the explorer
       const r = images.length
         ? text + `\n[${images.length} image(s) returned — the read-only explorer is text-only and cannot view them; report that to the parent.]`
         : text;

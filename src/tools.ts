@@ -20,21 +20,28 @@ import { pathGuard, readGuard, writeGuard, bashGuard, isSafeBash, isPrivateAddr,
 import { htmlToText, stripInvisible, stripControlTokens, wrapUntrusted } from "./html";
 import { ensureBridge, skeletonUrl, extensionDir, type EnsureResult } from "./skeleton";
 import { toOrigin, loadProjectOrigins, addProjectOrigin } from "./projectSites";
-import { renderTodos } from "./ui";
+import { renderTodos, color } from "./ui";
 import { showPayload } from "./show";
-import { sniffImage, imagePart } from "./images";
-import type { ToolCall, ToolDef, TodoItem, ToolResult } from "./types";
+import { sniffImage, imagePart, splitResult } from "./images";
+import { probeSandbox, wrapCommand, unconfinedNotice, type SpawnSpec } from "./sandbox";
+import type { ToolCall, ToolDef, TodoItem, ToolResult, ToolOutcome, ToolFailure, ToolFailureCode } from "./types";
 
 // Run a shell command, capturing stdout/stderr (capped). On timeout, kill the whole
 // process GROUP (detached leader) so spawned descendants — watchers, dev servers, test
 // runners — die too, instead of surviving the killed shell. Rejects with an Error that
 // carries .stdout/.stderr (the ExecError shape) on non-zero exit or timeout.
-function runShell(command: string, opts: { timeout: number; maxBuffer: number; signal?: AbortSignal }): Promise<{ stdout: string; stderr: string }> {
+function runShell(
+  command: string,
+  opts: { timeout: number; maxBuffer: number; signal?: AbortSignal; spec?: SpawnSpec },
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const unix = process.platform !== "win32";
+    // `spec` is the OS-confined form of `command` (sandbox.ts). Absent → run it bare, which is what
+    // happens for beecork's OWN fixed commands and when confinement is unavailable under `auto`.
+    const spec = opts.spec ?? { cmd: command, args: [], shell: true };
     // stdin = "ignore" so a command that reads stdin (e.g. bare `cat`, `grep pattern`) gets an
     // immediate EOF instead of blocking until the timeout on a pipe we never write to.
-    const child = spawn(command, { shell: true, detached: unix, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(spec.cmd, spec.args, { shell: spec.shell, detached: unix, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", outLen = 0, errLen = 0, timedOut = false, aborted = false;
     let settled = false, exitCode: number | null = null;
     const kill = () => {
@@ -427,6 +434,7 @@ async function readImageFile(abs: string): Promise<ToolResult | null> {
 export const toolDefs: ToolDef[] = [
   {
     name: "read_file",
+    execution: "parallel",
     description:
       "Read a file. Text comes back WITH line numbers (for reference only); an image file (PNG/JPEG/" +
       "WebP/GIF) comes back as an image you can look at. " +
@@ -504,6 +512,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "search",
+    execution: "parallel",
     description:
       "Search for a regular-expression pattern across files in a directory (recursively), returning " +
       "matching 'path:line: text'. Read-only. Use this to find where a name is defined or used.",
@@ -662,6 +671,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "list_dir",
+    execution: "parallel",
     description:
       "List the files and folders in a directory. Use this to list or COUNT files — " +
       "do NOT shell out to run_bash/ls for that.",
@@ -713,28 +723,46 @@ export const toolDefs: ToolDef[] = [
         return `Error: refused — the command matches a known-catastrophic pattern (${danger}). If this is genuinely intended, the user must run it manually.`;
       }
       if (args.background) {
-        // Detached, non-blocking. Still gated above (DANGEROUS refusal) and by the run_bash approval.
-        const { id, error } = startTask(String(args.command));
+        // Detached, non-blocking. Still gated above (DANGEROUS refusal) and by the run_bash approval —
+        // and confined by the SAME sandbox as the foreground path, so background:true is not an escape.
+        const bgSandbox = await probeSandbox();
+        const wrapped = wrapCommand(String(args.command), state.mode, bgSandbox);
+        if (wrapped.refusal) return { ok: false, code: "DENIED", message: wrapped.refusal };
+        const bgNotice = unconfinedNotice(bgSandbox);
+        if (bgNotice) console.log(color.yellow(`\n⚠️  ${bgNotice}`) + "\n");
+        const { id, error } = startTask(String(args.command), wrapped.spec);
         return error
-          ? `Error: ${error}`
+          ? { ok: false, code: "FAILED", message: error }
           : `Started background task ${id} — running detached. Poll new output with check_task("${id}"), stop it with stop_task("${id}"). Stop it once you no longer need it.`;
       }
+      // OS confinement. This is the only place a MODEL-CHOSEN foreground command reaches spawn(),
+      // so wrapping here covers run_bash entirely — no per-feature sandboxing to keep in sync.
+      const sandbox = await probeSandbox();
+      const { spec, refusal } = wrapCommand(String(args.command), state.mode, sandbox);
+      if (refusal) return { ok: false, code: "DENIED", message: refusal };
+      const notice = unconfinedNotice(sandbox);
+      if (notice) console.log(color.yellow(`\n⚠️  ${notice}`) + "\n");
+
       try {
-        const { stdout, stderr } = await runShell(args.command, { timeout: config.execTimeoutMs, maxBuffer: config.maxToolBuffer, signal });
+        const { stdout, stderr } = await runShell(args.command, { timeout: config.execTimeoutMs, maxBuffer: config.maxToolBuffer, signal, spec });
         return (stdout || "") + (stderr ? `\n[stderr]\n${stderr}` : "") || "(no output)";
       } catch (err) {
         // A failed command (non-zero exit / timeout / maxBuffer) still captured output —
         // return it so the model can read the failure (mirrors runVerify); err.message alone drops stdout.
         const e = err as ExecError;
         const out = `${e.stdout ?? ""}${e.stderr ? `\n[stderr]\n${e.stderr}` : ""}`.trim();
-        // Lead with "Error" so it satisfies the tool error-string contract (see ToolDef.run) —
-        // the model + summarizeResult both recognize failure by that prefix.
-        return `Error: command failed${out ? `:\n${out}` : `: ${String(e.message ?? err)}`}`;
+        const timedOut = /timed out/.test(String(e.message ?? ""));
+        return {
+          ok: false,
+          code: timedOut ? "TIMEOUT" : "FAILED",
+          message: `command failed${out ? `:\n${out}` : `: ${String(e.message ?? err)}`}`,
+        };
       }
     },
   },
   {
     name: "web_fetch",
+    execution: "parallel",
     description:
       "Fetch an http(s) URL and return its readable text (HTML is stripped to plain text). " +
       "Read-only GET — use it to read documentation, articles, or raw files when you have a URL. " +
@@ -779,6 +807,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "web_search",
+    execution: "parallel",
     description:
       "Search the web and return the top results (title, url, snippet). Use this to FIND pages when " +
       "you don't have a URL — then web_fetch one to read it. Returns links, not full page contents.",
@@ -893,6 +922,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "check_task",
+    execution: "parallel",
     description:
       "Read status + new output from a background task started by run_bash (background:true). Returns " +
       "only output produced since your last check. Use to see if a dev server started, a build finished, etc.",
@@ -916,6 +946,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "read_skill",
+    execution: "parallel",
     description:
       "Load the full instructions of a saved skill by name (the skills listed under '# Skills' in your " +
       "system prompt). Returns the skill's text so you can follow it. Call this when a task clearly " +
@@ -998,6 +1029,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: "read_dev_signals",
+    execution: "parallel",
     description:
       "Read the browser's recent console errors and failed network requests for the user's app " +
       "(localhost or production), captured live by the Beecork Skeleton extension — so you can SEE " +
@@ -1175,22 +1207,56 @@ export function unregisterDynamicTools(names: string[]): void {
 // Look up + run a tool call. Errors come back as strings so the model can react. `byName` defaults to
 // the full registry; a sub-agent passes a RESTRICTED map so it's the dispatch ALLOW-LIST — a tool the
 // child isn't allowed (e.g. an emitted write_file) resolves to "unknown tool" and never runs.
-export async function runTool(call: ToolCall, signal?: AbortSignal, byName: Map<string, ToolDef> = toolsByName): Promise<ToolResult> {
+// Normalize whatever a tool returned into the one shape the rest of beecork consumes.
+//
+// The legacy convention was that a failure is "a string starting with Error", which made a fact about
+// EXECUTION depend on how a message was worded — a successful result that happened to begin with the
+// word "Error" read as a failure, and a structured signal like MCP's isError had to be flattened into
+// prose to be seen at all. Structured failures are now first-class; the string form is still accepted
+// and classified here, so every existing tool keeps working unchanged.
+export function toOutcome(r: ToolResult): ToolOutcome {
+  const { text, images } = splitResult(r);
+  if (typeof r === "object" && "ok" in r) {
+    return { ok: false, code: r.code, text, images, retryable: r.retryable ?? false };
+  }
+  // Legacy adapter — the ONLY place left that reads the "Error" prefix, and it reads it as input.
+  if (text.startsWith("Error")) return { ok: false, code: "FAILED", text, images, retryable: false };
+  return { ok: true, text, images };
+}
+
+// What the MODEL sees for a failed call. It still needs to be told, in words, that the call failed —
+// that is presentation, and it stays identical to the old behavior; what changed is that beecork
+// itself no longer infers anything from this string.
+export function modelText(o: ToolOutcome): string {
+  if (o.ok) return o.text;
+  return o.text.startsWith("Error") ? o.text : `Error: ${o.text}`;
+}
+
+const failure = (code: ToolFailureCode, message: string): ToolFailure => ({ ok: false, code, message });
+
+export async function runTool(call: ToolCall, signal?: AbortSignal, byName: Map<string, ToolDef> = toolsByName): Promise<ToolOutcome> {
   const tool = byName.get(call.function.name);
-  if (!tool) return `Error: unknown tool "${call.function.name}".`;
+  if (!tool) return toOutcome(failure("NOT_FOUND", `unknown tool "${call.function.name}".`));
   let args: Record<string, any>;
   try {
     const raw = (call.function.arguments ?? "").trim();
     args = raw ? JSON.parse(raw) : {}; // some models send "" for a no-arg call — treat as {}
   } catch {
-    return `Error: arguments were not valid JSON: ${call.function.arguments}`;
+    return toOutcome(failure("INVALID_ARGS", `arguments were not valid JSON: ${call.function.arguments}`));
   }
   if (typeof args !== "object" || args === null || Array.isArray(args)) {
-    return "Error: tool arguments must be a JSON object.";
+    return toOutcome(failure("INVALID_ARGS", "tool arguments must be a JSON object."));
   }
   const invalid = validateArgs(tool, args);
-  if (invalid) return `Error: ${invalid}`;
-  return tool.run(args, signal);
+  if (invalid) return toOutcome(failure("INVALID_ARGS", invalid));
+  try {
+    return toOutcome(await tool.run(args, signal));
+  } catch (err) {
+    // A tool that THROWS used to take the whole turn down with it. Now it is just a failed call the
+    // model can see and react to — except a user cancel, which stays a cancel.
+    const aborted = signal?.aborted || (err as Error)?.name === "AbortError";
+    return toOutcome(failure(aborted ? "CANCELLED" : "FAILED", (err as Error)?.message ?? String(err)));
+  }
 }
 
 // Validate the model's args against the tool's JSON schema before running — required
@@ -1221,14 +1287,18 @@ type ExecError = { stdout?: string; stderr?: string; message?: string };
 
 // Run the configured check command (config.verifyCommand) after a file edit.
 // A non-zero exit throws, so we catch it and capture its output.
-export async function runVerify(signal?: AbortSignal): Promise<string> {
+// Returns the verdict as DATA alongside the text. The text is unchanged — it still reads
+// "passed ✓" / "FAILED ✗" for the model — but the caller no longer has to re-derive whether the
+// check passed by reading the first word of its own output back. Same reason the tool contract
+// stopped encoding failure in an "Error" prefix.
+export async function runVerify(signal?: AbortSignal): Promise<{ ok: boolean; text: string }> {
   try {
     const { stdout, stderr } = await runShell(config.verifyCommand, { timeout: config.verifyTimeoutMs, maxBuffer: config.maxToolBuffer, signal });
     const out = `${stdout}${stderr}`.trim();
-    return `passed ✓${out ? `\n${out.slice(-800)}` : ""}`;
+    return { ok: true, text: `passed ✓${out ? `\n${out.slice(-800)}` : ""}` };
   } catch (err) {
     const e = err as ExecError;
     const out = `${e.stdout ?? ""}${e.stderr ?? ""}`.trim() || String(e.message ?? err);
-    return `FAILED ✗\n${out.slice(-1500)}`;
+    return { ok: false, text: `FAILED ✗\n${out.slice(-1500)}` };
   }
 }

@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decideApproval, askUserMessage, isParallelSafe, lastMutationIndex } from "./agent";
+import { toolDefs } from "./tools";
 import type { ToolCall, ToolDef } from "./types";
 
 const mk = (over: Partial<ToolDef>): ToolDef => ({ name: "t", description: "", parameters: {}, run: async () => "", ...over });
@@ -151,4 +152,25 @@ test("lastMutationIndex: only the LAST write/edit triggers the post-batch verify
   assert.equal(lastMutationIndex([tc("read_file"), tc("edit_file"), tc("read_file"), tc("edit_file")]), 3);
   assert.equal(lastMutationIndex([tc("write_file"), tc("read_file")]), 0);
   assert.equal(lastMutationIndex([tc("read_file"), tc("search")]), -1); // no mutation → verify never runs
+});
+
+// The execution mode is DECLARED per tool now (types.ts `execution`), replacing a hardcoded list of
+// names in agent.ts. A declaration can be wrong in a way a name list couldn't, so pin the invariant:
+// concurrency may never be granted to something that mutates, prompts, or reads the keyboard.
+test("no tool declares execution:'parallel' while also mutating or needing approval", () => {
+  for (const t of toolDefs) {
+    if (t.execution !== "parallel") continue;
+    assert.equal(t.mutates ?? false, false, `${t.name} declares parallel but mutates`);
+    assert.equal(t.needsApproval ?? false, false, `${t.name} declares parallel but needs approval`);
+    assert.equal(t.alwaysAsk ?? false, false, `${t.name} declares parallel but always asks`);
+  }
+});
+
+test("execution defaults to exclusive — silence means serial, never concurrent", () => {
+  // The failure mode this guards: someone adds a tool, forgets to think about concurrency, and it
+  // silently starts running alongside others. Absent declaration must mean the SAFE answer.
+  const undeclared = toolDefs.filter((t) => t.execution === undefined);
+  for (const t of undeclared) {
+    assert.equal(isParallelSafe(tc(t.name), pdeps), false, `${t.name} declares nothing → must stay serial`);
+  }
 });

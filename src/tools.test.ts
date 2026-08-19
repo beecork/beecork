@@ -7,14 +7,14 @@ import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, rmSync, mk
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
-import { runTool, resolveEdit, toolDefs } from "./tools";
+import { runTool, resolveEdit, toolDefs, modelText } from "./tools";
 import { projectRoot } from "./paths";
 import { loadProjectOrigins } from "./projectSites";
 import type { ToolCall } from "./types";
 import { splitResult } from "./images";
 
 // Tools now return a ToolResult (text, optionally images). These tests assert on the TEXT half.
-const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => splitResult(await runTool(c, s)).text;
+const runText = async (c: ToolCall, s?: AbortSignal): Promise<string> => modelText(await runTool(c, s));
 
 
 // Apply a successful resolution the same way edit_file's run() does (offset slice-and-splice).
