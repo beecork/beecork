@@ -69,7 +69,6 @@ const connecting = new Set<Promise<void>>();
 let announced = false;
 
 export const mcpStatus = (): McpConnection[] => [...conns.values()];
-export const mcpConfigured = (): boolean => conns.size > 0;
 
 // ---------------------------------------------------------------------------
 // Config parsing (pure — unit-tested)

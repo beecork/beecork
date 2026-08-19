@@ -58,7 +58,32 @@ outside (or any shell command) goes through a permission gate.
 ### Tools
 
 `read_file` · `show` · `write_file` · `edit_file` · `list_dir` · `search` · `run_bash` ·
-`web_fetch` · `web_search` · `update_todos` · `remember` · `read_skill` · `ask_user` · `check_task` · `stop_task` · `explore`
+`web_fetch` · `web_search` · `update_todos` · `remember` · `read_skill` · `ask_user` · `check_task` · `stop_task` · `explore` ·
+`read_dev_signals` · `watch_site`
+
+### OS sandbox
+
+Commands the MODEL chooses (`run_bash`, foreground and background) run inside a kernel-enforced
+filesystem boundary — Seatbelt via `sandbox-exec` on macOS, bubblewrap on Linux. Reads stay broad (a
+coding agent has to read its toolchain); **writes** are confined to the project and the temp dir, and
+credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.beecork`, …) are denied last so they stay read-only
+however the writable list is widened. Build caches (`~/.npm`, `~/.cargo`, …) are writable so
+`npm install` still works.
+
+This sits *beneath* the approval gate, it does not replace it: the gate answers "should this be
+attempted?", the sandbox answers "what is this process actually capable of?". A command that assembles
+a path at runtime, follows a symlink, or execs another binary is invisible to any parser but not to
+the kernel. By default (`auto`) beecork warns once if no runner is available; `BEECORK_SANDBOX=on`
+makes that a refusal instead.
+
+### Execution journal
+
+An append-only `.beecork/journal/*.jsonl` per session, flushed at tool boundaries: turn/step
+boundaries, tool calls and their outcomes, approval decisions, and how each turn ended. It answers
+"what did this agent actually do?" after a crash, when the conversation file (written at exit) is
+gone. Local only, never transmitted, summaries not payloads, `0600`, and `BEECORK_JOURNAL=0` turns it
+off. beecork writes a `.beecork/.gitignore` the first time it creates that folder so none of this
+lands in your commits.
 
 ### Background tasks
 
@@ -217,6 +242,12 @@ All variables are read from the real shell environment only (never a project fil
 | `MCP` | Set `0`/`off` to disable MCP servers entirely for a session | on |
 | `MAX_IMAGE_BYTES` | Largest image beecork will attach | `5000000` |
 | `MAX_LIVE_IMAGES` | Images kept in the live conversation | `4` |
+| `BEECORK_SANDBOX` | OS confinement for model-chosen commands: `auto` confines when a runner exists and warns once if not; `on` REFUSES to run commands unconfined; `off` disables it | `auto` |
+| `BEECORK_SANDBOX_WRITABLE` | Extra writable roots inside the sandbox (`:` or `,` separated). Credentials stay read-only regardless | — |
+| `BEECORK_JOURNAL` / `MAX_JOURNALS` | Local execution journal under `.beecork/journal/` · how many to keep | on · `50` |
+| `BEECORK_MODE` | Initial permission mode for headless runs: `normal`, `auto`, `readonly`, `plan` (`read-only` and `auto-approve` also accepted) | `normal` |
+| `MAX_PARALLEL_TOOLS` | Max independent read-only tool calls run at once | `8` |
+| `OUTPUT_RESERVE_TOKENS` | Headroom kept inside the model's window for the reply and its reasoning | `16000` |
 
 Other tunables (`KEEP_RECENT`, `MAX_TOOL_RESULT_CHARS`, `RETRY_ATTEMPTS`, `API_TIMEOUT_MS`, `SEARCH_*`, `VERIFY_TIMEOUT_MS`, `TRACE_FILE`, `MAX_BG_TASKS`, `BG_TAIL_CHARS`, `SUBAGENT_MAX_STEPS`, `MEMORY_MAX_CHARS`, `MEMORY_NUDGE_INTERVAL`, `SAFE_BASH_APPROVE`, `MCP_STARTUP_TIMEOUT_MS`, `MCP_REQUEST_TIMEOUT_MS`, `MCP_READY_WAIT_MS`, `MCP_MAX_TOOLS`, `IMAGE_TOKEN_COST`, `MAX_IMAGES_PER_MESSAGE`) are defined in `src/config.ts`.
 

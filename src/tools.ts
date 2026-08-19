@@ -1231,10 +1231,10 @@ export function unregisterDynamicTools(names: string[]): void {
 export function toOutcome(r: ToolResult): ToolOutcome {
   const { text, images } = splitResult(r);
   if (typeof r === "object" && "ok" in r) {
-    return { ok: false, code: r.code, text, images, retryable: r.retryable ?? false };
+    return { ok: false, code: r.code, text, images };
   }
   // Legacy adapter — the ONLY place left that reads the "Error" prefix, and it reads it as input.
-  if (text.startsWith("Error")) return { ok: false, code: "FAILED", text, images, retryable: false };
+  if (text.startsWith("Error")) return { ok: false, code: "FAILED", text, images };
   return { ok: true, text, images };
 }
 

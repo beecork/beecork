@@ -48,7 +48,7 @@ not go in `addedfromdeecode.md`.)
 
 ## Verification
 
-`npm run typecheck` · `npm test` (100 unit tests incl. the new `layout.test.ts`) · `npm run build`, plus
+`npm run typecheck` · `npm test` (the full suite incl. `layout.test.ts`) · `npm run build`, plus
 fake-TTY harnesses driving the real key handlers at the byte level: chromePick renders in the dropdown
 and never moves the content cursor; paste-burst → newline-not-submit + coalesced render + `⏎` display +
 real-`\n` submit; resize-grow clears the old band; the classic `readPrompt` still submits + shows its

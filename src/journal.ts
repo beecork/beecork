@@ -141,7 +141,7 @@ export function flushJournal(): Promise<void> {
   return writing;
 }
 
-/** Where this session's journal lives (null when journaling is off) — for /journal and diagnostics. */
+/** Where this session's journal lives (null when journaling is off). Used by the tests. */
 export const journalPath = (): string | null => file;
 
 // Keep the directory bounded, like .beecork/sessions/. Oldest first, best-effort.

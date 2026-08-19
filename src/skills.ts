@@ -58,7 +58,7 @@ export function getSkill(name: string): Skill | undefined {
   return registry.get(name);
 }
 
-// Scan global then project (project overrides on a name clash). Best-effort: a
+// Scan global then project. GLOBAL (user-owned) wins a name clash — see the header. Best-effort: a
 // missing folder or unreadable file is skipped, never fatal.
 export async function loadSkills(): Promise<Skill[]> {
   registry.clear();

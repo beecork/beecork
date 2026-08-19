@@ -2,7 +2,7 @@
 // turn. `run_bash` with background:true hands off here; check_task/stop_task read + kill. Tasks persist
 // ACROSS turns within a session (so a dev server you started stays up) and are ALL killed on process
 // exit — a detached child we stop awaiting would otherwise SURVIVE us (a detached group leader is not
-// reaped with its parent). Reuses runShell's detached-spawn + process-group-kill idiom (tools.ts:26-68).
+// reaped with its parent). Reuses runShell's detached-spawn + process-group-kill idiom (see runShell in tools.ts).
 
 import { spawn, type ChildProcess } from "node:child_process";
 import type { SpawnSpec } from "./sandbox";
