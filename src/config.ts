@@ -78,6 +78,19 @@ export function parseExtra(raw: string | undefined): Record<string, unknown> { /
   }
 }
 
+// "on" means confinement is REQUIRED; "auto" warns once and carries on. bool() elsewhere in this file
+// teaches that 1/true/yes/on are all truthy, so a user hardening a run with BEECORK_SANDBOX=1 got the
+// SOFT default and no warning — fail-open on the one knob whose whole purpose is to fail closed.
+export function parseSandboxMode(raw: string | undefined): "on" | "off" | "auto" {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (!v) return "auto";
+  if (["on", "1", "true", "yes", "required"].includes(v)) return "on";
+  if (["off", "0", "false", "no", "none", "never", "disabled"].includes(v)) return "off";
+  if (v === "auto") return "auto";
+  console.error(`⚠ BEECORK_SANDBOX="${raw}" is not a mode — using "auto". Valid: on, off, auto.`);
+  return "auto";
+}
+
 export const config = {
   apiUrl: "https://openrouter.ai/api/v1/chat/completions",
   modelsUrl: "https://openrouter.ai/api/v1/models",
@@ -183,9 +196,7 @@ export const config = {
   //   off            — no sandbox (policy layers still apply)
   // `auto` rather than `on` by default because macOS always has sandbox-exec (so Macs are confined
   // out of the box) while a Linux box without bubblewrap would otherwise lose run_bash on upgrade.
-  sandboxMode: (["on", "off", "auto"].includes((process.env.BEECORK_SANDBOX ?? "").trim().toLowerCase())
-    ? (process.env.BEECORK_SANDBOX ?? "").trim().toLowerCase()
-    : "auto") as "on" | "off" | "auto",
+  sandboxMode: parseSandboxMode(process.env.BEECORK_SANDBOX),
 
   journalEnabled: !["0", "false", "off", "no"].includes((process.env.BEECORK_JOURNAL ?? "").trim().toLowerCase()),
   maxJournals: num("MAX_JOURNALS", 50), // per project, like sessions

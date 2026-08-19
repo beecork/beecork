@@ -170,6 +170,10 @@ export async function callModel(
     if (!response.ok) {
       stopSpinner();
       if (isTransientStatus(response.status) && attempt < tries) {
+        // Drain the error body before retrying. Abandoning it makes undici destroy the connection
+        // once the body exceeds its read buffer; res.text() lets the socket be reused. Measured:
+        // body.cancel() is WORSE than abandoning (12 connections vs 10), so do not "fix" this with it.
+        await response.text().catch(() => {});
         console.log(color.dim(`   (HTTP ${response.status} — retry ${attempt}/${tries - 1})`));
         await sleep(500 * attempt);
         continue;

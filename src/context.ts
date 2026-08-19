@@ -29,6 +29,13 @@ export function estimateTokens(messages: Message[]): number {
       }
     }
     if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length;
+    // Reasoning is RE-SENT for the current turn's trailing tool chain (pruneReasoningForSend only
+    // strips it up to the last user message), and reasoning_details duplicates the plaintext — so it
+    // was uncounted payload that grows with exactly the thing that makes a turn long. Counting old
+    // turns' reasoning too over-estimates by ~3% on a real session, which errs toward compacting
+    // slightly early; the alternative duplicates a subtle boundary rule in two places.
+    if (typeof m.reasoning === "string") chars += m.reasoning.length;
+    if (m.reasoning_details) chars += JSON.stringify(m.reasoning_details).length;
   }
   return Math.ceil(chars / 4) + imageTokens;
 }
@@ -92,6 +99,7 @@ async function summarize(old: Message[], signal?: AbortSignal): Promise<string> 
       const res = await openRouterChat(body, sig);
       if (!res.ok) {
         if (isTransientStatus(res.status) && attempt < tries) {
+          await res.text().catch(() => {}); // drain so the keep-alive socket is reused, not destroyed
           await sleep(500 * attempt);
           continue;
         }
