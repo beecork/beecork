@@ -230,7 +230,13 @@ test("profile grants build caches but re-denies credentials LAST", () => {
 });
 
 test("REAL (confined): build-tool caches are writable, so ordinary installs still work", { skip: !confined }, async () => {
-  for (const dir of [".npm/_cacache", ".cache", ".cargo"]) {
+  // Only probe caches that EXIST here. bubblewrap's --bind-try deliberately skips a missing path, so
+  // on a fresh machine (a CI runner with no ~/.cargo) an unconditional probe would assert that the
+  // sandbox grants access to a directory it was correctly never asked to bind. Seatbelt's subpath
+  // rule has no such requirement, which is why this only ever showed up on Linux.
+  const present = [".npm/_cacache", ".cache", ".cargo"].filter((d) => existsSync(join(homedir(), d)));
+  assert.ok(present.length > 0, "no build cache exists to probe — this test would prove nothing");
+  for (const dir of present) {
     const probe = join(homedir(), dir, `beecork-test-${process.pid}`);
     const { code } = await runConfined(`mkdir -p ${JSON.stringify(probe)} && rmdir ${JSON.stringify(probe)}`, "normal");
     assert.equal(code, 0, `~/${dir} must be writable or npm/pip/cargo break inside the sandbox`);
