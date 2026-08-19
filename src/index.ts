@@ -310,7 +310,7 @@ async function main() {
       if (skill) {
         // A skill expands into a normal agent turn — fall through to runTurn below.
         const extra = userInput.trim().slice(cmdName.length).trim();
-        console.log(color.dim(`▸ skill ${skill.name}${skill.source === "global" ? " (global)" : ""}`));
+        console.log(color.dim(`▸ skill ${skill.name} (${skill.source})`)); // always name the tier — a PROJECT skill is the one worth noticing
         userInput = expandSkill(skill, extra);
       } else {
         // Run the command. In chrome mode it stays active: interactive commands (/model, /effort,

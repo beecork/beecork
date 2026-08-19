@@ -76,8 +76,15 @@ export function neutralize(v: unknown, cap: number): string {
 // result). Newlines survive; the invisible line-break code points are FOLDED to a real newline so
 // they can never smuggle a heading past a human reviewer, and the exotic Unicode spaces become
 // ordinary spaces.
-export function neutralizeBlock(v: unknown, cap: number): string {
-  const s = stripControl(stripControlTokens(stripInvisible(String(v ?? ""))))
+// `chatTokens: false` keeps `<|…|>`, `[INST]`, `<s>` etc. INTACT. Use it for untrusted text that is
+// also CODE the model must reproduce byte-exactly — an MCP filesystem or git server returning source.
+// stripControlTokens' `<|[\s\S]*?|>` pattern crosses newlines, so on such a payload it deletes
+// everything between a `<|` and a later `|>`. The invisible/line-separator half still applies, which
+// is the part that actually enables a forged heading.
+export function neutralizeBlock(v: unknown, cap: number, opts: { chatTokens?: boolean } = {}): string {
+  const tokens = opts.chatTokens ?? true;
+  const step = stripInvisible(String(v ?? ""));
+  const s = stripControl(tokens ? stripControlTokens(step) : step)
     .replace(/[\u2028\u2029]/g, "\n")
     .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ")
     .replace(/[ \t]+\n/g, "\n")

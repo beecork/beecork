@@ -5,6 +5,7 @@
 
 import { execFile } from "node:child_process";
 import { platform, arch } from "node:os";
+import { neutralize } from "./html";
 
 export type RuntimeFacts = {
   date: string; // YYYY-MM-DD
@@ -37,14 +38,21 @@ async function gitStatus(): Promise<string> {
 }
 
 // Pure: render gathered facts into the prompt block. Tested in isolation.
+// Every field is neutralized before it is interpolated. This block lands in the SYSTEM prompt, ABOVE
+// both the trusted and the project sections — the most authoritative region there is — and the git
+// branch is repo-controlled. git rejects ASCII control bytes and spaces in a ref name but NOT
+// multi-byte UTF-8: a branch containing U+2028 (a line break to every tokenizer) and U+00A0 (a space)
+// yields arbitrary multi-line markdown, forged `#` headings included. `git clone` checks out the
+// remote HEAD with no user action, so the user never types the name. neutralize's whitespace collapse
+// is what closes it — stripControl and stripInvisible both let those code points through.
 export function formatRuntimeContext(f: RuntimeFacts): string {
   return [
     "# Environment",
-    `- Date: ${f.date}`,
-    `- Working directory: ${f.cwd}`,
-    `- Platform: ${f.platform}`,
-    `- Node: ${f.node}`,
-    `- Git: ${f.git}`,
+    `- Date: ${neutralize(f.date, 20)}`,
+    `- Working directory: ${neutralize(f.cwd, 300)}`,
+    `- Platform: ${neutralize(f.platform, 60)}`,
+    `- Node: ${neutralize(f.node, 20)}`,
+    `- Git: ${neutralize(f.git, 120)}`,
     `- ripgrep (rg): ${f.ripgrep ? "available" : "not installed"}`,
   ].join("\n");
 }
